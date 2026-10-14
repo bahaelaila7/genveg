@@ -25,3 +25,20 @@ available; deliverable = GeoPackage + Forest Explorer stands layer with per-stan
 5. **Outputs**: `stands_gafl.gpkg` (polygons + attributes + donor table), `stand_inputs.sqlite` (FVS tables) and
    `stand_cohorts.parquet` (Pan); Forest Explorer fork: stands layer + simulate-by-stand for FVSjl and Pan.
 6. **Tessera**: same pipeline with Tessera embeddings once access is sorted (host unreachable on 2026-10-14).
+
+## Tessera access (checked 2026-10-14)
+Mirrored on Source Cooperative: `https://data.source.coop/tessera/tessera/npy/v1/` (also `zarr/v1.1`): per (year, 0.1° tile)
+int8 [H, W, 128] + float32 per-pixel scale, ~10 m, EPSG:4326, years 2017–2025, range-readable (GeoParquet index
+`index/tessera_<year>.parquet`). No overviews ⇒ GA+FL ≈ 2,700 tiles ≈ 390 GB per year to stream; plan: stream tile by tile,
+dequantize, aggregate 3×3 → 30 m, PCA-reduce (fit on a sample) to 32 dims int8 ≈ 12 GB per year on disk; ~5–6 h per year
+at the measured ~20 MB/s. Phase 6, after the AlphaEarth pipeline works end to end.
+
+## Segmentation design (phase 3)
+- Hard barriers (roads, water, parcel lines) are rasterized as 1-pixel separators; connected components of
+  (forest land ∧ ¬barrier) are **independent blocks** — each is segmented on its own (parallel, no tile seams); barrier
+  pixels on forest land are re-assigned afterwards to an adjacent stand (so the area is not lost, and no stand crosses a
+  barrier). Very large blocks (> ~20 M px) are split into overlapping tiles with seam merging.
+- Per block: features = PCA of AlphaEarth 2022 (and 2025 change), TreeMap stand attributes (forest-type group, STANDHT,
+  BALIVE, QMD), soil PCs, and land status (forest / harvested) with a large weight; Felzenszwalb graph segmentation with
+  scale tied to the target stand size, then hierarchical merging of segments < MMU into their most similar neighbour, and
+  splitting of segments > max size. All thresholds in a YAML config (MMU default 2 ha, target 5–50 ha, max 200 ha).

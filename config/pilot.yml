@@ -1,0 +1,23 @@
+# Stand delineation pilot — GA + FL. All thresholds live here.
+name: gafl_pilot
+grid: data/grid/grid.json
+forest_land:
+  recent_loss_from: 2017      # Hansen loss year >= this -> status "harvested" (recent clear-cut / stand-replacing loss)
+  treecover2000_min: 25       # % canopy in 2000 for a loss pixel to count as former forest
+  shrub_treecover2000_min: 50 # non-TreeMap shrub/herb pixel with >= this canopy in 2000 and no detected loss -> "regenerating"
+  exclude_evt_lf: [Agriculture, Developed, Water, Barren, Snow-Ice, Fill-NoData]
+  exclude_evt_phys_prefix: [Developed, Agricultural, Open Water, Quarries, Snow-Ice]
+  disturbed_evt_name: ["Recently Logged", "Recently Burned", "Recently Disturbed", "Plantation", "Ruderal Forest", "Ruderal Flooded"]
+segmentation:
+  mmu_ha: 2.0                 # minimum mapping unit
+  target_ha: [5, 50]          # typical stand size range
+  max_ha: 200                 # segments larger than this are split
+  aef_pcs: 16                 # AlphaEarth PCs used in the feature vector
+  weights: {aef: 1.0, aef_change: 0.5, treemap: 0.6, soil: 0.3}
+  status_is_hard: true        # forest / harvested / regenerating never share a stand
+  superpixel_ha: 1.0          # SLIC superpixel size (building blocks; smaller than the MMU)
+  slic_compactness: 0.3
+  merge_threshold: auto       # Ward threshold; auto = calibrate to target_median_ha
+  target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
+  shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
+  barriers: [roads, water, parcels]
