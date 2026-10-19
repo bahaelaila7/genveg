@@ -21,7 +21,7 @@ def dequant(q):
     return x
 
 def vat_table():
-    v = pd.read_parquet(f'{ROOT}/data/treemap/vat.parquet')
+    v = pd.read_parquet(f'{ROOT}/data/treemap/vat.parquet'); v['TM_ID'] = v.TM_ID.astype(np.int64)   # VAT stores TM_ID as text, trees as int
     t = pd.read_parquet(f'{ROOT}/data/treemap/trees.parquet')
     t = t[t.STATUSCD == 1].copy()
     t['ba'] = 0.005454 * t.DIA ** 2 * t.TPA_UNADJ

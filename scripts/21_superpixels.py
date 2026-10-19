@@ -9,7 +9,7 @@ from skimage.segmentation import slic
 sys.path.insert(0, os.path.dirname(__file__))
 from features import *
 from common import PROFILE
-T = 2048
+T = int(os.environ.get("SP_TILE", 2048))     # superpixel tile size (smaller = more parallel jobs; superpixels never cross tile edges, the RAG merge joins them)
 SEG = CFG['segmentation']; SP_PX = max(4, int(round(SEG.get('superpixel_ha', 1.0) * 1e4 / 900)))
 BARRIERS = [f'{ROOT}/data/barriers/{b}.tif' for b in SEG.get('barriers', ['roads', 'water', 'parcels'])]
 _fz = None

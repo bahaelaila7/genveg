@@ -16,7 +16,8 @@ from common import ROOT, PROFILE
 
 cfg = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))['forest_land']
 os.makedirs(f'{ROOT}/data/derived', exist_ok=True)
-evt = pd.read_csv(f'{ROOT}/data/landfire/evt_classes.csv')
+evt = pd.read_csv(f'{ROOT}/data/landfire/evt_classes.csv').rename(columns={'value': 'VALUE'})
+evt = evt[evt.VALUE >= 0].reset_index(drop=True)   # -9999 Fill-NoData row (raster nodata is handled below)
 lut_size = int(max(evt.VALUE.max(), 32767)) + 1
 def lut(mask):
     t = np.zeros(lut_size, bool); t[evt.VALUE[mask].values] = True; return t
