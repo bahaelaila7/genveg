@@ -269,3 +269,32 @@ Checked correct by the reviews:
 - The mixture likelihoods.
 - The exec-slice markers.
 - Unit conversions.
+
+**Results on the verified table (2026-10-20, run_v3_train.sh; median |log error| on held-out stocked visits, spatial blocks + 3.2 km buffer):**
+
+| | TPH | BA | QMD | composition (Bray) |
+|---|---|---|---|---|
+| null (year-matched training median) | 0.638 | 0.464 | 0.341 | 0.743 |
+| kNN on the landscape (±3 yr) | 0.703 | 0.454 | 0.357 | **0.579** |
+| A: landscape prior (calibrated) | **0.636** | **0.438** | **0.327** | 0.611 |
+| mapping path (z(2021) → flow → decode), visits 2022-25 | 0.588 (null 0.608) | 0.405 (null 0.454, kNN 0.421) | 0.317 (null 0.327) | 0.604 (kNN 0.574) |
+
+- **A vs the null baseline:** A beats null only slightly (BA −6 %, QMD −4 %, TPH ±0). kNN is worse than null on TPH, and its composition is the
+  best.
+- **Localisation:** none. B puts 0.127 of the posterior mass on the pinned footprints, against their 0.152 share, i.e. no better than chance;
+  g03b gives 0.335 vs 0.341. A×B on the 15 localised held-out plots shows no consistent gain.
+- **Inverse encoder Q:** biased low (BA −0.76 log); it is not used by the maps.
+- **Stand maps (Baker):**
+  - The harvested status shows almost the same generative BA as forest: 54 vs 57 ft²/ac (B0), 61 vs 66 (B1). The TreeMap value is stale for
+    them.
+  - Correlation with TreeMap BA: 0.15 (B0) / 0.34 (B1).
+  - Likelihood ESS is about 31 / 64.
+- **Diagnosis (direct test):** the flow barely learned the disturbance jumps. A 2023 clear-cut (harvest + Hansen + high severity) lowers the
+  decoded 2025 BA by only 23 % (12.4 → 9.6 m²/ha before calibration); a fire lowers it by 10 %.
+- **Cause:** every jump signal (MIL AlphaEarth match, remeasurement pairs) is weighted by the candidate posterior. With no localisation skill,
+  the candidate histories are mostly not the plot's, so event-conditioned dynamics are averaged out.
+
+**Proposed next step (not done):** train the jumps from FIA's own dated records at the TRUE location. The remeasurement pairs (25.6k, incl.
+the bare post-harvest visits) would flow through a history built from the plot's TRT / DSTRB records mapped to the same class channels,
+instead of a candidate's LANDFIRE / Hansen history. The flow keeps its interface, so mapping still uses the stand's LANDFIRE / Hansen history.
+Until then the Forest Explorer Baker layer stays at v2.
