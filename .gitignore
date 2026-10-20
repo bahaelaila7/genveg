@@ -3,3 +3,4 @@ out/
 .venv/
 *.log
 __pycache__/
+data/proto/
