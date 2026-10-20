@@ -1,6 +1,8 @@
 import json, numpy as np, rasterio
 from rasterio.transform import Affine
-ROOT='/workspace/standmap'
+import os
+ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))          # the standmap checkout (relocatable)
+WS=os.environ.get('WORKSPACE', os.path.dirname(ROOT))                      # sibling projects (FIA databases)
 def grid():
     g=json.load(open(f'{ROOT}/data/grid/grid.json'))
     return Affine(*g['transform']), g['width'], g['height'], g['crs']

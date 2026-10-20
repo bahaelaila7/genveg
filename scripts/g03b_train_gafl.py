@@ -12,7 +12,8 @@ metrics). Derived from g03_train_proto.py, step 2: temporal JEPA model (liquid f
 Held-out: plots of 20 % of 10-km blocks. Baseline: kNN on the prior-weighted mean candidate features. Writes data/proto/baker/{model.pt, eval.json, stand_veg.parquet}."""
 import os, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
 torch.manual_seed(0); np.random.seed(0); torch.set_num_threads(int(os.environ.get('NT', 6)))
-D = '/workspace/standmap/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
+D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy').astype(np.float32)
 NK, NA = len(M['keys']), 16; YEARS = M['years']; NY = len(YEARS); NC = len(M['classes']); D_Z = int(os.environ.get('DZ', 16))
@@ -32,15 +33,19 @@ slot_p = torch.zeros(nv, NK * NA); slot_v = torch.zeros(nv, NK * NA, 4); slot_vm
 for r in TK.itertuples():
     j = r.key * NA + r.ac; slot_p[r.vid, j] = 1; slot_v[r.vid, j] = torch.tensor([r.lN, r.lQ, r.h, r.cr]); slot_vm[r.vid, j] = torch.tensor([1, 1, 1, r.crm])
 vyear = torch.tensor(V.year.values, dtype=torch.float32); vpid = V.pid.values
-pos = slot_p.mean(0).clamp(min=1e-4); POSW = ((1 - pos) / pos).sqrt().clamp(max=30)   # per-slot positive weight (rare species × age classes count more)
 def bce(lp, tp, reduction='mean'): return Fn.binary_cross_entropy_with_logits(lp, tp, pos_weight=POSW, reduction=reduction)
 # ---- candidates per plot (index arrays) and spatial blocks
 cand_of = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}
+cand_iw = {pid: (g.incl_w.values, g.hi.values) for pid, g in C.groupby('pid')}     # inverse inclusion weights (footprints per candidate), full-disk high-prior flag
 P = pd.read_parquet(f'{D}/plots.parquet'); P['blk'] = (P.x // 10000).astype(int) * 1000 + (P.y // 10000).astype(int)
 rng = np.random.default_rng(1); blks = P.blk.unique(); test_blk = set(rng.choice(blks, max(1, int(0.2 * len(blks))), replace=False))
 test_pid = set(P.pid[P.blk.isin(test_blk)]); have = set(cand_of)
-tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid])
-print(f'visits train {len(tr_v)} test {len(te_v)} | plots test {len(test_pid & have)} | tokens/visit max {maxT}', flush=True)
+from scipy.spatial import cKDTree as _KD
+_te = P[P.pid.isin(test_pid)]; _dn, _ = _KD(_te[['x', 'y']].values).query(P[['x', 'y']].values)
+buffer_pid = set(P.pid[(_dn < 3200) & ~P.pid.isin(test_pid)])   # training plots whose 1.6 km disk could overlap a test plot's disk: excluded from training
+tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid])
+print(f'visits train {len(tr_v)} test {len(te_v)} | plots test {len(test_pid & have)} | buffer plots excluded {len(buffer_pid & have)} | tokens/visit max {maxT}', flush=True)
+pos = slot_p[tr_v].mean(0).clamp(min=1e-4); POSW = ((1 - pos) / pos).sqrt().clamp(max=30)   # per-slot positive weight from TRAINING visits (rare species × age classes count more)
 # ---- model
 class Enc(nn.Module):
     def __init__(s):
@@ -52,20 +57,23 @@ class Enc(nn.Module):
         mx = torch.where(m.sum(1) > 0, mx, torch.zeros_like(mx))           # visits without trees (fresh clear-cuts): defined empty encoding
         r = s.rho(torch.cat([mean, mx, ((yr - 2012) / 10).unsqueeze(-1)], -1))
         return 3 * torch.tanh(r / 3)                                       # soft bound: SIGReg's ECF test saturates (no restoring gradient) for large z
-class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, Euler with dt = 1 yr, + disturbance jumps
+class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
     def __init__(s):
         super().__init__(); ns = SOIL.shape[1]
         s.g = nn.Sequential(nn.Linear(D_Z + ns, 64), nn.Tanh(), nn.Linear(64, D_Z)); s.A = nn.Parameter(torch.zeros(D_Z)); s.ltau = nn.Parameter(torch.full((D_Z,), 2.0))
         s.J = nn.Sequential(nn.Linear(D_Z + NC + 2, 64), nn.GELU(), nn.Linear(64, D_Z))
-    def forward(s, z, start, stop, dist, soil):
-        """z [n, D_Z] at year `start` [n] → states at the end of each year, recorded at `stop` years; dist [n, NY, NC+2]; returns dict stop->state."""
+    def forward(s, z, start, stop, dist, soil, end=None):
+        """z [n, D_Z] at time `start` [n] (decimal year) → state at the end of each year (or at `end` [n], after which it is frozen), recorded at `stop`
+        years; dist [n, NY, NC+2]. An event of year y applies iff mid-year y lies in [start, end]. Returns dict stop->state."""
+        end = torch.full_like(start, 1e9) if end is None else end
         y0 = int(math.floor(start.min().item())); out = {st: z for st in stop if st < max(y0, YEARS[0])}   # stops before the run: initial state (masked by the caller)
         for j, y in enumerate(range(max(y0, YEARS[0]), YEARS[-1] + 1)):
-            act = (start <= y + 1).float().unsqueeze(-1)              # the visit happened before the end of year y
+            dt = (torch.clamp(end, max=y + 1) - torch.clamp(start, min=y)).clamp(0, 1).unsqueeze(-1)   # part of year y inside [start, end]
             jj = y - YEARS[0]
             g = torch.sigmoid(s.g(torch.cat([z, soil], -1)))
-            lam = 1 / torch.exp(s.ltau) + g; zs = g * 3 * torch.tanh(s.A) / lam   # exact (exponential) integration over the 1-yr step; attractor bounded (|A| ≤ 3)
-            z = act * (zs + (z - zs) * torch.exp(-lam)) + (1 - act) * z
+            lam = 1 / torch.exp(s.ltau) + g; zs = g * 3 * torch.tanh(s.A) / lam   # exact (exponential) integration over dt; attractor bounded (|A| ≤ 3)
+            z = zs + (z - zs) * torch.exp(-lam * dt)
+            act = ((start <= y + 0.5) & (end >= y + 0.5)).float().unsqueeze(-1)   # visit-year events count for a first-half start / second-half end only
             ev = dist[:, jj]; has = (ev[:, :NC].sum(-1, keepdim=True) + ev[:, NC + 1:NC + 2] > 0).float() * act
             z = z + has * torch.tanh(s.J(torch.cat([z, ev], -1)))          # bounded jump
             for st in stop:
@@ -92,7 +100,7 @@ def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):
 def sample_cands(pids, K):
     idx = []
     for p in pids:
-        cid, pr = cand_of[p]; k = min(K, len(cid)); idx.append(np.random.choice(cid, k, replace=len(cid) < K, p=pr) if len(cid) >= 1 else None)
+        cid, pr = cand_of[p]; idx.append(np.random.choice(cid, K, replace=True, p=pr))      # iid draws from the prior: the MIL / posterior estimators assume it
     return np.stack([np.resize(i, K) for i in idx])
 def dec_loss(z, v):
     lp, val = dec(z); bce_ = bce(lp, slot_p[v])
@@ -125,7 +133,7 @@ for ep in range(EP):
             v2 = torch.tensor([vpair[v[i].item()] for i in has2]); y2 = vyear[v2]; z2 = enc(v2, y2).detach()
             sel = torch.tensor(has2); zz = z[sel].repeat_interleave(K, 0); c2 = torch.tensor(ci[has2].ravel())
             yy = torch.floor(y2).long().clamp(YEARS[0], YEARS[-1]); outs = []
-            stp = sorted(set(yy.tolist())); st2 = flow(zz, vyear[v[sel]].repeat_interleave(K), stp, DIST[c2], SOIL[c2])
+            stp = sorted(set(yy.tolist())); st2 = flow(zz, vyear[v[sel]].repeat_interleave(K), stp, DIST[c2], SOIL[c2], end=y2.repeat_interleave(K))   # state AT v2's date
             fz = torch.stack([st2[int(yy[i // K])][i] for i in range(len(c2))]).view(len(has2), K, D_Z)
             lpair = ((fz - z2.unsqueeze(1)) ** 2).mean(-1).mul(post[sel]).sum(1).mean()
             # the decoder must read FLOWED states too: decode the flowed z(v1→v2) against v2's observed cohorts (posterior-weighted)
@@ -141,7 +149,10 @@ for ep in range(EP):
         lpq, valq = dec(qm); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
         dq = bce(lpq, tpq, reduction='none').mean(-1) + (((valq - tvq) ** 2 * tmq).sum((-1, -2)) / tmq.sum((-1, -2)).clamp(min=1))
         wy = torch.exp(-torch.abs(vyear[v] - 2023.5) / 4)                    # visits near the AlphaEarth years count most
-        lqd = ((dq.view(-1, K) * post).sum(1) * wy).sum() / wy.sum()
+        dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
+        after = (evy & (torch.arange(NY) + YEARS[0] >= torch.floor(cst).unsqueeze(-1))).any(1).view(-1, K)
+        pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
+        wy = wy * okv.float(); lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)
         loss = mil + 0.5 * lpair + dec_loss(z, v) + 0.5 * ldecf + 1.0 * sigreg(z) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
         for k_, val in (('mil', mil), ('pair', lpair), ('dec', dec_loss(z, v)), ('decflow', ldecf), ('q', lq), ('qdec', lqd)): tot[k_] = tot.get(k_, 0) + float(val) * len(v)
@@ -157,7 +168,8 @@ def obs_summ(v):
     m = slot_p[v]; N = torch.exp(slot_v[v][..., 0]) * m; Dq = torch.exp(slot_v[v][..., 1])
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
-last = V.loc[V.groupby('pid').year.idxmax()]; te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(have - test_pid)].vid.values
+last = V.loc[V.groupby('pid').year.idxmax()]; last = last[last.year >= 2019]       # Q predicts the 2025 state: compare with recent visits only (both model and kNN)
+te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(have - test_pid - buffer_pid)].vid.values
 def plot_feat(pid):    # prior-weighted mean candidate features (the plot's satellite description under location uncertainty)
     cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); return (X * torch.tensor(pr, dtype=torch.float32).unsqueeze(-1)).sum(0)
 with torch.no_grad():
@@ -168,34 +180,42 @@ with torch.no_grad():
         return [torch.exp((torch.log(s_[i] + 1e-3) * w_).sum()) for i in range(3)] + [comp.argmax(), comp]
     pp = [pred_plot(vpid[v]) for v in te_last]; m_t = [torch.stack([p_[i] for p_ in pp]) for i in range(5)]; o_t = obs_summ(torch.tensor(te_last))
     # kNN baseline (k = 5) in standardised feature space on the training plots' last visits
-    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-6; dd = torch.cdist((Xte - mu) / sd, (Xtr - mu) / sd); nn5 = dd.topk(5, largest=False).indices
-    o_tr = obs_summ(torch.tensor(tr_last)); k_t = [o_tr[i][nn5].float().mean(1) for i in range(3)] + [None, o_tr[4][nn5].mean(1)]; k_t[3] = k_t[4].argmax(1)
+    # feature groups (AlphaEarth, disturbance history, soils) each scaled to unit total variance: per-dimension z-scores would blow up rare disturbance dims
+    gs = [slice(0, 128), slice(128, 128 + NY * (NC + 2)), slice(128 + NY * (NC + 2), Xtr.shape[1])]; mu = Xtr.mean(0); sc = torch.ones(Xtr.shape[1])
+    for g_ in gs: sc[g_] = Xtr[:, g_].var(0).sum().sqrt() + 1e-9
+    dd = torch.cdist((Xte - mu) / sc, (Xtr - mu) / sc); nn5 = dd.topk(5, largest=False).indices
+    o_tr = obs_summ(torch.tensor(tr_last)); k_t = [o_tr[i][nn5].float().median(1).values for i in range(3)] + [None, o_tr[4][nn5].mean(1)]; k_t[3] = k_t[4].argmax(1)
     def metrics(mk):
+        bare = o_t[0] <= 0; ev = {'n_test_plots': int(mk.sum()), 'n_bare': int((mk & bare).sum()),
+                                  'bare_pred_BA_median_model': float(m_t[1][mk & bare].median()) if (mk & bare).any() else None}
+        mk = mk & ~bare                                                         # log errors and composition on stocked visits (bare visits: no dominant species)
         m_ = [x[mk] for x in m_t]; o_ = [x[mk] for x in o_t]; k_ = [x[mk] for x in k_t]
         def err(p, o): return float(torch.median(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
-        ev = {'n_test_plots': int(mk.sum())}
+        ev['n_stocked'] = int(mk.sum())
         for i, nm in enumerate(['TPH', 'BA', 'QMD']):
-            ev[nm] = {'model_median_abs_log_err': err(m_[i], o_[i]), 'knn_median_abs_log_err': err(k_[i], o_[i]),
+            nul_ = torch.full_like(o_[i], float(o_tr[i][o_tr[0] > 0].float().median()))       # NULL: median of the stocked training visits
+            ev[nm] = {'model_median_abs_log_err': err(m_[i], o_[i]), 'knn_median_abs_log_err': err(k_[i], o_[i]), 'null_median_abs_log_err': err(nul_, o_[i]),
                       'model_bias_log': float(torch.median(torch.log((m_[i] + 1e-3) / (o_[i] + 1e-3)))), 'knn_bias_log': float(torch.median(torch.log((k_[i] + 1e-3) / (o_[i] + 1e-3))))}
         def bal_acc(p, o): return float(np.mean([float((p[o == k] == k).float().mean()) for k in torch.unique(o)]))
         def bray(p, o): return float((torch.abs(p - o).sum(1) / 2).mean())
         ev['composition'] = {'bray_curtis_BA_by_species_model': bray(m_[4], o_[4]), 'bray_curtis_knn': bray(k_[4], o_[4]),
                              'dominant_balanced_acc_model': bal_acc(m_[3], o_[3]), 'dominant_balanced_acc_knn': bal_acc(k_[3], o_[3])}
         ev['dominant_key_acc'] = {'model': float((m_[3] == o_[3]).float().mean()), 'knn': float((k_[3] == o_[3]).float().mean()),
-                                  'majority_class': float((o_[3] == torch.mode(o_tr[3]).values).float().mean())}
+                                  'majority_class': float((o_[3] == torch.mode(o_tr[3][o_tr[0] > 0]).values).float().mean())}
         return ev
-    bk_set = set(map(tuple, pd.read_parquet('/workspace/standmap/data/proto/baker/plots.parquet')[['st', 'u', 'c', 'p']].values))
+    bk_set = set(map(tuple, pd.read_parquet(f'{ROOT}/data/proto/baker/plots.parquet')[['st', 'u', 'c', 'p']].values))
     Pk = P.set_index('pid'); mk_b = torch.tensor([tuple(Pk.loc[vpid[v], ['st', 'u', 'c', 'p']]) in bk_set for v in te_last])
     ev = {'all_heldout': metrics(torch.ones(len(te_last), dtype=torch.bool)), 'baker_50km_heldout': metrics(mk_b) if mk_b.sum() > 5 else None}
     # localisation check: plots with dated FIA events — posterior mass (uniform prior) on prior-favoured (event-matching) candidates vs their share
     loc = []
     for v in te_v[:400]:
-        p = vpid[v]; cid, pr = cand_of[p]
-        if pr.max() / pr.min() < 4: continue                                    # no event information for this plot
+        p = vpid[v]; cid, pr = cand_of[p]; iw_, hi_ = cand_iw[p]
+        if not hi_.any() or hi_.all(): continue                                 # no event information for this plot
         z = enc(torch.tensor([v]), vyear[[v]]).repeat(len(cid), 1); st = flow(z, vyear[[v]].repeat(len(cid)), [2022, 2025], DIST[cid], SOIL[cid])
-        dd_ = sum(((hh(st[y]) - AEF[cid][:, sl]) ** 2).sum(-1) * float(vyear[v] <= y + 1) for y, hh, sl in ((2022, h22, A22), (2025, h25, A25)))
-        post = torch.softmax(-dd_ / TEMP, 0).numpy(); fav = pr >= np.quantile(pr, 0.9)
-        loc.append((post[fav].sum(), fav.mean()))
+        nh_ = sum(float(vyear[v] <= y + 1) for y in (2022, 2025))
+        dd_ = sum(((hh(st[y]) - AEF[cid][:, sl]) ** 2).sum(-1) * float(vyear[v] <= y + 1) for y, hh, sl in ((2022, h22, A22), (2025, h25, A25))) / max(nh_, 1)   # mean over heads, as in training
+        post = torch.softmax(-dd_ / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()   # uniform over the DISK (candidates x footprints they stand for)
+        loc.append((post[hi_].sum(), iw_[hi_].sum() / iw_.sum()))
     if loc:
         a = np.array(loc); ev['localisation'] = {'plots': len(a), 'posterior_mass_on_event_matching_candidates': float(a[:, 0].mean()), 'their_share_of_candidates': float(a[:, 1].mean())}
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/eval.json', 'w'), indent=1)

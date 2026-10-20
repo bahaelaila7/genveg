@@ -8,7 +8,8 @@ Groups (each scaled to total variance = weight^2):
 """
 import os, numpy as np, pandas as pd, rasterio, yaml
 from rasterio.windows import Window
-ROOT = '/workspace/standmap'
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))          # the standmap checkout (relocatable)
+WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))                    # sibling projects (FIA databases)
 CFG = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))
 SOILS = ['clay030', 'sand030', 'soc030', 'awc030', 'ph030', 'restrdepth']
 TM_ATTRS = ['BALIVE', 'STANDHT', 'QMD', 'CANOPYPCT', 'TPA_LIVE', 'SOFTWOOD_FRAC']
