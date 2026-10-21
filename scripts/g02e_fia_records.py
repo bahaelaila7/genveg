@@ -1,0 +1,23 @@
+"""FIA disturbance / treatment records of the training table, for anchoring the dynamics (user, 2026-10-20: FIA's own COND.DSTRB* / COND.TRT* records
+anchor FIA data to the disturbances LANDFIRE reports). The same records + rules that built the location prior (g02b.fia_records, shared code):
+  fia_events.parquet  pid, kind, year            typed FIA events (kinds of g02b.EVK) from every forested condition
+  fia_negs.parquet    pid, y_lo, y_hi            periods without stand-replacing disturbance (FIA protocol; see g02b.fia_records)
+  visits.parquet      + fia_blocked              the visit carries a code that could hide stand-replacing evidence (no negative evidence for its period)
+Run after every g02b rebuild (pid / vid are row numbers of the current table)."""
+import os, sys, numpy as np, pandas as pd, duckdb
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import g02b_build_gafl as G2
+from features import ROOT, WS
+D = f'{ROOT}/data/proto/gafl'; key = ['st', 'u', 'c', 'p']
+fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+P = pd.read_parquet(f'{D}/plots.parquet'); V = pd.read_parquet(f'{D}/visits.parquet')
+FV = G2.fiadb_visits(fc); FE = G2.fiadb_events(fc)
+evs, negs, blocked = G2.fia_records(FE, FV, P, key)
+pd.DataFrame([(p, k, y) for p, s in evs.items() for k, y in sorted(s)], columns=['pid', 'kind', 'year']).to_parquet(f'{D}/fia_events.parquet')
+pd.DataFrame([(p, a, b) for p, l in negs.items() for a, b in l], columns=['pid', 'y_lo', 'y_hi']).to_parquet(f'{D}/fia_negs.parquet')
+yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)          # visits.year = year + day-of-year / 366
+md = pd.to_datetime(yi.astype(str) + '-01-01') + pd.to_timedelta(doy - 1, unit='D')
+V['fia_blocked'] = [((int(a), int(b), int(c), int(d)), m) in blocked for a, b, c, d, m in zip(V.st, V.u, V.c, V.p, md)]
+V.to_parquet(f'{D}/visits.parquet')
+print(f'plots with typed events {len(evs)} ({sum(map(len, evs.values()))} events); negative periods {sum(map(len, negs.values()))}; '
+      f'visits with a hiding code {int(V.fia_blocked.sum())} of {len(V)}')

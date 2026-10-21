@@ -298,3 +298,89 @@ Checked correct by the reviews:
 the bare post-harvest visits) would flow through a history built from the plot's TRT / DSTRB records mapped to the same class channels,
 instead of a candidate's LANDFIRE / Hansen history. The flow keeps its interface, so mapping still uses the stand's LANDFIRE / Hansen history.
 Until then the Forest Explorer Baker layer stays at v2.
+
+**FIA-anchored dynamics (user, 2026-10-20: "that's what I meant by using LANDFIRE disturbance to anchor FIA data … COND.DSTRB* and COND.TRT*").**
+The FIA records had been used only to LOCATE plots (prior). Now they also anchor the DYNAMICS:
+- `scripts/g02e_fia_records.py` writes the plot's typed events, its negative-evidence periods and a per-visit "hiding code" flag. It uses the
+  same functions that built the prior (`g02b.fiadb_visits / fiadb_events / fia_records`, refactored and shared), and its records reproduce the
+  stored prior exactly (400 plots, ratio spread 1.0000001).
+- In g03b, each remeasurement pair (v1 → v2) flows only through candidate histories consistent with FIA's record of that period:
+  - every detectable event cluster (likelihood ratio ≥ 4) must be matched by compatible LANDFIRE / Hansen evidence in its window;
+  - if v2 has no code that could hide a stand-replacing event, the history must contain none (harvest class or Hansen loss on ≥ half the
+    footprint);
+  - candidates are drawn from the prior restricted to that set and weighted uniformly (the AlphaEarth posterior has no skill).
+- Counts: 25,579 pairs. 6,484 have a detectable FIA event (97.5 % matched by some candidate), 18,527 are constrained by negative evidence, and
+  161 fall back to the prior.
+- The flow keeps its LANDFIRE-channel inputs, so mapping with a stand's LANDFIRE / Hansen history is consistent with training.
+- `scripts/g06_dynamics_check.py` is a held-out test of the dynamics: synthetic events, and test-plot pairs flowed through FIA-consistent
+  histories. Its change metric = predicted log BA change (v2 vs decoded v1) vs the observed change, against zero change.
+- gv_verify T8 recomputes the pair histories independently.
+
+Before anchoring (the v2 model of the verified table):
+
+| period (FIA record) | n pairs | pred / obs median log BA change | change error model / zero | corr |
+|---|---|---|---|---|
+| detectable cut | 1006 | −0.10 / −0.43 | 0.572 / 0.586 | 0.30 |
+| other detectable event | 268 | −0.09 / +0.05 | 0.285 / 0.197 | 0.20 |
+| no event | 3792 | +0.01 / +0.14 | 0.191 / 0.172 | −0.01 |
+
+The synthetic 2023 clear-cut gives BA × 0.76 by 2025 and a fire × 0.90, so the dynamics had essentially no skill (neither disturbance nor
+growth).
+
+After per-PERIOD anchoring (14 epochs, same table), held-out pairs:
+- cut: change error 0.537 vs zero-change 0.586 (corr 0.43, was 0.30);
+- undisturbed: 0.168 vs 0.172 (corr 0.19, was −0.01; the first time below zero-change);
+- other events: no gain;
+- synthetic clear-cut BA ×0.67 (was ×0.76);
+- the stand map still does not separate harvested stands (69.9 vs 73.3 ft²/ac).
+
+**Plot-level location (user, 2026-10-21: a location found from coinciding FIA / LANDFIRE records holds for ALL of the plot's visits).**
+Problems with the previous handling:
+- The g02b prior was plot-level but mis-specified: it rewarded matches (×8) and never penalised misses, and it ignored how common the evidence
+  is in the landscape.
+- The pair anchoring was per period.
+- The AlphaEarth likelihood was per visit.
+
+`scripts/g02f_location_em.py` builds one posterior per plot from its whole FIA history:
+- **Base prior:** the fuzz-distance mixture (share π within 800 m).
+- **Likelihood ratios:**
+  - per event cluster: q_g / b for a matching footprint, (1 − q_g) / (1 − b) for a miss (b = background share of that disk);
+  - per FIA-undisturbed period: f / b₀ and (1 − f) / (1 − b₀);
+  - an 'outside the disk' component s (swapped / converted plots).
+- **Fit:** q_g, f, π and s by EM over all plots, with a year-shifted placebo fit as control.
+- **Use:** every visit uses this posterior (MIL draws, pairs, Q target). B's localised plots are those whose 80 % credible set has ≤ 50 footprints.
+- **Exploratory EM on 3,000 plots (assumed-shape version):**
+  - strong FIA events are detected at the true footprint q ≈ 0.57, vs b ≈ 0.23 at random footprints;
+  - but the total information is only ≈ 0.03 nats / plot (placebo +5 yr: about the same), so most plots stay weakly localised.
+- **Verifier:** gv_verify T9 recomputes the posterior from the spec and the fitted parameters; T8 keeps testing the per-period rule
+  (PAIR_ANCHOR=period).
+
+**Plot-level location — results (2026-10-21), and why the EM posterior is not used:**
+
+*In-sample fit, disk-wide background (400 iterations).*
+- Real records: +296 nats over no-information, strong-event detection q = 0.88, f → 0, inner share π = 0.70, outside share s = 0.52.
+- The fit drifts to a degenerate solution: half the plots 'outside', the rest with hard constraints.
+- The control was the trouble:
+  - A year-shifted placebo scored higher (π → 0). It is confounded: the shifted records contradict the true footprint's real events and push
+    mass away from it.
+  - A permutation placebo (another plot's records, same state) also scored higher after a refit (+371).
+
+*Held-out test (fit on half A, score half B).*
+- With the disk-wide background, permuted 194 > real 121. Cause: disturbance is more common in the ring than near the public point, so the
+  inner / ring split fits ANY records. The background is now per distance class (`g02f.bg`).
+- With the per-class background, real 45.5 vs permuted 31.8 nats over 4,355 plots, i.e. ≈ 0.003 nats / plot.
+
+*Conclusion.*
+- Under the public coordinates, FIA ↔ LANDFIRE coincidences carry almost no FOOTPRINT-level location information beyond regional timing.
+- The disturbances are visible in the disk (g01: ≈ 24 % of the 800 m disk shows loss in the window of an FIA-recorded cut), but harvest units
+  are large and clustered.
+- π also goes to the boundary in both fits, so it is not trusted.
+- g02f is kept as an analysis tool; its outputs are in data/proto/gafl_g02f_unused/.
+
+*What the records DO determine: which disturbance histories the plot can have, for all of its visits.*
+- `scripts/g02g_history_consistency.py`: candidates consistent with the plot's WHOLE FIA history (every detectable cluster matched, no
+  stand-replacing evidence in any undisturbed period).
+- Consistent footprints, median: 189 of 753 for all plots; 43 for plots with ≥ 1 detectable cluster; 8 for ≥ 2.
+- The set is empty for 8 % of plots (13 % / 28 % of event plots): FIA / LANDFIRE disagreement or swapped plots. Those plots keep the prior.
+- g03b LOC=history (default): every visit of a plot (MIL, pairs, Q) draws from the prior restricted to this set.
+- gv_verify T10 recomputes the set independently.

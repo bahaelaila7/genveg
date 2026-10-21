@@ -148,7 +148,7 @@ evr = _fx.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.
                     c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
                     from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in (12,13) and p.MEASYEAR >= 2000""").df()
 evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
-ratios, nneg, ncl = [], 0, 0
+ratios, nneg, ncl = [], 0, 0; REC = {}
 for pid, g in Cs.groupby('pid'):
     k_ = tuple(int(v) for v in Pi.loc[pid][key]); e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]
     Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); w = np.ones(len(g))
@@ -179,7 +179,7 @@ for pid, g in Cs.groupby('pid'):
     for a, b in per_:
         a, b = max(a - 2000, 0), min(b - 2000, NY - 1)
         if b >= a: w = w * np.where(srv[:, a:b + 1].any(1), 0.25, 1.0); nneg += 1
-    q = g.prior.values / (w * g.incl_w.values); ratios.append(q.max() / q.min())
+    q = g.prior.values / (w * g.incl_w.values); ratios.append(q.max() / q.min()); REC[pid] = (cl, per_)
 check('T3f prior ∝ (clustered typed FIA events x FIA-protocol negative evidence) x incl_w — re-implemented from the spec on FIADB COND', max(ratios) < 1 + 2e-3,
       f'{len(ratios)} plots ({ncl} event clusters, {nneg} negative periods), max ratio spread {max(ratios):.5f}')
 # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose stand-replacing evidence falls in 2023-2025
@@ -293,4 +293,79 @@ lp = LS[(LS.n_hi > 0) & (LS.n_hi <= 50) & (LS.mass_hi >= 0.5)]; vl = V[V.pid.isi
 need = {(int(r.st), int(r.u), int(r.c), int(r.p), int(r.yi)) for r in vl.itertuples() if 2017 <= r.yi <= 2025 and r.yi not in (2022, 2025)}
 check('T7d visit_aef: all files named by FIA plot identity; every window needed by the current localised plots exists', len(kn) == len(fns) and need <= kn,
       f'{len(fns)} files (of current table plots {sum(1 for k in kn if k[:4] in set(map(tuple, P[key].astype(int).values)))}); needed {len(need)}, missing {len(need - kn)}')
+# ======================= T8 FIA-anchored remeasurement pairs (g03b.pair_cand) vs an independent recomputation from FIADB + the spec
+src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); os.environ['PAIR_ANCHOR'] = 'period'
+ns_['cand_of'] = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}      # T8 tests the period rule on g02b's candidates
+exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+PC = ns_['pair_cand']; EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
+for v1 in rng8.choice(list(PC), 300, replace=False):
+    v2 = ns_['vpair'][v1]; pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+    g = C[C.pid == pid]; Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2)
+    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; recs = set(); hid2 = False
+    d2 = EXv.loc[v2].md; vk2 = d2.year * 10000 + d2.month * 100 + d2.day
+    for r in e.itertuples():
+        for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
+            cd, yr = getattr(r, a_), getattr(r, b_)
+            if pd.isna(cd) or cd <= 0: continue
+            if r.vk == vk2 and (t_ == 'T' or int(cd) not in HARMLESS): hid2 = True
+            if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025 and y1 <= yr + 0.5 <= y2: recs.add((int(yr), t_, int(cd)))
+    cl = []
+    for yr, t_, cd in sorted(recs):
+        cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}
+        if cl and yr - cl[-1][4] <= 2: a0 = cl[-1]; cl[-1] = (a0[0] | cs_, min(a0[1], yr + lo), max(a0[2], yr + hi), max(a0[3], lr), yr)
+        else: cl.append((cs_, yr + lo, yr + hi, lr, yr))
+    m = np.ones(len(g), bool)
+    for cs_, lo, hi, lr, _ in cl:
+        if lr < 4: continue
+        a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
+        if b0 >= a0: m &= Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0
+    nev8 += any(c[3] >= 4 for c in cl)
+    if not hid2:
+        a0, b0 = int(math.floor(y1)) + 1 - 2000, int(math.floor(y2)) - 1 - 2000
+        if b0 >= max(a0, 0): m &= ~(np.maximum(Xg[:, max(a0, 0):b0 + 1, ix['harvest']], Xg[:, max(a0, 0):b0 + 1, HH]) >= 0.5).any(1)
+    if not m.any(): m[:] = True
+    n8 += 1; bad8 += set(g.cid.values[m]) != set(PC[v1][0].tolist())
+check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputation from FIADB records + spec', bad8 == 0, f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
+# ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
+if os.path.exists(f'{D}/cand_prior.parquet'):
+    def bcls(m, iw, inn):      # background per distance class (inner 800 m disk / ring), clipped as specified
+        out = np.zeros(len(m))
+        for cl_ in (inn, ~inn):
+            if cl_.any(): out[cl_] = np.clip((iw[cl_] * m[cl_]).sum() / iw[cl_].sum(), 0.5 / iw[cl_].sum(), 1 - 1e-3)
+        return out
+    th = json.load(open(f'{D}/location_em.json'))['theta']; CP = pd.read_parquet(f'{D}/cand_prior.parquet').set_index('cid'); GRPV = {8: 'strong', 4: 'medium', 3: 'weak'}; err9 = []
+    for pid, g in Cs.groupby('pid'):
+        Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); iw = g.incl_w.values.astype(float); inn = g.dist_m.values <= 800
+        lw = np.log(np.where(inn, th['pi'] / iw[inn].sum(), (1 - th['pi']) / iw[~inn].sum()) * iw) if inn.any() and (~inn).any() else np.log(iw / iw.sum())
+        cl, per_ = REC[pid]
+        for c_ in cl:
+            cs_, lo, hi, lr = c_[0], c_[1], c_[2], c_[3]; a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
+            if b0 < a0: continue
+            m = Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0; qq = th['q'][GRPV[int(lr)]]
+            if 0 < (iw * m).sum() / iw.sum() < 1: bf = bcls(m, iw, inn); lw = lw + np.where(m, np.log(qq / bf), np.log((1 - qq) / (1 - bf)))
+        srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5
+        for a0, b0 in per_:
+            a0, b0 = max(a0 - 2000, 0), min(b0 - 2000, NY - 1)
+            if b0 < a0: continue
+            m = srv[:, a0:b0 + 1].any(1)
+            if 0 < (iw * m).sum() / iw.sum() < 1: bf = bcls(m, iw, inn); lw = lw + np.where(m, np.log(th['f'] / bf), np.log((1 - th['f']) / (1 - bf)))
+        lin = np.logaddexp.reduce(lw); post = np.exp(lw - lin); rin = 1 - np.exp(np.log(th['s']) - np.logaddexp(np.log(1 - th['s']) + lin, np.log(th['s'])))
+        p = rin * post + (1 - rin) * iw / iw.sum(); err9.append(np.abs(p - CP.loc[g.cid.values].prior_loc.values).max() / p.max())
+    check('T9 plot-level location posterior (g02f) = recomputation from the spec + fitted EM parameters', max(err9) < 1e-3, f'{len(err9)} plots, max rel err {max(err9):.1e}; theta q {th["q"]} f {th["f"]:.3f} pi {th["pi"]:.3f} s {th["s"]:.3f}')
+# ======================= T10 FIA-history-consistent candidates (g02g) recomputed from the spec (T3f's independent records)
+if os.path.exists(f'{D}/cand_hist.parquet'):
+    CH = pd.read_parquet(f'{D}/cand_hist.parquet').set_index('cid'); bad10 = 0; ne10 = 0
+    for pid, g in Cs.groupby('pid'):
+        Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); cl, per_ = REC[pid]; m = np.ones(len(g), bool)
+        for c_ in cl:
+            if c_[3] < 4: continue
+            a0, b0 = max(c_[1] - 2000, 0), min(c_[2] - 2000, NY - 1)
+            if b0 >= a0: m &= Xg[:, a0:b0 + 1][:, :, sorted(c_[0])].sum(-1).sum(-1) > 0
+        srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5
+        for a0, b0 in per_:
+            a0, b0 = max(a0 - 2000, 0), min(b0 - 2000, NY - 1)
+            if b0 >= a0: m &= ~srv[:, a0:b0 + 1].any(1)
+        bad10 += int((CH.loc[g.cid.values].cons.values != m).sum() > 0); ne10 += int(not m.any())
+    check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (all detectable clusters matched, no stand-replacing evidence in undisturbed periods)',
+          bad10 == 0, f'{Cs.pid.nunique()} plots, mismatching plots {bad10}, empty sets {ne10}')
 nf = sum(1 for _, ok in RES if not ok); print(f'\n{len(RES) - nf} / {len(RES)} checks PASS'); sys.exit(1 if nf else 0)

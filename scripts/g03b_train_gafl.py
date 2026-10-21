@@ -6,11 +6,12 @@ metrics). Derived from g03_train_proto.py, step 2: temporal JEPA model (liquid f
   jump     at a candidate's disturbance years: z ← z + J([z, class one-hot, severity, Hansen loss])
   heads    z(2022) → AlphaEarth 2022, z(2025) → AlphaEarth 2025 (64-d)
   MIL      the plot location is latent: K candidates sampled ∝ the disturbance prior; loss = −logsumexp_c(−d_c / T) (+ log K)
-  pairs    FIA remeasurement: flow(z(v1)) along the candidate's history to v2's year ≈ z(v2) (posterior-weighted, stop-gradient on the target)
+  pairs    FIA remeasurement: flow(z(v1)) along candidate histories CONSISTENT WITH THE PLOT'S FIA RECORDS (TRT / DSTRB between the visits) to v2's
+           date ≈ z(v2) (stop-gradient on the target), and decoded ≈ v2's cohorts — the FIA records anchor the disturbance jumps
   decoder  z → cohort slots (species x age class): presence (BCE) + log N, log QMD, H, CR (masked MSE)
   Q        inverse encoder: candidate features (AlphaEarth 2022 + 2025, disturbance history, soils) → z(2025) (Gaussian) — the mapping model
 Held-out: plots of 20 % of 10-km blocks. Baseline: kNN on the prior-weighted mean candidate features. Writes data/proto/baker/{model.pt, eval.json, stand_veg.parquet}."""
-import os, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
+import os, sys, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
 torch.manual_seed(0); np.random.seed(0); torch.set_num_threads(int(os.environ.get('NT', 6)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
 D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
@@ -35,8 +36,17 @@ for r in TK.itertuples():
 vyear = torch.tensor(V.year.values, dtype=torch.float32); vpid = V.pid.values
 def bce(lp, tp, reduction='mean'): return Fn.binary_cross_entropy_with_logits(lp, tp, pos_weight=POSW, reduction=reduction)
 # ---- candidates per plot (index arrays) and spatial blocks
+LOC = os.environ.get('LOC', 'history')
+if LOC == 'history' and os.path.exists(f'{D}/cand_hist.parquet'):   # g02g: every visit of a plot draws from the candidates consistent with its WHOLE FIA history
+    C = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on='cid', how='left'); C['cons'] = C.cons.fillna(False).astype(bool)
+    has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons                  # plots with an empty consistent set keep their prior
+    C['prior'] = np.where(keep_, C.prior, 0.0); C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); C['hi'] = np.where(has_, C.cons, C.hi)
+    print(f"location: FIA-history-consistent candidates (g02g) for {int(has_.groupby(C.pid).first().sum())} of {C.pid.nunique()} plots", flush=True)
+elif LOC == 'plot' and os.path.exists(f'{D}/cand_prior.parquet'):   # g02f EM posterior (not used by default: held-out ~0.003 nats / plot of location information)
+    C = C.merge(pd.read_parquet(f'{D}/cand_prior.parquet'), on='cid', how='left'); C['prior'] = C.prior_loc.fillna(0.0); C['hi'] = C.hi_loc.fillna(False).astype(bool)
+    C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); print('location: plot-level EM posterior (g02f)', flush=True)
 cand_of = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}
-cand_iw = {pid: (g.incl_w.values, g.hi.values) for pid, g in C.groupby('pid')}     # inverse inclusion weights (footprints per candidate), full-disk high-prior flag
+cand_iw = {pid: (g.incl_w.values, g.hi.values) for pid, g in C.groupby('pid')}     # inverse inclusion weights (footprints per candidate), high-posterior (credible) flag
 P = pd.read_parquet(f'{D}/plots.parquet'); P['blk'] = (P.x // 10000).astype(int) * 1000 + (P.y // 10000).astype(int)
 rng = np.random.default_rng(1); blks = P.blk.unique(); test_blk = set(rng.choice(blks, max(1, int(0.2 * len(blks))), replace=False))
 test_pid = set(P.pid[P.blk.isin(test_blk)]); have = set(cand_of)
@@ -107,9 +117,37 @@ def dec_loss(z, v):
     m = slot_vm[v] * slot_p[v].unsqueeze(-1); mse = ((val - slot_v[v]) ** 2 * m).sum() / m.sum().clamp(min=1); return bce_ + mse
 TEMP = 0.05; K = int(os.environ.get('KC', 48)); EP = int(os.environ.get('EPOCHS', 30)); B = int(os.environ.get('BATCH', 64)); t0 = time.time()
 E1 = int(os.environ.get('CURRIC', 4))                                                   # curriculum: first E1 epochs on the best-localised plots only
-cq = P.conc.quantile(0.7) if 'conc' in P.columns else 0; good = set(P.pid[P.conc >= cq]) if 'conc' in P.columns else set(P.pid)
-tr_good = np.array([v for v in tr_v if vpid[v] in good]); print(f'curriculum: {E1} epochs on {len(tr_good)} visits of plots with prior concentration >= {cq:.3f}', flush=True)
+if os.path.exists(f'{D}/localisation.parquet') and 'n_clusters' in pd.read_parquet(f'{D}/localisation.parquet').columns:   # g02g: <= 50 consistent footprints
+    _L = pd.read_parquet(f'{D}/localisation.parquet'); cq = 50.0; good = set(_L.index[(_L.n_hi > 0) & (_L.n_hi <= 50)])
+else:
+    cq = P.conc.quantile(0.7) if 'conc' in P.columns else 0; good = set(P.pid[P.conc >= cq]) if 'conc' in P.columns else set(P.pid)
+tr_good = np.array([v for v in tr_v if vpid[v] in good]); print(f'curriculum: {E1} epochs on {len(tr_good)} visits of the best-anchored plots (criterion {cq:.3f})', flush=True)
 vpair = dict(zip(PR.v1.values, PR.v2.values))
+# ---- FIA-anchored remeasurement pairs: the plot's own COND.TRT* / COND.DSTRB* records (true location, g02e) select the candidate histories the flow may
+# take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, g02b.EVK / clusters) must be matched by compatible
+# LANDFIRE / Hansen evidence in its window; if v2 carries no code that could hide a stand-replacing event, the history must have none in between
+# (harvest class or Hansen loss on >= half the footprint). Candidates are then drawn from the prior restricted to that set, weighted uniformly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_build_gafl as G2
+FEV = pd.read_parquet(f'{D}/fia_events.parquet'); ev_of = {p: list(zip(g.kind, g.year.astype(int))) for p, g in FEV.groupby('pid')}
+vblk = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool); vyr = V.year.values
+pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0, 'fallback_all': 0}
+PAIR = os.environ.get('PAIR_ANCHOR', 'plot')            # 'plot': the plot's location posterior (whole FIA history) for every pair; 'period': + this period's records (hard)
+for v1, v2 in vpair.items():
+    p_ = vpid[v1]
+    if p_ not in cand_of: continue
+    if PAIR == 'plot': pair_cand[v1] = cand_of[p_]; continue
+    cid, pr = cand_of[p_]; y1, y2 = float(vyr[v1]), float(vyr[v2]); per = DIST[cid].numpy(); m = np.ones(len(cid), bool)
+    cl_ = [c for c in G2.clusters([(k, y) for k, y in ev_of.get(p_, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
+    for c in cl_:
+        lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
+        if hi > lo: m &= (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
+    nanch['with_event'] += bool(cl_); nanch['event_matched'] += bool(cl_) and bool(m.any())
+    if not vblk[v2]:
+        a, b = int(math.floor(y1)) + 1 - YEARS[0], int(math.floor(y2)) - 1 - YEARS[0]
+        if b >= max(a, 0): m &= ~(np.maximum(per[:, max(a, 0):b + 1, G2.IX['harvest']], per[:, max(a, 0):b + 1, G2.H_]) >= 0.5).any(1); nanch['neg_constrained'] += 1
+    if not m.any(): m = np.ones(len(cid), bool); nanch['fallback_all'] += 1
+    pair_cand[v1] = (cid[m], pr[m] / pr[m].sum())
+print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {nanch}', flush=True)
 if os.environ.get('LOAD') == '1':
     sd = torch.load(f'{D}/model.pt'); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
     h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', f'{D}/model.pt', flush=True)
@@ -127,19 +165,20 @@ for ep in range(EP):
         mil = -(torch.logsumexp(-d / TEMP, 1) - math.log(K)).mean() * TEMP
         post = torch.softmax(-d.detach() / TEMP, 1)                                                        # posterior over the sampled candidates
         # remeasurement pairs: flow z(v1) along each candidate's history to v2's year
-        has2 = [i for i, vv in enumerate(v.tolist()) if vv in vpair]
+        has2 = [i for i, vv in enumerate(v.tolist()) if vv in pair_cand]
         lpair = torch.tensor(0.0); ldecf = torch.tensor(0.0)
         if has2:
             v2 = torch.tensor([vpair[v[i].item()] for i in has2]); y2 = vyear[v2]; z2 = enc(v2, y2).detach()
-            sel = torch.tensor(has2); zz = z[sel].repeat_interleave(K, 0); c2 = torch.tensor(ci[has2].ravel())
+            sel = torch.tensor(has2); zz = z[sel].repeat_interleave(K, 0)
+            c2 = torch.tensor(np.concatenate([np.random.choice(pair_cand[v[i].item()][0], K, replace=True, p=pair_cand[v[i].item()][1]) for i in has2]))   # FIA-consistent histories
             yy = torch.floor(y2).long().clamp(YEARS[0], YEARS[-1]); outs = []
             stp = sorted(set(yy.tolist())); st2 = flow(zz, vyear[v[sel]].repeat_interleave(K), stp, DIST[c2], SOIL[c2], end=y2.repeat_interleave(K))   # state AT v2's date
             fz = torch.stack([st2[int(yy[i // K])][i] for i in range(len(c2))]).view(len(has2), K, D_Z)
-            lpair = ((fz - z2.unsqueeze(1)) ** 2).mean(-1).mul(post[sel]).sum(1).mean()
-            # the decoder must read FLOWED states too: decode the flowed z(v1→v2) against v2's observed cohorts (posterior-weighted)
+            lpair = ((fz - z2.unsqueeze(1)) ** 2).mean(-1).mean(1).mean()
+            # the decoder must read FLOWED states too: decode the flowed z(v1→v2) against v2's observed cohorts (bare v2 after a cut: no presence)
             lp2, val2 = dec(fz.reshape(-1, D_Z)); tp = slot_p[v2].repeat_interleave(K, 0); tv = slot_v[v2].repeat_interleave(K, 0); tm = slot_vm[v2].repeat_interleave(K, 0) * tp.unsqueeze(-1)
             bce2 = bce(lp2, tp, reduction='none').mean(-1); mse2 = (((val2 - tv) ** 2 * tm).sum((-1, -2)) / tm.sum((-1, -2)).clamp(min=1))
-            ldecf = ((bce2 + mse2).view(len(has2), K) * post[sel]).sum(1).mean()
+            ldecf = (bce2 + mse2).view(len(has2), K).mean(1).mean()
         else:
             ldecf = torch.tensor(0.0)
         # inverse encoder Q: candidate features → z(2025) (posterior-weighted, stop-gradient)

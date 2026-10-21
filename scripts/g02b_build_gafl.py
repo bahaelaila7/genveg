@@ -138,6 +138,52 @@ def plot_job(a):
     pk = w[keep] * iw[keep]; pk = pk / pk.sum()          # each kept candidate stands for incl_w footprints of the disk
     return pid, dict(F=F[keep].astype(np.float16), d=d[keep].astype(np.float32), w=pk.astype(np.float32), iw=iw[keep].astype(np.float32), hi=hi[keep],
                      ar=ar[keep], ac=ac[keep], conc=conc, n_hi=n_hi, mass_hi=mass_hi, n=len(d))
+def fiadb_visits(fc):
+    """FIADB visits (read-only) with a forested condition: forested area shares relative to the SAMPLED plot area (non-sampled COND_STATUS_CD 5
+    excluded, as in FIA estimation), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
+    FV = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, p.MEASYEAR my, p.CN cn,
+                               any_value(q.MEASYEAR) prev_my,
+                               sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
+                               sum(case when c.COND_STATUS_CD = 1 then c.MICRPROP_UNADJ else 0 end) f1m, sum(case when c.COND_STATUS_CD = 5 then c.MICRPROP_UNADJ else 0 end) n5m,
+                               max(case when c.COND_STATUS_CD = 1 then c.STDORGCD end) org
+                        from PLOT p join COND c on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN
+                        where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
+    nlive = fc.execute("select PLT_CN cn, count(*) n from TREE where STATECD in (12, 13) and STATUSCD = 1 group by 1").df()
+    FV = FV.merge(nlive, on='cn', how='left'); FV['n'] = FV.n.fillna(0); FV['md'] = pd.to_datetime(FV.md)
+    FV['fsub'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, (FV.f1m / (1 - FV.n5m).clip(lower=1e-6)).clip(upper=1.0), FV.fsub)
+    return FV
+def fiadb_events(fc):
+    """TRT / DSTRB codes of the forested conditions of every FIADB visit since 2000 (read-only)."""
+    FE = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md,
+                               c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
+                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
+    FE['md'] = pd.to_datetime(FE.md); return FE
+def fia_records(FE, FV, P, key):
+    """FIA events per plot {pid: {(kind, year)}} from every forested condition; negative evidence {pid: [(y_lo, y_hi)]} = measurement periods whose
+    visit carries no code that could hide stand-replacing evidence: (previous measurement + 1 .. visit - 1); for the first visit since 2000 the
+    previous measurement (PREV_PLT_CN, periodic inventories) or, for a new plot, FIA's 5-year lookback; blocked = {(plot key, visit date)} with such a code.
+    Shared by g02b (location prior) and g03b (FIA-anchored remeasurement pairs)."""
+    pidk = dict(zip(map(tuple, P[key].values), P.pid)); evs, negs = {}, {}
+    cols = [('TRTCD1', 'TRTYR1', 1), ('TRTCD2', 'TRTYR2', 1), ('TRTCD3', 'TRTYR3', 1), ('DSTRBCD1', 'DSTRBYR1', 0), ('DSTRBCD2', 'DSTRBYR2', 0), ('DSTRBCD3', 'DSTRBYR3', 0)]
+    blocked = set()
+    for r in FE.itertuples():
+        k_ = (r.st, r.u, r.c, r.p)
+        for cc_, yy_, trt in cols:
+            code, yr = getattr(r, cc_), getattr(r, yy_)
+            if pd.notna(code) and code > 0:
+                if trt or int(code) not in NONBLOCK: blocked.add((k_, r.md))
+                kind = ev_kind(trt, code)
+                if kind and pd.notna(yr) and 2000 <= yr <= 2025 and k_ in pidk: evs.setdefault(pidk[k_], set()).add((kind, int(yr)))
+    for k_, g_ in FV.sort_values('md').groupby(key):
+        if k_ not in pidk: continue
+        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []
+        for j in range(len(yrs)):
+            if (k_, pd.Timestamp(mds[j])) in blocked: continue
+            if j > 0: nl.append((yrs[j - 1] + 1, yrs[j] - 1))
+            elif pd.notna(pm[0]): nl.append((int(pm[0]) + 1, yrs[0] - 1))
+            else: nl.append((yrs[0] - 5, yrs[0] - 1))
+        negs[pidk[k_]] = nl
+    return evs, negs, blocked
 if __name__ == '__main__':
     con = duckdb.connect(f'{WS}/landis_region4/data_r4/slim_r4.duckdb', read_only=True)
     t = con.execute("""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
@@ -155,22 +201,7 @@ if __name__ == '__main__':
     # top species among LIVE trees
     cnt = t[t.live].sym.value_counts(); top = list(cnt.index[:int(os.environ.get('TOPK', 16))]); KEYS = sorted(top) + ['_H', '_S']; kix = {k: i for i, k in enumerate(KEYS)}
     t['key'] = [kix[s] if s in top else kix['_' + (g if g in ('S', 'H') else 'H')] for s, g in zip(t.sym, t.grp)]
-    # FIADB visits (read-only): forested area shares relative to the SAMPLED plot area (non-sampled COND_STATUS_CD 5 excluded, as in FIA estimation), stand
-    # origin, previous measurement year (PREV_PLT_CN), live-tree count; event codes of the forested conditions
-    FV = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, p.MEASYEAR my, p.CN cn,
-                               any_value(q.MEASYEAR) prev_my,
-                               sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
-                               sum(case when c.COND_STATUS_CD = 1 then c.MICRPROP_UNADJ else 0 end) f1m, sum(case when c.COND_STATUS_CD = 5 then c.MICRPROP_UNADJ else 0 end) n5m,
-                               max(case when c.COND_STATUS_CD = 1 then c.STDORGCD end) org
-                        from PLOT p join COND c on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN
-                        where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
-    nlive = fc.execute("select PLT_CN cn, count(*) n from TREE where STATECD in (12, 13) and STATUSCD = 1 group by 1").df()
-    FV = FV.merge(nlive, on='cn', how='left'); FV['n'] = FV.n.fillna(0); FV['md'] = pd.to_datetime(FV.md)
-    FV['fsub'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, (FV.f1m / (1 - FV.n5m).clip(lower=1e-6)).clip(upper=1.0), FV.fsub)
-    FE = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md,
-                               c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
-                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
-    FE['md'] = pd.to_datetime(FE.md)
+    FV = fiadb_visits(fc); FE = fiadb_events(fc)
     # visits = forested visits with curated tree records + truly bare forested visits (no live tree in FIADB, absent from the curated table) of the same plots
     vt = t[key + ['md']].drop_duplicates(); kp_ = vt[key].drop_duplicates()
     bare = FV[FV.n == 0].merge(kp_, on=key).merge(vt.assign(_in=1), on=key + ['md'], how='left'); bare = bare[bare._in.isna()][key + ['md']]
@@ -195,29 +226,7 @@ if __name__ == '__main__':
     pl = fc.execute("select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12, 13) group by all").df()
     P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(f'{ROOT}/data/derived/land_clean.tif')
     tf = Transformer.from_crs(4326, land.crs, always_xy=True); P['x'], P['y'] = tf.transform(P.lon.values, P.lat.values); P = P[P.lat.notna()]
-    # FIA events per plot (kind, year) from every forested condition; negative evidence = measurement periods whose visit carries no code that could hide
-    # stand-replacing evidence: (previous measurement + 1 .. visit - 1); for the first visit since 2000 the previous measurement (PREV_PLT_CN, periodic
-    # inventories) or, for a new plot, FIA's 5-year lookback
-    pidk = dict(zip(map(tuple, P[key].values), P.pid)); evs, negs = {}, {}
-    cols = [('TRTCD1', 'TRTYR1', 1), ('TRTCD2', 'TRTYR2', 1), ('TRTCD3', 'TRTYR3', 1), ('DSTRBCD1', 'DSTRBYR1', 0), ('DSTRBCD2', 'DSTRBYR2', 0), ('DSTRBCD3', 'DSTRBYR3', 0)]
-    blocked = set()
-    for r in FE.itertuples():
-        k_ = (r.st, r.u, r.c, r.p)
-        for cc_, yy_, trt in cols:
-            code, yr = getattr(r, cc_), getattr(r, yy_)
-            if pd.notna(code) and code > 0:
-                if trt or int(code) not in NONBLOCK: blocked.add((k_, r.md))
-                kind = ev_kind(trt, code)
-                if kind and pd.notna(yr) and 2000 <= yr <= 2025 and k_ in pidk: evs.setdefault(pidk[k_], set()).add((kind, int(yr)))
-    for k_, g_ in FV.sort_values('md').groupby(key):
-        if k_ not in pidk: continue
-        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []
-        for j in range(len(yrs)):
-            if (k_, pd.Timestamp(mds[j])) in blocked: continue
-            if j > 0: nl.append((yrs[j - 1] + 1, yrs[j] - 1))
-            elif pd.notna(pm[0]): nl.append((int(pm[0]) + 1, yrs[0] - 1))
-            else: nl.append((yrs[0] - 5, yrs[0] - 1))
-        negs[pidk[k_]] = nl
+    evs, negs, blocked = fia_records(FE, FV, P, key)
     print(f"plots with typed FIA events {len(evs)} (events {sum(map(len, evs.values()))}); negative-evidence periods {sum(map(len, negs.values()))}", flush=True)
     jobs = [(int(r.pid), r.x, r.y, sorted(evs.get(r.pid, set())), negs.get(r.pid, [])) for r in P.itertuples()]
     rows = []; CF = []; n0 = 0; concs = {}
