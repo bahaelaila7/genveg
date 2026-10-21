@@ -656,3 +656,16 @@ under the strict rules: data/proto/run_strict.sh.
 - **Forested share.** Low shares inflate per-forested-area densities: BA > 60 m² / ha in 9.0 % of visits with share 0.10–0.25, 2.2 % at
   0.25–0.5, 0.85 % at 0.5–0.95, 0.52 % at ≥ 0.95; 7 of the 10 highest-BA visits have shares 0.15–0.28 (noise from 1 of 4 subplots, plus edge
   trees). → `MIN_FSHARE` (default 0.25) excludes such visits from training, evaluation and pairs (388 visits, 1.1 %; they stay in the table).
+
+**Data vetting of the LANDFIRE / Hansen evidence (150k candidate footprints, HT-weighted, per year).**
+- LANDFIRE 'harvest' is nearly absent in GA+FL: 0.00–0.05 % of footprints / yr, vs Hansen loss 2.1–4.6 % and 'unknown' (image-detected change)
+  1.1–3.8 %.
+- 61 % of Hansen-loss footprint-years carry LANDFIRE 'unknown' within ±1 yr, but only 0.5 % carry 'harvest'. Harvests appear as 'unknown'.
+- Correction to the strict rules: 'unknown' belongs to the TREATMENT rules (lift ≈ 2: T10 2.0, T20 2.1, T30 1.8, T40 2.1), not to the mild ones
+  (wind 1.7). It will be applied after the run in progress.
+- Product breaks:
+  - 'unknown' doubles from 2008 (LANDFIRE moved from VCT to MIICA change detection);
+  - the fire class rises from ~0.4 % to ~2–3 % / yr from 2007 (events database).
+  Evidence is not stationary, which mainly affects matches before 2008.
+- Timing: LANDFIRE harvest vs Hansen loss, lag −1 / 0 / +1 = 90 / 377 / 119, consistent with the calendar-year handling.
+- Weather appears only in 2011 and 2023; Hansen is 0 in 2000 / 2025, as expected.
