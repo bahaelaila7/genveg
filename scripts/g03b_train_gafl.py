@@ -12,7 +12,7 @@ metrics). Derived from g03_train_proto.py, step 2: temporal JEPA model (liquid f
   Q        inverse encoder: candidate features (AlphaEarth 2022 + 2025, disturbance history, soils) → z(2025) (Gaussian) — the mapping model
 Held-out: plots of 20 % of 10-km blocks. Baseline: kNN on the prior-weighted mean candidate features. Writes data/proto/baker/{model.pt, eval.json, stand_veg.parquet}."""
 import os, sys, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
-torch.manual_seed(0); np.random.seed(0); torch.set_num_threads(int(os.environ.get('NT', 6)))
+SEED = int(os.environ.get('SEED', 0)); torch.manual_seed(SEED); np.random.seed(SEED); torch.set_num_threads(int(os.environ.get('NT', 6)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
 D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
@@ -40,12 +40,13 @@ LOC = os.environ.get('LOC', 'history')
 if LOC == 'history' and os.path.exists(f'{D}/cand_hist.parquet'):   # g02g: every visit of a plot draws from the candidates consistent with its WHOLE FIA history
     C = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on='cid', how='left'); C['cons'] = C.cons.fillna(False).astype(bool)
     has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons                  # plots with an empty consistent set keep their prior
-    C['prior'] = np.where(keep_, C.prior, 0.0); C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); C['hi'] = np.where(has_, C.cons, C.hi)
+    C['prior0'] = C.prior; C['prior'] = np.where(keep_, C.prior, 0.0); C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); C['hi'] = np.where(has_, C.cons, C.hi)
     print(f"location: FIA-history-consistent candidates (g02g) for {int(has_.groupby(C.pid).first().sum())} of {C.pid.nunique()} plots", flush=True)
 elif LOC == 'plot' and os.path.exists(f'{D}/cand_prior.parquet'):   # g02f EM posterior (not used by default: held-out ~0.003 nats / plot of location information)
     C = C.merge(pd.read_parquet(f'{D}/cand_prior.parquet'), on='cid', how='left'); C['prior'] = C.prior_loc.fillna(0.0); C['hi'] = C.hi_loc.fillna(False).astype(bool)
     C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); print('location: plot-level EM posterior (g02f)', flush=True)
 cand_of = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}
+cand_hist = {pid: (g.prior0.values, g.cons.values) for pid, g in C.groupby('pid')} if 'cons' in C.columns else {}   # g02b prior + history-consistency flag
 cand_iw = {pid: (g.incl_w.values, g.hi.values) for pid, g in C.groupby('pid')}     # inverse inclusion weights (footprints per candidate), high-posterior (credible) flag
 P = pd.read_parquet(f'{D}/plots.parquet'); P['blk'] = (P.x // 10000).astype(int) * 1000 + (P.y // 10000).astype(int)
 rng = np.random.default_rng(1); blks = P.blk.unique(); test_blk = set(rng.choice(blks, max(1, int(0.2 * len(blks))), replace=False))
@@ -112,9 +113,26 @@ def sample_cands(pids, K):
     for p in pids:
         cid, pr = cand_of[p]; idx.append(np.random.choice(cid, K, replace=True, p=pr))      # iid draws from the prior: the MIL / posterior estimators assume it
     return np.stack([np.resize(i, K) for i in idx])
+# observed plot summaries per visit — the quantities the simulation engines / harvest planning use. The slot-wise objectives alone reconstructed them
+# poorly (log BA slope 0.24, corr 0.48, even for the encoded visit itself; 2026-10-21), compressing every downstream change ~4x
+_N = torch.exp(slot_v[..., 0]) * slot_p; _D = torch.exp(slot_v[..., 1])
+OBS_T = _N.sum(1); OBS_B = (_N * math.pi / 4 * (_D / 100) ** 2).sum(1); OBS_Q = torch.sqrt((_N * _D ** 2).sum(1) / OBS_T.clamp(min=1e-6))
+W_SUM = float(os.environ.get('W_SUM', 1.0)); LQ_MAX = math.log(150.0)                # QMD of a slot <= 150 cm (physical cap, also in g04.summaries)
+# values of ABSENT slots are otherwise untrained, yet enter the expected summaries through their (small) presence probability: pull them toward the
+# slot's training mean (log N, log QMD, H; CR excluded)
+_cnt = slot_p[tr_v].sum(0).clamp(min=1); SLOT_MEAN = (slot_v[tr_v] * slot_p[tr_v].unsqueeze(-1)).sum(0) / _cnt.unsqueeze(-1)
+_glob = (slot_v[tr_v] * slot_p[tr_v].unsqueeze(-1)).sum((0, 1)) / slot_p[tr_v].sum().clamp(min=1); SLOT_MEAN = torch.where(slot_p[tr_v].sum(0).unsqueeze(-1) > 0, SLOT_MEAN, _glob)
+def absent_reg(val, v):
+    w = (1 - slot_p[v]).unsqueeze(-1) * torch.tensor([1.0, 1.0, 1.0, 0.0]); return (((val - SLOT_MEAN) ** 2) * w).sum((-1, -2)) / w.sum((-1, -2)).clamp(min=1)
+def summ_err(lp, val, v):
+    """per-sample mean squared log error of the decoded summaries (TPH, BA, QMD; differentiable expected values with calibrated presence)"""
+    pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=LQ_MAX))
+    tph = N.sum(-1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(-1); qmd = torch.sqrt((N * Dq ** 2).sum(-1) / tph.clamp(min=1e-6) + 1e-9)
+    return ((torch.log1p(tph) - torch.log1p(OBS_T[v])) ** 2 + (torch.log(ba + 0.1) - torch.log(OBS_B[v] + 0.1)) ** 2 + (torch.log1p(qmd) - torch.log1p(OBS_Q[v])) ** 2) / 3
 def dec_loss(z, v):
     lp, val = dec(z); bce_ = bce(lp, slot_p[v])
-    m = slot_vm[v] * slot_p[v].unsqueeze(-1); mse = ((val - slot_v[v]) ** 2 * m).sum() / m.sum().clamp(min=1); return bce_ + mse
+    m = slot_vm[v] * slot_p[v].unsqueeze(-1); mse = ((val - slot_v[v]) ** 2 * m).sum() / m.sum().clamp(min=1)
+    return bce_ + mse + W_SUM * summ_err(lp, val, v).mean() + 0.1 * absent_reg(val, v).mean()
 TEMP = 0.05; K = int(os.environ.get('KC', 48)); EP = int(os.environ.get('EPOCHS', 30)); B = int(os.environ.get('BATCH', 64)); t0 = time.time()
 E1 = int(os.environ.get('CURRIC', 4))                                                   # curriculum: first E1 epochs on the best-localised plots only
 if os.path.exists(f'{D}/localisation.parquet') and 'n_clusters' in pd.read_parquet(f'{D}/localisation.parquet').columns:   # g02g: <= 50 consistent footprints
@@ -131,7 +149,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_buil
 FEV = pd.read_parquet(f'{D}/fia_events.parquet'); ev_of = {p: list(zip(g.kind, g.year.astype(int))) for p, g in FEV.groupby('pid')}
 vblk = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool); vyr = V.year.values
 pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0, 'fallback_all': 0}
-PAIR = os.environ.get('PAIR_ANCHOR', 'plot')            # 'plot': the plot's location posterior (whole FIA history) for every pair; 'period': + this period's records (hard)
+SEVER = os.environ.get('SEVERITY_ANCHOR', '1') == '1' and os.environ.get('LOAD') != '1'   # outcome-informed candidate selection (training only, never in evaluation)
+_tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
+PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' | 'period'
 for v1, v2 in vpair.items():
     p_ = vpid[v1]
     if p_ not in cand_of: continue
@@ -142,15 +162,27 @@ for v1, v2 in vpair.items():
         lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
         if hi > lo: m &= (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
     nanch['with_event'] += bool(cl_); nanch['event_matched'] += bool(cl_) and bool(m.any())
+    if cl_ and SEVER:      # training only: FIA's own outcome says how severe the period's event was -> what the true footprint must show
+        r_ = BAv.get(v2, 0.0) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
+        srw = np.zeros(len(cid), bool)
+        for c in cl_:
+            lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
+            if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
+        if r_ is not None and r_ < 0.3 and (m & srw).any(): m = m & srw; nanch['replacing'] = nanch.get('replacing', 0) + 1     # stand-replacing: strong evidence
+        elif r_ is not None and r_ > 0.6 and (m & ~srw).any(): m = m & ~srw; nanch['partial'] = nanch.get('partial', 0) + 1     # partial: no full-footprint loss
     if not vblk[v2]:
         a, b = int(math.floor(y1)) + 1 - YEARS[0], int(math.floor(y2)) - 1 - YEARS[0]
         if b >= max(a, 0): m &= ~(np.maximum(per[:, max(a, 0):b + 1, G2.IX['harvest']], per[:, max(a, 0):b + 1, G2.H_]) >= 0.5).any(1); nanch['neg_constrained'] += 1
+    if PAIR == 'both' and p_ in cand_hist:
+        pr0, cons = cand_hist[p_]; pr = pr0
+        if (m & cons).any(): m = m & cons; nanch['history_and_period'] = nanch.get('history_and_period', 0) + 1
+        else: nanch['period_only'] = nanch.get('period_only', 0) + 1
     if not m.any(): m = np.ones(len(cid), bool); nanch['fallback_all'] += 1
-    pair_cand[v1] = (cid[m], pr[m] / pr[m].sum())
+    pair_cand[v1] = (cid[m], pr[m] / pr[m].sum() if pr[m].sum() > 0 else np.full(int(m.sum()), 1.0 / m.sum()))
 print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {nanch}', flush=True)
 if os.environ.get('LOAD') == '1':
-    sd = torch.load(f'{D}/model.pt'); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
-    h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', f'{D}/model.pt', flush=True)
+    sd = torch.load(f"{D}/{os.environ.get('MODEL', 'model.pt')}"); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
+    h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', f"{D}/{os.environ.get('MODEL', 'model.pt')}", flush=True)
 for ep in range(EP):
     perm = np.random.permutation(tr_good if ep < E1 else tr_v); tot = {}
     for b in range(0, len(perm), B):
@@ -178,7 +210,7 @@ for ep in range(EP):
             # the decoder must read FLOWED states too: decode the flowed z(v1→v2) against v2's observed cohorts (bare v2 after a cut: no presence)
             lp2, val2 = dec(fz.reshape(-1, D_Z)); tp = slot_p[v2].repeat_interleave(K, 0); tv = slot_v[v2].repeat_interleave(K, 0); tm = slot_vm[v2].repeat_interleave(K, 0) * tp.unsqueeze(-1)
             bce2 = bce(lp2, tp, reduction='none').mean(-1); mse2 = (((val2 - tv) ** 2 * tm).sum((-1, -2)) / tm.sum((-1, -2)).clamp(min=1))
-            ldecf = (bce2 + mse2).view(len(has2), K).mean(1).mean()
+            v2r = v2.repeat_interleave(K); ldecf = (bce2 + mse2 + W_SUM * summ_err(lp2, val2, v2r) + 0.1 * absent_reg(val2, v2r)).view(len(has2), K).mean(1).mean()
         else:
             ldecf = torch.tensor(0.0)
         # inverse encoder Q: candidate features → z(2025) (posterior-weighted, stop-gradient)
@@ -186,7 +218,7 @@ for ep in range(EP):
         qm, qls = qn(qx); nll = (0.5 * ((tgt.reshape(-1, D_Z) - qm) ** 2 / torch.exp(2 * qls)) + qls).sum(-1).view(-1, K)
         lq = (nll * post).sum(1).mean() / D_Z
         lpq, valq = dec(qm); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
-        dq = bce(lpq, tpq, reduction='none').mean(-1) + (((valq - tvq) ** 2 * tmq).sum((-1, -2)) / tmq.sum((-1, -2)).clamp(min=1))
+        dq = bce(lpq, tpq, reduction='none').mean(-1) + (((valq - tvq) ** 2 * tmq).sum((-1, -2)) / tmq.sum((-1, -2)).clamp(min=1)) + W_SUM * summ_err(lpq, valq, v.repeat_interleave(K)) + 0.1 * absent_reg(valq, v.repeat_interleave(K))
         wy = torch.exp(-torch.abs(vyear[v] - 2023.5) / 4)                    # visits near the AlphaEarth years count most
         dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
         after = (evy & (torch.arange(NY) + YEARS[0] >= torch.floor(cst).unsqueeze(-1))).any(1).view(-1, K)
@@ -196,11 +228,11 @@ for ep in range(EP):
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
         for k_, val in (('mil', mil), ('pair', lpair), ('dec', dec_loss(z, v)), ('decflow', ldecf), ('q', lq), ('qdec', lqd)): tot[k_] = tot.get(k_, 0) + float(val) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/len(perm):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
-os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f'{D}/model.pt')
+os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
 # ---------------- evaluation on held-out plots (last visit of each plot): vegetation summaries from satellite features
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), share of the dominant key; presence by probability > 0.5 (expected values)."""
-    pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0]) * pr; Dq = torch.exp(val[..., 1])
+    pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=math.log(150.0)))
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
 def obs_summ(v):

@@ -19,7 +19,7 @@ sys.argv = _argv; torch.manual_seed(1); np.random.seed(1)
 # decoded summaries (from g03b's evaluation section)
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), share of the dominant key; presence by probability > 0.5 (expected values)."""
-    pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0]) * pr; Dq = torch.exp(val[..., 1])
+    pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=math.log(150.0)))   # QMD cap 150 cm
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
 def obs_summ(v):

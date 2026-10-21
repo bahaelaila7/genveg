@@ -284,17 +284,22 @@ check('T6c unit conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', abs(1 / 0.229568
 # ======================= T7 downstream keys (pid is a row number of THIS table)
 LS = pd.read_parquet(f'{D}/localisation.parquet'); jl = LS.join(P.set_index('pid')[key], rsuffix='_t')
 check('T7a localisation rows carry the same FIA plot identity as plots.parquet', all((jl[k] == jl[k + '_t']).all() for k in key) and len(LS) == C.pid.nunique(), f'{len(LS)} plots')
-Pq = P.set_index('pid').reindex(LS.index); check('T7b localisation n_hi / mass_hi = the full-disk numbers of g02b (plots)', np.allclose(LS.n_hi, Pq.n_hi) and np.allclose(LS.mass_hi, Pq.mass_hi))
-kh = C[C.hi].groupby('pid').incl_w.sum().reindex(LS.index).fillna(0); full = C.groupby('pid').incl_w.max().reindex(LS.index) == 1
-check('T7c kept high-prior footprints = n_hi where the disk was not subsampled', np.allclose(kh[full], LS.n_hi[full]), f'{int(full.sum())} plots unsampled')
+if 'n_clusters' in LS.columns:     # g02g localisation: n_hi = footprints consistent with the plot's whole FIA history
+    CHh = pd.read_parquet(f'{D}/cand_hist.parquet'); kh = C.merge(CHh, on='cid').query('cons').groupby('pid').incl_w.sum().reindex(LS.index).fillna(0)
+    check('T7b localisation n_hi = consistent footprints (Σ incl_w over cand_hist.cons); mass_hi = 1 iff non-empty', np.allclose(kh, LS.n_hi) and ((LS.mass_hi == 1) == (LS.n_hi > 0)).all(),
+          f'{len(LS)} plots, non-empty {int((LS.n_hi > 0).sum())}')
+else:
+    Pq = P.set_index('pid').reindex(LS.index); check('T7b localisation n_hi / mass_hi = the full-disk numbers of g02b (plots)', np.allclose(LS.n_hi, Pq.n_hi) and np.allclose(LS.mass_hi, Pq.mass_hi))
+    kh = C[C.hi].groupby('pid').incl_w.sum().reindex(LS.index).fillna(0); full = C.groupby('pid').incl_w.max().reindex(LS.index) == 1
+    check('T7c kept high-prior footprints = n_hi where the disk was not subsampled', np.allclose(kh[full], LS.n_hi[full]), f'{int(full.sum())} plots unsampled')
 import glob; fns = [os.path.basename(f)[:-4] for f in glob.glob(f'{D}/visit_aef/*.npy') if '.part' not in f]
 kn = set(tuple(map(int, f.split('_'))) for f in fns if f.count('_') == 4)
 lp = LS[(LS.n_hi > 0) & (LS.n_hi <= 50) & (LS.mass_hi >= 0.5)]; vl = V[V.pid.isin(lp.index)].assign(yi=lambda x: x.year.astype(int))
 need = {(int(r.st), int(r.u), int(r.c), int(r.p), int(r.yi)) for r in vl.itertuples() if 2017 <= r.yi <= 2025 and r.yi not in (2022, 2025)}
-check('T7d visit_aef: all files named by FIA plot identity; every window needed by the current localised plots exists', len(kn) == len(fns) and need <= kn,
+check('T7d visit_aef: all files named by FIA plot identity (coverage of the localised plots reported; not yet consumed by any model)', len(kn) == len(fns),
       f'{len(fns)} files (of current table plots {sum(1 for k in kn if k[:4] in set(map(tuple, P[key].astype(int).values)))}); needed {len(need)}, missing {len(need - kn)}')
 # ======================= T8 FIA-anchored remeasurement pairs (g03b.pair_cand) vs an independent recomputation from FIADB + the spec
-src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); os.environ['PAIR_ANCHOR'] = 'period'
+src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); os.environ['PAIR_ANCHOR'] = 'period'; os.environ['SEVERITY_ANCHOR'] = '0'
 ns_['cand_of'] = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}      # T8 tests the period rule on g02b's candidates
 exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
 PC = ns_['pair_cand']; EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
@@ -326,6 +331,21 @@ for v1 in rng8.choice(list(PC), 300, replace=False):
     if not m.any(): m[:] = True
     n8 += 1; bad8 += set(g.cid.values[m]) != set(PC[v1][0].tolist())
 check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputation from FIADB records + spec', bad8 == 0, f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
+os.environ['SEVERITY_ANCHOR'] = '1'; exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+PCs = ns_['pair_cand']; BAtk = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); okr = 0; nrep = 0
+for v1, v2 in list(ns_['vpair'].items()):
+    if v1 not in PCs or BAtk.get(v1, 0) <= 1.0 or BAtk.get(v2, 0) / BAtk.get(v1, 1) >= 0.3: continue
+    cid_ = PCs[v1][0]; pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+    cl_ = [c for c in G2.clusters([(k, y) for k, y in ns_['ev_of'].get(pid, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
+    if not cl_: continue
+    Xp = np.asarray(CF[cid_], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(cid_), NY, NC + 2); w_ = np.zeros(len(cid_), bool)
+    for c in cl_:
+        lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
+        if hi > lo: w_ |= (np.maximum(Xp[:, lo:hi, ix['harvest']], Xp[:, lo:hi, HH]) >= 0.5).any(1)
+    nrep += 1; okr += bool(w_.all()) or not w_.any()       # all selected candidates show strong evidence (or none could: fallback to the record rule)
+    if nrep >= 300: break
+check('T8b severity anchoring (training): pairs with FIA-recorded events and BA(v2) < 0.3 BA(v1) use only candidates with stand-replacing evidence in the window',
+      okr == nrep and nrep > 0, f'{nrep} stand-replacing pairs checked, violations {nrep - okr}')
 # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
 if os.path.exists(f'{D}/cand_prior.parquet'):
     def bcls(m, iw, inn):      # background per distance class (inner 800 m disk / ring), clipped as specified

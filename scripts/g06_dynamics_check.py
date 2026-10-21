@@ -5,7 +5,7 @@
      plot's FIA records between the visits (g03b.pair_cand) → decoded BA and TPH vs v2's observed; grouped by the FIA record of the period:
      detectable cut / regeneration (T10-T40 clusters), other detectable events, none. Baselines: persistence (v1's observed values).
 Writes data/proto/gafl/dynamics_check.json; tag with TAG=… (e.g. before / after the FIA-anchored training)."""
-import os, sys, json, math, numpy as np, torch
+import os, sys, json, math, numpy as np, pandas as pd, torch
 os.environ.setdefault('DATA', 'gafl'); os.environ['LOAD'] = '1'; os.environ['EPOCHS'] = '0'
 _argv = sys.argv; sys.argv = ['g03b']
 _HERE = os.path.dirname(os.path.abspath(__file__)); SRC = open(f'{_HERE}/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('# ---------------- evaluation on held-out plots')]
@@ -20,11 +20,16 @@ with torch.no_grad():
         if kind == 'clearcut': d[:, j, G2.IX['harvest']] = 1; d[:, j, G2.H_] = 1; d[:, j, NC] = 3
         if kind == 'fire': d[:, j, G2.IX['fire']] = 1; d[:, j, NC] = 1
         s = summaries(*dec(flow(z, vyear[vt], [2025], d, soil)[2025])); res[kind] = float(s[1].median())
+    vt_ = torch.tensor(te_v); o_ = obs_summ(vt_); s_ = summaries(*dec(torch.cat([enc(c, vyear[c]) for c in torch.split(vt_, 2000)]))); rec = {}
+    for i, k in enumerate(('TPH', 'BA', 'QMD')):       # autoencoder fidelity on held-out visits (decode(encode(visit)) vs the visit)
+        m = o_[i] > 0; x = torch.log(o_[i][m]); y = torch.log(s_[i][m] + 1e-3)
+        rec[k] = {'slope': float(((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean()) ** 2).sum()), 'corr': float(np.corrcoef(x, y)[0, 1]), 'median_log_bias': float((y - x).median())}
+    out['reconstruction_heldout'] = rec
     out['synthetic_BA_2025_median'] = res; out['synthetic_ratio_to_none'] = {k: v / res['none'] for k, v in res.items()}
     # held-out pairs
     cutk = {'T10', 'T20', 'T30', 'T40'}; rows = []
     for v1, v2 in vpair.items():
-        if vpid[v1] not in test_pid or v1 not in pair_cand: continue
+        if (vpid[v1] not in test_pid if os.environ.get('G06_SET', 'test') == 'test' else vpid[v1] not in set(vpid[tr_v])) or v1 not in pair_cand: continue
         y1, y2 = float(vyear[v1]), float(vyear[v2]); evp = [(k, y) for k, y in ev_of.get(vpid[v1], []) if y1 <= y + 0.5 <= y2]
         cl_ = [c for c in G2.clusters(evp) if c['lr'] >= 4]; grp = 'cut' if any(k in cutk for k, _ in evp) and cl_ else ('other_event' if cl_ else 'none')
         rows.append((v1, v2, grp))
@@ -35,8 +40,12 @@ with torch.no_grad():
         s = summaries(*dec(st[yy])); s0 = summaries(*dec(enc(torch.tensor([v1]), vyear[[v1]])))           # s0: v1 decoded without flow (reconstruction)
         pred[(v1, v2)] = (float(torch.exp(torch.log(s[1] + 1e-3).median())), float(torch.exp(torch.log(s[0] + 1e-3).median())), float(s0[1][0]))
     o1 = obs_summ(torch.tensor([r[0] for r in rows])); o2 = obs_summ(torch.tensor([r[1] for r in rows]))
-    for grp in ('cut', 'other_event', 'none'):
-        ix = [i for i, r in enumerate(rows) if r[2] == grp]
+    LSg = pd.read_parquet(f'{D}/localisation.parquet') if os.path.exists(f'{D}/localisation.parquet') else None
+    nh_ = (lambda v: float(LSg.n_hi.get(vpid[v], np.inf))) if LSg is not None and 'n_clusters' in LSg.columns else (lambda v: np.inf)
+    grp_sets = [(g_, None) for g_ in ('cut', 'other_event', 'none')] + [('cut', (0, 10)), ('cut', (10, 50)), ('cut', (50, 1e9))]
+    for grp, rng_ in grp_sets:
+        ix = [i for i, r in enumerate(rows) if r[2] == grp and (rng_ is None or rng_[0] < nh_(r[0]) <= rng_[1])]
+        if rng_ is not None: grp = f'{grp}_consistent_{int(rng_[0])}_{int(min(rng_[1], 9999))}'
         if not ix: continue
         pb = np.array([pred[(rows[i][0], rows[i][1])][0] for i in ix]); ob2 = o2[1].numpy()[ix]; ob1 = o1[1].numpy()[ix]
         e = lambda p, o: float(np.median(np.abs(np.log((p + 0.5) / (o + 0.5)))))    # +0.5 m2/ha: bare v2 visits are common after cuts

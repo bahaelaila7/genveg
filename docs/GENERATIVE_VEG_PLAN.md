@@ -384,3 +384,59 @@ Problems with the previous handling:
 - The set is empty for 8 % of plots (13 % / 28 % of event plots): FIA / LANDFIRE disagreement or swapped plots. Those plots keep the prior.
 - g03b LOC=history (default): every visit of a plot (MIL, pairs, Q) draws from the prior restricted to this set.
 - gv_verify T10 recomputes the set independently.
+
+**Anchoring comparison (2026-10-21).** Two seeds each, all scored by g06 under the same evaluation conditioning (records only, no outcome):
+
+| model | cut pairs: change err (zero 0.586) / corr | undisturbed: err (zero 0.172) / corr | synthetic clear-cut |
+|---|---|---|---|
+| unanchored | 0.575 / 0.30 | 0.193 / −0.02 | ×0.76 |
+| per-period s0 / s1 | 0.546 / 0.44 · 0.590 / 0.29 | 0.190 / 0.22 · 0.161 / 0.08 | ×0.73 / ×0.78 |
+| hybrid (history ∩ period) s0 / s1 | 0.599 / 0.31 · 0.565 / 0.30 | 0.170 / 0.06 · 0.180 / 0.02 | ×0.65 / ×0.62 |
+
+The seed-to-seed spread is as large as the differences between configurations, so none of them learns the disturbance response: on cut pairs
+the predicted median log change is −0.04 to −0.15, against −0.43 observed.
+
+Diagnosis:
+- **Not the jump cap and not the relaxation.**
+  - The learned clear-cut jump is tiny (median 0.05 per latent dim) against the median 0.41 needed to reach the bare state. Its direction is
+    right (cosine 0.61).
+  - The flow relaxes slowly (λ ≈ 0.02 / yr, half-life ≈ 40 yr); the jump persists from 2023 to 2025.
+- **The model learned the AVERAGE outcome of an FIA cut** (×0.65 observed: mostly partial cuts or regrowth before v2), applied to evidence at
+  candidates that are mostly not the plot's.
+  - Nothing tied strong stand-replacing evidence to complete removal.
+  - In real candidate histories (weak evidence fractions) the response shrinks further.
+
+**Severity anchoring (training only).** FIA's own outcome now says what the true footprint must show:
+- a period with a detectable FIA event and BA(v2) < 0.3 BA(v1) → candidates with stand-replacing evidence (harvest class or Hansen loss on ≥
+  half the footprint) in the window;
+- BA(v2) > 0.6 BA(v1) → candidates without it;
+- the evaluation stays records-only (g06 runs with LOAD=1, which switches it off);
+- gv_verify T8b checks it.
+
+**Severity anchoring results.**
+- The synthetic clear-cut response strengthened consistently: ×0.51 / ×0.49, against ×0.62–0.78 before.
+- Held-out cut pairs were still no better than zero change, even the best-anchored ones (≤ 10 consistent footprints: predicted −0.00 to −0.11
+  vs observed −0.37).
+- **Training pairs too:** the model predicted −0.16 vs −0.44 observed on cut pairs, +0.04 vs +0.15 on undisturbed ones. So the problem is
+  underfitting, not location or generalisation.
+
+**ROOT CAUSE (2026-10-21): the autoencoder did not reconstruct plot summaries.**
+- decode(encode(visit)) vs the visit itself: log slope 0.22 / 0.24 / 0.07 (TPH / BA / QMD), corr 0.50 / 0.48 / 0.24, the same on train and
+  test.
+- Every downstream quantity passes through that decoder, so all changes were compressed about 4×, and the prior / maps were barely better
+  than null.
+- The decoder had been trained slot-wise only (presence BCE per species × age-class slot + masked value MSE); the expected plot totals
+  regressed to the mean.
+
+**Fix (g03b):**
+- a summary-reconstruction loss (squared log errors of the decoded TPH, BA, QMD) on all three decoder uses: encoder states, flowed v1 → v2
+  states, and Q;
+- absent-slot values pulled toward the slot's training mean (they entered the expected totals untrained);
+- a physical QMD cap of 150 cm, also in g04.summaries.
+
+After 2 epochs, held-out reconstruction:
+- TPH slope 0.95 / corr 0.96;
+- BA 0.76 / 0.92;
+- QMD 0.79 / 0.92.
+
+g06 now reports the reconstruction fidelity. Full 14-epoch runs (2 seeds) → g04 → g05 → gv_verify: data/proto/run_sum.sh.
