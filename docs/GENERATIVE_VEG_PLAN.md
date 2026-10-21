@@ -440,3 +440,21 @@ After 2 epochs, held-out reconstruction:
 - QMD 0.79 / 0.92.
 
 g06 now reports the reconstruction fidelity. Full 14-epoch runs (2 seeds) → g04 → g05 → gv_verify: data/proto/run_sum.sh.
+
+**Results with the reconstruction fix (14 epochs, seeds 0 / 1; gv_verify 42 / 42 PASS):**
+- **Reconstruction** (held-out): slope 0.91–0.97, corr 0.97–0.98 for TPH / BA / QMD (was 0.07–0.24 / 0.24–0.50).
+- **Dynamics** (held-out pairs, records-only conditioning):
+  - undisturbed growth: corr 0.70 / 0.61, change error 0.143 / 0.141 vs zero-change 0.172;
+  - cut pairs: corr 0.56 / 0.52, median predicted change −0.29 / −0.34 vs −0.43 observed, but the absolute error is 0.618 / 0.704 vs zero
+    0.586 (candidate histories are still not the plot's own);
+  - the best-anchored cut pairs (≤ 10 consistent footprints) beat zero change for seed 0 (0.494 vs 0.561);
+  - other events: predicted declines that did not happen (error 0.32 / 0.44 vs 0.197);
+  - synthetic 2023 clear-cut: BA ×0.10 / ×0.03 by 2025 (was ×0.5–0.8).
+- **Mapping path, held-out visits 2022–25:** BA 0.395 vs null 0.454 and kNN 0.421; TPH 0.574 vs 0.608; QMD 0.307 vs 0.327.
+- **Landscape prior A:** BA 0.432 vs null 0.464.
+- **Composition got worse** (prior Bray 0.706 vs 0.611 before; kNN 0.579). A composition term is now in the summary loss (W_COMP), rerun via
+  data/proto/run_comp.sh.
+- **Stand map (Baker):** harvested stands are now clearly lower — B1 37 vs forest 56 ft²/ac, B0 44 vs 61 (were ≈ equal).
+- **B localisation:** still at chance.
+- **Forest Explorer:** the Baker layer now carries these v3 values via `scripts/g07_fe_attach.py`, a reproducible exporter that replaces the
+  ad-hoc attach. GEN_SRC is the version tag; the backup is baker_fl.geojson.bak_v2. The server was restarted.

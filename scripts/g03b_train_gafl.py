@@ -117,7 +117,8 @@ def sample_cands(pids, K):
 # poorly (log BA slope 0.24, corr 0.48, even for the encoded visit itself; 2026-10-21), compressing every downstream change ~4x
 _N = torch.exp(slot_v[..., 0]) * slot_p; _D = torch.exp(slot_v[..., 1])
 OBS_T = _N.sum(1); OBS_B = (_N * math.pi / 4 * (_D / 100) ** 2).sum(1); OBS_Q = torch.sqrt((_N * _D ** 2).sum(1) / OBS_T.clamp(min=1e-6))
-W_SUM = float(os.environ.get('W_SUM', 1.0)); LQ_MAX = math.log(150.0)                # QMD of a slot <= 150 cm (physical cap, also in g04.summaries)
+_bko = (_N * _D ** 2).view(-1, NK, NA).sum(-1); OBS_S = _bko / _bko.sum(-1, keepdim=True).clamp(min=1e-9)      # observed BA shares by species key
+W_SUM = float(os.environ.get('W_SUM', 1.0)); W_COMP = float(os.environ.get('W_COMP', 1.0)); LQ_MAX = math.log(150.0)                # QMD of a slot <= 150 cm (physical cap, also in g04.summaries)
 # values of ABSENT slots are otherwise untrained, yet enter the expected summaries through their (small) presence probability: pull them toward the
 # slot's training mean (log N, log QMD, H; CR excluded)
 _cnt = slot_p[tr_v].sum(0).clamp(min=1); SLOT_MEAN = (slot_v[tr_v] * slot_p[tr_v].unsqueeze(-1)).sum(0) / _cnt.unsqueeze(-1)
@@ -128,7 +129,11 @@ def summ_err(lp, val, v):
     """per-sample mean squared log error of the decoded summaries (TPH, BA, QMD; differentiable expected values with calibrated presence)"""
     pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=LQ_MAX))
     tph = N.sum(-1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(-1); qmd = torch.sqrt((N * Dq ** 2).sum(-1) / tph.clamp(min=1e-6) + 1e-9)
-    return ((torch.log1p(tph) - torch.log1p(OBS_T[v])) ** 2 + (torch.log(ba + 0.1) - torch.log(OBS_B[v] + 0.1)) ** 2 + (torch.log1p(qmd) - torch.log1p(OBS_Q[v])) ** 2) / 3
+    e = ((torch.log1p(tph) - torch.log1p(OBS_T[v])) ** 2 + (torch.log(ba + 0.1) - torch.log(OBS_B[v] + 0.1)) ** 2 + (torch.log1p(qmd) - torch.log1p(OBS_Q[v])) ** 2) / 3
+    if W_COMP > 0:      # species composition: Bray-Curtis of the BA shares by species key (stocked visits); the totals loss alone degraded composition
+        bk = (N * Dq ** 2).view(*N.shape[:-1], NK, NA).sum(-1); bk = bk / bk.sum(-1, keepdim=True).clamp(min=1e-9)
+        e = e + W_COMP * (OBS_S[v] - bk).abs().sum(-1) / 2 * (OBS_B[v] > 0).float()
+    return e
 def dec_loss(z, v):
     lp, val = dec(z); bce_ = bce(lp, slot_p[v])
     m = slot_vm[v] * slot_p[v].unsqueeze(-1); mse = ((val - slot_v[v]) ** 2 * m).sum() / m.sum().clamp(min=1)
