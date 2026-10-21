@@ -571,3 +571,24 @@ Remaining design concern: pair losses average over K sampled histories, which sm
   - B1: 39.8 vs 66.0 ft²/ac; corr with TreeMap BA 0.31;
   - B0: 42.4 vs 67.7.
 - The numbers are within seed noise of the composition model (m_comp). The review fixes changed correctness, not skill.
+
+**Location ablation (g06 EVAL_LOC, 2026-10-22).** Same model and same held-out pairs; only WHERE the plot's disturbance history is taken from
+varies:
+- public = the footprint at the public coordinate;
+- uniform = all disk footprints;
+- history = FIA-consistent footprints (the default).
+
+Change error (zero-change baseline in parentheses), seeds 0 / 1:
+
+| | cut (0.586) | other events (0.197) | undisturbed (0.172) |
+|---|---|---|---|
+| history | 0.639 / 0.703 | 0.345 / 0.365 | 0.148 / 0.155 |
+| public | 0.714 / 0.681 | 0.219 / 0.234 | 0.162 / 0.170 |
+| uniform | **0.597 / 0.599** | **0.201 / 0.208** | **0.147 / 0.154** |
+
+FIA-record-guided placement does NOT reduce held-out error. For event pairs it is WORSE than not using the records at all (uniform), and no
+placement beats zero change on event pairs.
+
+Likely cause: the matching is permissive. Any pixel of the 90 m footprint with any compatible class, incl. 'unknown' and Hansen loss, in the
+±1-yr window counts as a match. It therefore selects footprints with severe evidence (e.g. Hansen loss for FIA weather / insect records, which
+are usually mild), and the model then predicts large declines.

@@ -12,6 +12,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); SRC = open(f'{_HERE}/g03b_tr
 exec(compile(SRC, 'g03b_train_gafl.py', 'exec')); sys.argv = _argv
 G4 = open(f'{_HERE}/g04_bayes_downscale.py').read(); exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'))
 torch.manual_seed(0); np.random.seed(0); out = {'tag': os.environ.get('TAG', '')}
+EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history | public | uniform
 with torch.no_grad():
     o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021)].vid.values; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of])[:800]; vt = torch.tensor(vv_)
     z = enc(vt, vyear[vt]); cid0 = np.array([cand_of[vpid[v]][0][0] for v in vv_]); soil = SOIL[cid0]; res = {}
@@ -35,7 +36,12 @@ with torch.no_grad():
         rows.append((v1, v2, grp))
     pred = {}
     for v1, v2, grp in rows:
-        cid, pr = pair_cand[v1]; ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); y2 = vyear[v2]; yy = int(math.floor(float(y2)))
+        cid, pr = pair_cand[v1]
+        if EVAL_LOC != 'history':           # ablation of WHERE the plot is assumed to be (same model, same pairs)
+            g_ = C0[C0.pid == vpid[v1]]
+            if EVAL_LOC == 'public': cid, pr = g_.cid.values[[int(np.argmin(g_.dist_m.values))]], np.ones(1)       # pinned at the public coordinate
+            else: cid, pr = g_.cid.values, g_.incl_w.values / g_.incl_w.values.sum()                                # uniform over the disk's footprints
+        ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); y2 = vyear[v2]; yy = int(math.floor(float(y2)))
         st = flow(enc(torch.tensor([v1]), vyear[[v1]]).repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=y2.repeat(16))
         s = summaries(*dec(st[yy])); s0 = summaries(*dec(enc(torch.tensor([v1]), vyear[[v1]])))           # s0: v1 decoded without flow (reconstruction)
         pred[(v1, v2)] = (float(torch.exp(torch.log(s[1] + 1e-3).median())), float(torch.exp(torch.log(s[0] + 1e-3).median())), float(s0[1][0]))
