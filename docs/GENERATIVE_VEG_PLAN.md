@@ -646,3 +646,13 @@ and insects show no locality.
 
 History placement has the better direction (corr) but worse magnitude: the model learned its responses from permissive histories. Retraining
 under the strict rules: data/proto/run_strict.sh.
+
+**Data vetting of the FIA inputs (2026-10-22):**
+- Remeasurement gap: median 5.5 yr (5–95 %: 4.0–7.2); 3 pairs < 1 yr.
+- Undisturbed pairs (15.5k, no record, no code): BA log-growth median 2.7 % / yr; 2.3 % decline > 30 %.
+- Major losses (BA(v2) < 0.3 BA(v1), 7.7 % of pairs): 7 % carry no FIA code at all. FIA missed them, so the 'undisturbed period' rule is wrong
+  there; this affects ≈ 0.5 % of pairs.
+- Age class vs QMD: monotone (5 → 75 cm). Implausible heights: 5 tokens.
+- **Forested share.** Low shares inflate per-forested-area densities: BA > 60 m² / ha in 9.0 % of visits with share 0.10–0.25, 2.2 % at
+  0.25–0.5, 0.85 % at 0.5–0.95, 0.52 % at ≥ 0.95; 7 of the 10 highest-BA visits have shares 0.15–0.28 (noise from 1 of 4 subplots, plus edge
+  trees). → `MIN_FSHARE` (default 0.25) excludes such visits from training, evaluation and pairs (388 visits, 1.1 %; they stay in the table).

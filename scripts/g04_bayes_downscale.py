@@ -111,7 +111,7 @@ with torch.no_grad():
         loc.append((post[hi].sum(), iw_[hi].sum() / iw_.sum()))
     a = np.array(loc); ev['B_localisation'] = {'plots': len(a), 'posterior_mass_on_pinned_footprints': float(a[:, 0].mean()), 'their_share': float(a[:, 1].mean())}
     # A alone vs kNN on X_L (last visit of every held-out plot)
-    lastv = V.loc[V.groupby('pid').year.idxmax()]; trp_ = set(vpid[tr_v])
+    lastv = V[fs_ok]; lastv = lastv.loc[lastv.groupby('pid').year.idxmax()];      # last visit passing the forest-share filter trp_ = set(vpid[tr_v])
     te_l = [v for v in lastv[lastv.pid.isin(test_pid)].vid.values if v in vi]; tr_l = [v for v in lastv[lastv.pid.isin(trp_)].vid.values if v in vi]   # kNN pool: training plots
     o_te = obs_summ(torch.tensor(te_l)); o_tr = obs_summ(torch.tensor(tr_l))
     X_te = Xv[[vi[v] for v in te_l]]; X_tr = Xv[[vi[v] for v in tr_l]]

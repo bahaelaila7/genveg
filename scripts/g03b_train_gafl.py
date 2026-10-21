@@ -74,7 +74,9 @@ test_pid = set(P.pid[P.blk.isin(test_blk)]); have = set(cand_of)
 from scipy.spatial import cKDTree as _KD
 _te = P[P.pid.isin(test_pid)]; _dn, _ = _KD(_te[['x', 'y']].values).query(P[['x', 'y']].values)
 buffer_pid = set(P.pid[(_dn < 3200) & ~P.pid.isin(test_pid)])   # training plots whose 1.6 km disk could overlap a test plot's disk: excluded from training
-tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid])
+MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9 % of
+fs_ok = (V.fsub.values >= MIN_FS) if 'fsub' in V.columns else np.ones(nv, bool)   # visits with forest share 0.10-0.25 have BA > 60 m2/ha vs 0.5 % when fully forested)
+tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
 print(f'visits train {len(tr_v)} test {len(te_v)} | plots test {len(test_pid & have)} | buffer plots excluded {len(buffer_pid & have)} | tokens/visit max {maxT}', flush=True)
 pos = slot_p[tr_v].mean(0).clamp(min=1e-4); POSW = ((1 - pos) / pos).sqrt().clamp(max=30)   # per-slot positive weight from TRAINING visits (rare species × age classes count more)
 # ---- model
@@ -165,7 +167,7 @@ if os.path.exists(f'{D}/localisation.parquet') and 'n_clusters' in pd.read_parqu
 else:
     cq = P.conc.quantile(0.7) if 'conc' in P.columns else 0; good = set(P.pid[P.conc >= cq]) if 'conc' in P.columns else set(P.pid)
 tr_good = np.array([v for v in tr_v if vpid[v] in good]); print(f'curriculum: {E1} epochs on {len(tr_good)} visits of the best-anchored plots (criterion {cq:.3f})', flush=True)
-vpair = dict(zip(PR.v1.values, PR.v2.values))
+vpair = {a: b for a, b in zip(PR.v1.values, PR.v2.values) if fs_ok[a] and fs_ok[b]}       # both visits must pass the forest-share filter
 # ---- FIA-anchored remeasurement pairs: the plot's own COND.TRT* / COND.DSTRB* records (true location, g02e) select the candidate histories the flow may
 # take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, g02b.EVK / clusters) must be matched by compatible
 # LANDFIRE / Hansen evidence in its window; if v2 carries no code that could hide a stand-replacing event, the history must have none in between
@@ -275,7 +277,7 @@ def obs_summ(v):
     m = slot_p[v]; N = torch.exp(slot_v[v][..., 0]) * m; Dq = torch.exp(slot_v[v][..., 1])
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
-last = V.loc[V.groupby('pid').year.idxmax()]; last = last[last.year >= 2019]       # Q predicts the 2025 state: compare with recent visits only (both model and kNN)
+last = V[fs_ok]; last = last.loc[last.groupby('pid').year.idxmax()]; last = last[last.year >= 2019]       # Q predicts the 2025 state: compare with recent visits only (both model and kNN)
 te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(have - test_pid - buffer_pid)].vid.values
 def plot_feat(pid):    # prior-weighted mean candidate features (the plot's satellite description under location uncertainty)
     cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); return (X * torch.tensor(pr, dtype=torch.float32).unsqueeze(-1)).sum(0)
