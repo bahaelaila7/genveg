@@ -496,3 +496,23 @@ their own co-located history do not have this problem.
 
 **Next:** same-year AlphaEarth at the candidates (the g02c windows, fetched for the g02g localised plots) as a direct visit ↔ footprint match
 without long flows — the last unused source of location information.
+
+**Same-year AlphaEarth carries location information (g08, 2026-10-22; early run on the windows available).**
+Setup:
+- Visits 2017–2024 of the g02g-localised plots; the visit-year AlphaEarth at each history-consistent candidate (2022 mosaic, other years from the
+  g02c windows).
+- A head maps the frozen encoder z to that embedding, trained by MIL on training plots (597 visits).
+
+Window georeferencing check: median cosine to the 2022 mosaic 0.977 at the same candidates vs 0.885 at shuffled ones.
+
+Held-out results (137 visits):
+- log-likelihood gain of the real visit latent over a permutation placebo (another held-out visit of the same year): +2.1 to +2.5 nats / visit
+  (95 % CI 1.7–3.3 in the first run), positive for 69 %; the FIA records gave ≈ 0.003 / plot;
+- FOOTPRINT level: two visits of the same held-out plot put their posteriors on the same footprints more than chance — overlap 0.094 vs 0.065
+  permuted, real > permuted in 82 % of 28 pairs.
+
+Next:
+- complete the windows (2,478 for the current localised set) and rerun;
+- build a JOINT per-plot location posterior from all visits' same-year matches × the history-consistent set (training plots only — localising
+  a test plot with its own vegetation would leak);
+- use it for every visit of those plots in training.
