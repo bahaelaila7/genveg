@@ -1,7 +1,8 @@
 """History-consistent candidates per plot (user, 2026-10-21: what coinciding FIA / LANDFIRE records establish holds for ALL of the plot's visits).
 A candidate footprint is consistent with the plot's WHOLE FIA history (g02e) when
   - every detectable FIA event cluster (g02b.clusters, likelihood ratio >= 4) has compatible LANDFIRE / Hansen evidence in its window, and
-  - no FIA-undisturbed period (g02e negs) shows stand-replacing evidence (harvest class or Hansen loss on >= half the footprint).
+  - no FIA-undisturbed period (g02e negs) shows stand-replacing evidence (harvest class or Hansen loss on >= half the footprint);
+applied sequentially in time order, skipping a constraint that no remaining footprint satisfies (2026-10-22).
 g03b (LOC=history, default) draws every visit of the plot — MIL AlphaEarth matches, remeasurement pairs, Q targets — from the prior restricted to this
 set; if it is empty (FIA / LANDFIRE disagree: missed detections, timing, swapped plots) the plot keeps its prior.
 NOT a localisation claim: g02f's held-out test (2026-10-21) found ~0.003 nats / plot of footprint-level location information beyond a permutation
@@ -16,15 +17,18 @@ C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mm
 E = pd.read_parquet(f'{D}/fia_events.parquet'); N = pd.read_parquet(f'{D}/fia_negs.parquet')
 ev = {p: list(zip(g.kind, g.year.astype(int))) for p, g in E.groupby('pid')}; ng = {p: list(zip(g.y_lo.astype(int), g.y_hi.astype(int))) for p, g in N.groupby('pid')}
 def consistent(per, evs, negs):
-    m = np.ones(len(per), bool); ncl = 0
+    """sequential narrowing in time order (detectable event clusters and undisturbed periods); a constraint that would leave no footprint is
+    skipped (a missed detection / FIA-LANDFIRE disagreement must not erase the plot's whole history) — the same rule as g03b's pairs"""
+    m = np.ones(len(per), bool); ncl = 0; sr = np.maximum(per[:, :, G2.IX['harvest']], per[:, :, G2.H_]) >= 0.5; cons_ = []
     for c in G2.clusters(evs):
         if c['lr'] < 4: continue
         lo, hi = max(c['lo'] - G2.YEARS[0], 0), min(c['hi'] - G2.YEARS[0], NY - 1) + 1
-        if hi > lo: m &= (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1); ncl += 1
-    sr = np.maximum(per[:, :, G2.IX['harvest']], per[:, :, G2.H_]) >= 0.5
+        if hi > lo: cons_.append((c['lo'], (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1))); ncl += 1
     for a, b in negs:
-        a, b = max(a - G2.YEARS[0], 0), min(b - G2.YEARS[0], NY - 1)
-        if b >= a: m &= ~sr[:, a:b + 1].any(1)
+        a2, b2 = max(a - G2.YEARS[0], 0), min(b - G2.YEARS[0], NY - 1)
+        if b2 >= a2: cons_.append((a, ~sr[:, a2:b2 + 1].any(1)))
+    for _, x in sorted(cons_, key=lambda t: t[0]):
+        if (m & x).any(): m = m & x
     return m, ncl
 if __name__ == '__main__':
     out, loc = [], []

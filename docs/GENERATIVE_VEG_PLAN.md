@@ -592,3 +592,57 @@ placement beats zero change on event pairs.
 Likely cause: the matching is permissive. Any pixel of the 90 m footprint with any compatible class, incl. 'unknown' and Hansen loss, in the
 ±1-yr window counts as a match. It therefore selects footprints with severe evidence (e.g. Hansen loss for FIA weather / insect records, which
 are usually mild), and the model then predicts large declines.
+
+**What the data say about FIA ↔ LANDFIRE / Hansen matching (g09, 2026-10-22).**
+Method: share of each plot's disk footprints (Horvitz-Thompson) showing an evidence type at lag −4..+4 from the FIA record year, vs the same
+plot's quiet years (≥ 4 yr from any record), pseudocount 0.2 %; inner 800 m vs ring.
+
+*FIA's own outcome, BA(v2) / BA(v1) median (share < 0.3):*
+- site preparation T20 0.17 (58 %);
+- artificial regeneration T30 0.25 (53 %);
+- natural regeneration T40 0.30 (51 %);
+- cutting T10 0.57 (34 %);
+- fire D30 0.87 (25 %);
+- wind D52, ground fire D31, human D80, other T50, insects / disease: 0.84–1.13 (≤ 12 %).
+
+*Associations (lift at the record year):*
+- cutting: harvest ×4.4–4.8, Hansen ×2.5–2.8;
+- site preparation / planting: chemical ×7–8;
+- natural regeneration: fire ×5.6;
+- fire: Hansen ×9–10, fire ×4.9;
+- wind: weather ×15.6;
+- human: harvest ×5.6.
+
+*Timing and coverage:* the lifts peak at lag 0, with ±1 secondary; coverage thresholds barely change them.
+
+*Locality:* treatments show lift 2.8 inner vs 1.75 ring, so the evidence is local and true locations concentrate near the public point. Weather
+and insects show no locality.
+
+*Old vs strict rules:*
+- for treatments the strict rule has a higher lift (T10 1.80 → 1.99) and passes fewer footprints (20 % → 16 %);
+- for wind / insects / human the old rule passed 8–17 % of footprints via 'unknown' and Hansen loss, the strict rule ≤ 1 %.
+
+**Strict rules (g02b.EVK, replaced).**
+- Evidence per record type: as in the code comment.
+- 'Unknown' and Hansen loss are never matched to mild records.
+- Detectable records = lr 4: cutting, site preparation, artificial and natural regeneration, crown fire.
+- Weak records = lr 2: ground fire (prescribed burns recur; fire class passes ~17 %, lift 1.85), wind, insects, human, other treatments.
+- DSTRBCD 70 is not matched.
+- The old lr 8 was far stronger than the observed lifts (≈ 2).
+
+**Consequences:**
+- g02g applies its constraints sequentially in time order and skips one that no remaining footprint satisfies (it had produced 30–51 % empty
+  sets).
+- `scripts/g02i_reprior.py` recomputes the kept candidates' prior under the current rules; the stratified sample stays valid.
+- Consistent footprints, median: all plots 301; plots with ≥ 1 detectable record 50; with ≥ 2, 12 (82 % ≤ 50).
+- gv_verify's independent spec follows the strict rules.
+
+**Location ablation with the model trained under the OLD rules** (cut pairs, error s0 / s1; zero 0.586):
+
+| placement | error | corr |
+|---|---|---|
+| history | 0.654 / 0.748 | 0.58 / 0.53 |
+| uniform | 0.597 / 0.599 | 0.51 / 0.49 |
+
+History placement has the better direction (corr) but worse magnitude: the model learned its responses from permissive histories. Retraining
+under the strict rules: data/proto/run_strict.sh.

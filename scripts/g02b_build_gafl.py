@@ -76,14 +76,23 @@ def feats(r0, c0, h, w):
 # FIA event kinds -> compatible candidate evidence (class indices of CLS; 'H' = Hansen loss), year window (relative to the FIA year), likelihood ratio
 # (assumed detectability: cuts / regeneration / site preparation / human / crown fire are well visible from space, ground fire / other treatments weakly)
 H_ = NC + 1; IX = {k: i for i, k in enumerate(CLS)}
-EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 8.0),                                   # cutting
-       'T20': ([IX['harvest'], IX['thin'], IX['fire'], IX['chem'], IX['unknown'], H_], (-1, 1), 8.0),             # site preparation
-       'T30': ([IX['harvest'], IX['thin'], IX['chem'], IX['unknown'], H_], (-2, 1), 8.0),                         # artificial regeneration (after a harvest)
-       'T40': ([IX['harvest'], IX['unknown'], H_], (-2, 1), 8.0),                                                 # natural regeneration (after a harvest)
-       'T50': ([IX['thin'], IX['fire'], IX['chem'], IX['unknown']], (-1, 1), 3.0),                                # other silvicultural treatment
-       'Dfire': ([IX['fire'], IX['unknown']], (-1, 1), 3.0), 'Dcrown': ([IX['fire'], IX['unknown'], H_], (-1, 1), 8.0),  # ground / crown fire
-       'Dins': ([IX['insdis'], IX['unknown'], H_], (-1, 1), 4.0), 'Dwx': ([IX['weather'], IX['unknown'], H_], (-1, 1), 4.0),
-       'Dhum': ([IX['harvest'], IX['thin'], IX['dev'], IX['unknown'], H_], (-1, 1), 8.0), 'Dunk': (list(range(NC)) + [H_], (-1, 1), 3.0)}
+# STRICT, data-derived matching (2026-10-22, g09_fia_landfire_association.py; replaces the permissive table where any compatible class incl. the
+# generic 'unknown' change class and Hansen loss matched every record type). Evidence classes per record type are those with a clear association in
+# the data (lift at the FIA year vs the plot's quiet years: cutting -> harvest ×4.4-4.8, Hansen ×2.5-2.8; site preparation / planting -> chemical
+# ×7-8; natural regeneration -> fire ×5.6; fire -> fire ×4.9, Hansen ×9 (crown); wind -> weather ×15; human -> harvest ×5.6). Stand-replacing evidence
+# (Hansen loss) is compatible only with records whose FIA-measured outcome is stand-replacing (site preparation / regeneration median BA(v2)/BA(v1)
+# 0.17-0.30, cutting 0.57 with 34 % < 0.3, crown fire). Mild records (wind, insects, human, other treatments: median 0.84-1.13) never match Hansen
+# or 'unknown'. Likelihood ratio 4 = a detectable record (a hard constraint for the history-consistent sets / pairs, threshold lr >= 4; the old ×8
+# was far stronger than the observed lifts ≈ 2); 2 = weak (never a hard constraint).
+EVK = {'T10': ([IX['harvest'], IX['thin'], H_], (-1, 1), 4.0),                                                   # cutting
+       'T20': ([IX['harvest'], IX['chem'], IX['fire'], H_], (-1, 1), 4.0),                                        # site preparation
+       'T30': ([IX['harvest'], IX['chem'], H_], (-2, 1), 4.0),                                                    # artificial regeneration (after a harvest)
+       'T40': ([IX['harvest'], IX['fire'], H_], (-2, 1), 4.0),                                                    # natural regeneration
+       'T50': ([IX['thin'], IX['chem']], (-1, 1), 2.0),                                                           # other silvicultural treatment
+       'Dfire': ([IX['fire']], (-1, 1), 2.0), 'Dcrown': ([IX['fire'], H_], (-1, 1), 4.0),                         # ground (or unspecified) / crown fire
+       # ground fire is weak: prescribed burns recur every 2-3 yr, the fire class passes ~17 % of footprints, lift 1.85 -> never a hard constraint
+       'Dins': ([IX['insdis']], (-1, 1), 2.0), 'Dwx': ([IX['weather']], (-1, 1), 2.0),
+       'Dhum': ([IX['harvest'], IX['dev']], (-1, 1), 2.0)}                                                       # 'unknown' (70): not matched
 NONBLOCK = {12, 22, 31, 40, 41, 42, 43, 44, 45, 46, 60}   # DSTRBCD that cannot hide stand-replacing evidence (understory insects / disease, ground fire, animal, vegetation)
 def ev_kind(trt, code):
     c = int(code)
@@ -93,7 +102,6 @@ def ev_kind(trt, code):
     if 10 <= c <= 22: return 'Dins'
     if 50 <= c <= 54: return 'Dwx'
     if c == 80: return 'Dhum'
-    if c == 70: return 'Dunk'
     return None                                     # animal (40s), vegetation (60), geologic (90): rarely visible from space
 def clusters(evs):
     """FIA records of ONE physical event (a cut + site preparation + planting, or the same event re-reported a year apart) must not multiply:

@@ -136,13 +136,14 @@ check('T3e disturbance fractions (3x3) at the event calendar year (LANDFIRE) and
 #     protocol (since the previous measurement, PREV_PLT_CN, or the 5-yr lookback of a new plot) for visits without a code that could hide stand-replacing
 #     evidence; stand-replacing = harvest class or Hansen loss on >= half the footprint -> ×0.25. Stored prior must be ∝ w x incl_w.
 ix = {k: i for i, k in enumerate(CLS)}; HH = NC + 1
-SPEC = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 8), ('T', 20): (['harvest', 'thin', 'fire', 'chem', 'unknown', 'H'], (-1, 1), 8),
-        ('T', 30): (['harvest', 'thin', 'chem', 'unknown', 'H'], (-2, 1), 8), ('T', 40): (['harvest', 'unknown', 'H'], (-2, 1), 8), ('T', 50): (['thin', 'fire', 'chem', 'unknown'], (-1, 1), 3)}
-for cd in range(10, 23): SPEC[('D', cd)] = (['insdis', 'unknown', 'H'], (-1, 1), 4)
-for cd in (30, 31): SPEC[('D', cd)] = (['fire', 'unknown'], (-1, 1), 3)
-SPEC[('D', 32)] = (['fire', 'unknown', 'H'], (-1, 1), 8)
-for cd in range(50, 55): SPEC[('D', cd)] = (['weather', 'unknown', 'H'], (-1, 1), 4)
-SPEC[('D', 80)] = (['harvest', 'thin', 'dev', 'unknown', 'H'], (-1, 1), 8); SPEC[('D', 70)] = (CLS + ['H'], (-1, 1), 3)
+# the STRICT data-derived rules (g09; 2026-10-22), written out independently of g02b.EVK
+SPEC = {('T', 10): (['harvest', 'thin', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'H'], (-1, 1), 4),
+        ('T', 30): (['harvest', 'chem', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'H'], (-2, 1), 4), ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
+for cd in range(10, 23): SPEC[('D', cd)] = (['insdis'], (-1, 1), 2)
+for cd in (30, 31): SPEC[('D', cd)] = (['fire'], (-1, 1), 2)
+SPEC[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
+for cd in range(50, 55): SPEC[('D', cd)] = (['weather'], (-1, 1), 2)
+SPEC[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
 HARMLESS = {12, 22, 31, 40, 41, 42, 43, 44, 45, 46, 60}
 evr = _fx.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy,
                     c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
@@ -396,16 +397,18 @@ if os.path.exists(f'{D}/cand_hist.parquet'):
     CH = pd.read_parquet(f'{D}/cand_hist.parquet').set_index('cid'); bad10 = 0; ne10 = 0
     for pid, g in Cs.groupby('pid'):
         Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); cl, per_ = REC[pid]; m = np.ones(len(g), bool)
+        srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5; cons10 = []
         for c_ in cl:
             if c_[3] < 4: continue
             a0, b0 = max(c_[1] - 2000, 0), min(c_[2] - 2000, NY - 1)
-            if b0 >= a0: m &= Xg[:, a0:b0 + 1][:, :, sorted(c_[0])].sum(-1).sum(-1) > 0
-        srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5
+            if b0 >= a0: cons10.append((c_[1], Xg[:, a0:b0 + 1][:, :, sorted(c_[0])].sum(-1).sum(-1) > 0))
         for a0, b0 in per_:
-            a0, b0 = max(a0 - 2000, 0), min(b0 - 2000, NY - 1)
-            if b0 >= a0: m &= ~srv[:, a0:b0 + 1].any(1)
+            a1, b1 = max(a0 - 2000, 0), min(b0 - 2000, NY - 1)
+            if b1 >= a1: cons10.append((a0, ~srv[:, a1:b1 + 1].any(1)))
+        for _, x in sorted(cons10, key=lambda t: t[0]):          # time order; a constraint no remaining footprint satisfies is skipped (spec)
+            if (m & x).any(): m = m & x
         bad10 += int((CH.loc[g.cid.values].cons.values != m).sum() > 0); ne10 += int(not m.any())
-    check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (all detectable clusters matched, no stand-replacing evidence in undisturbed periods)',
+    check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (detectable clusters + undisturbed periods, time order, unsatisfiable skipped)',
           bad10 == 0, f'{Cs.pid.nunique()} plots, mismatching plots {bad10}, empty sets {ne10}')
 # ======================= T11 Forest Explorer export (g07): GEN_* = stand map x unit conversions
 FEJ = os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson')
