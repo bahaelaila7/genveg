@@ -138,6 +138,10 @@ def plot_job(a):
     pk = w[keep] * iw[keep]; pk = pk / pk.sum()          # each kept candidate stands for incl_w footprints of the disk
     return pid, dict(F=F[keep].astype(np.float16), d=d[keep].astype(np.float32), w=pk.astype(np.float32), iw=iw[keep].astype(np.float32), hi=hi[keep],
                      ar=ar[keep], ac=ac[keep], conc=conc, n_hi=n_hi, mass_hi=mass_hi, n=len(d))
+def decimal_year(md):
+    """visit date -> decimal year at mid-day: year + (day of year - 0.5) / days in year (never reaches the next integer; the old year + doy / 366
+    put leap-year Dec-31 visits at the next year)."""
+    md = pd.to_datetime(md); return md.dt.year + (md.dt.dayofyear - 0.5) / np.where(md.dt.is_leap_year, 366.0, 365.0)
 def fiadb_visits(fc):
     """FIADB visits (read-only) with a forested condition: forested area shares relative to the SAMPLED plot area (non-sampled COND_STATUS_CD 5
     excluded, as in FIA estimation), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
@@ -209,7 +213,7 @@ if __name__ == '__main__':
     print(f"visits: with curated trees {len(vt)}, bare FIADB visits added {len(bare)}, without a forested FIADB condition {int(vis.fsub.isna().sum())}", flush=True)
     lowf = vis.fsub < 0.1; print(f"visits with forested share < 0.1 of the sampled area dropped: {int(lowf.sum())}", flush=True)
     vis = vis[vis.fsub.notna() & ~lowf].sort_values(key + ['md']).reset_index(drop=True); vis['vid'] = np.arange(len(vis))
-    vis['year'] = vis.md.dt.year + vis.md.dt.dayofyear / 366; t = t.merge(vis[key + ['md', 'vid']], on=key + ['md'])
+    vis['year'] = decimal_year(vis.md); t = t.merge(vis[key + ['md', 'vid']], on=key + ['md'])
     t = t.merge(vis[['vid', 'fsub', 'fmic']], on='vid')
     t['D'] = t.DIA * 2.54; t['H'] = t.HT * 0.3048; t['CRf'] = t.CR / 100; t['A'] = t.age.astype(float)
     t['W'] = t.tpa * 2.47105 / np.where(t.DIA < 5.0, t.fmic, t.fsub)              # trees / forested ha (microplot saplings: microplot forest share)
@@ -239,7 +243,7 @@ if __name__ == '__main__':
             if i % 500 == 0: print(f'plots {i}/{len(jobs)} candidates {n0}', flush=True)
     C = pd.concat(rows, ignore_index=True)
     for j_, nm in enumerate(['conc', 'n_hi', 'mass_hi', 'n_fp']): P[nm] = P.pid.map({k: v[j_] for k, v in concs.items()})
-    vis.drop(columns=['md']).to_parquet(f'{OUT}/visits.parquet'); TK.to_parquet(f'{OUT}/tokens.parquet'); pairs.to_parquet(f'{OUT}/pairs.parquet'); P.to_parquet(f'{OUT}/plots.parquet')
+    vis.to_parquet(f'{OUT}/visits.parquet'); TK.to_parquet(f'{OUT}/tokens.parquet'); pairs.to_parquet(f'{OUT}/pairs.parquet'); P.to_parquet(f'{OUT}/plots.parquet')
     C.to_parquet(f'{OUT}/cands.parquet'); np.save(f'{OUT}/cand_feat.npy', np.concatenate(CF))
     # Baker stands (mapping set): up to 4 footprints per stand, features from THIS feats()
     init(); import geopandas as gpd

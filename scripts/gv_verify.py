@@ -39,7 +39,7 @@ T['ds'] = T.md.dt.strftime('%Y-%m-%d'); T = T.merge(_cc[key + ['ds', 'cond', 'cs
 _tv = T[key + ['ds']].drop_duplicates(); _bare = _f[_f.nl == 0].merge(_tv[key].drop_duplicates(), on=key).merge(_tv.assign(_i=1), on=key + ['ds'], how='left')
 _bare = _bare[_bare._i.isna()][key + ['ds']]
 EX = pd.concat([_tv, _bare]).merge(_f[key + ['ds', 'fs', 'fm', 'org']], on=key + ['ds'], how='inner'); EX = EX[EX.fs >= 0.1]
-EX['md'] = pd.to_datetime(EX.ds); EX = EX.sort_values(key + ['md']).reset_index(drop=True); EX['vid'] = np.arange(len(EX)); EX['year'] = EX.md.dt.year + EX.md.dt.dayofyear / 366
+EX['md'] = pd.to_datetime(EX.ds); EX = EX.sort_values(key + ['md']).reset_index(drop=True); EX['vid'] = np.arange(len(EX)); EX['year'] = EX.md.dt.year + (EX.md.dt.dayofyear - 0.5) / np.where(EX.md.dt.is_leap_year, 366.0, 365.0)
 check('T1a visit set = curated forested-condition visits ∪ bare FIADB visits, share >= 0.1 (rebuilt from FIADB)', len(EX) == len(V),
       f'independent {len(EX)} (bare {len(_bare)}) table {len(V)}; non-forest-condition tree records {nT - len(T)}')
 Vs = V.sort_values('vid')
@@ -285,7 +285,7 @@ check('T6c unit conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', abs(1 / 0.229568
 LS = pd.read_parquet(f'{D}/localisation.parquet'); jl = LS.join(P.set_index('pid')[key], rsuffix='_t')
 check('T7a localisation rows carry the same FIA plot identity as plots.parquet', all((jl[k] == jl[k + '_t']).all() for k in key) and len(LS) == C.pid.nunique(), f'{len(LS)} plots')
 if 'n_clusters' in LS.columns:     # g02g localisation: n_hi = footprints consistent with the plot's whole FIA history
-    CHh = pd.read_parquet(f'{D}/cand_hist.parquet'); kh = C.merge(CHh, on='cid').query('cons').groupby('pid').incl_w.sum().reindex(LS.index).fillna(0)
+    CHh = pd.read_parquet(f'{D}/cand_hist.parquet'); kh = C.merge(CHh, on=['cid', 'pid']).query('cons').groupby('pid').incl_w.sum().reindex(LS.index).fillna(0)
     check('T7b localisation n_hi = consistent footprints (Σ incl_w over cand_hist.cons); mass_hi = 1 iff non-empty', np.allclose(kh, LS.n_hi) and ((LS.mass_hi == 1) == (LS.n_hi > 0)).all(),
           f'{len(LS)} plots, non-empty {int((LS.n_hi > 0).sum())}')
 else:
@@ -320,32 +320,51 @@ for v1 in rng8.choice(list(PC), 300, replace=False):
         if cl and yr - cl[-1][4] <= 2: a0 = cl[-1]; cl[-1] = (a0[0] | cs_, min(a0[1], yr + lo), max(a0[2], yr + hi), max(a0[3], lr), yr)
         else: cl.append((cs_, yr + lo, yr + hi, lr, yr))
     m = np.ones(len(g), bool)
-    for cs_, lo, hi, lr, _ in cl:
+    for cs_, lo, hi, lr, _ in cl:                      # sequential narrowing; a constraint that would leave no candidate is skipped (spec)
         if lr < 4: continue
         a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
-        if b0 >= a0: m &= Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0
+        if b0 >= a0:
+            nm_ = m & (Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0)
+            if nm_.any(): m = nm_
     nev8 += any(c[3] >= 4 for c in cl)
     if not hid2:
         a0, b0 = int(math.floor(y1)) + 1 - 2000, int(math.floor(y2)) - 1 - 2000
-        if b0 >= max(a0, 0): m &= ~(np.maximum(Xg[:, max(a0, 0):b0 + 1, ix['harvest']], Xg[:, max(a0, 0):b0 + 1, HH]) >= 0.5).any(1)
-    if not m.any(): m[:] = True
+        if b0 >= max(a0, 0):
+            nm_ = m & ~(np.maximum(Xg[:, max(a0, 0):b0 + 1, ix['harvest']], Xg[:, max(a0, 0):b0 + 1, HH]) >= 0.5).any(1)
+            if nm_.any(): m = nm_
     n8 += 1; bad8 += set(g.cid.values[m]) != set(PC[v1][0].tolist())
 check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputation from FIADB records + spec', bad8 == 0, f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
-os.environ['SEVERITY_ANCHOR'] = '1'; exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+# T8b (a) evaluation safety: with LOAD=1 the severity rule must be OFF (pair sets = the records-only sets of T8); (b) training (LOAD=0, SEVERITY 1,
+# default PAIR_ANCHOR=both): every stand-replacing pair (detectable FIA event, BA(v2) < 0.3 BA(v1)) whose consistent set CONTAINS a candidate with
+# stand-replacing evidence in the window uses only such candidates (non-vacuous: pairs without any are not counted)
+PC_rec = {k: set(v_[0].tolist()) for k, v_ in ns_['pair_cand'].items()}
+os.environ['LOAD'] = '1'; os.environ['SEVERITY_ANCHOR'] = '1'; exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+off_ok = all(set(ns_['pair_cand'][k][0].tolist()) == PC_rec[k] for k in list(PC_rec)[:3000])
+os.environ['LOAD'] = '0'; os.environ['PAIR_ANCHOR'] = 'both'; ns_['C'] = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on=['cid', 'pid'], how='left').assign(cons=lambda x: x.cons.fillna(False).astype(bool))
+ns_['C']['prior0'] = ns_['C'].prior; ns_['cand_hist'] = {pid: (g.prior0.values, g.cons.values) for pid, g in ns_['C'].groupby('pid')}
+exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
 PCs = ns_['pair_cand']; BAtk = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); okr = 0; nrep = 0
 for v1, v2 in list(ns_['vpair'].items()):
     if v1 not in PCs or BAtk.get(v1, 0) <= 1.0 or BAtk.get(v2, 0) / BAtk.get(v1, 1) >= 0.3: continue
-    cid_ = PCs[v1][0]; pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+    pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
     cl_ = [c for c in G2.clusters([(k, y) for k, y in ns_['ev_of'].get(pid, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
     if not cl_: continue
-    Xp = np.asarray(CF[cid_], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(cid_), NY, NC + 2); w_ = np.zeros(len(cid_), bool)
+    allc = C[C.pid == pid].cid.values; Xp = np.asarray(CF[allc], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(allc), NY, NC + 2); w_ = np.zeros(len(allc), bool)
     for c in cl_:
         lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
         if hi > lo: w_ |= (np.maximum(Xp[:, lo:hi, ix['harvest']], Xp[:, lo:hi, HH]) >= 0.5).any(1)
-    nrep += 1; okr += bool(w_.all()) or not w_.any()       # all selected candidates show strong evidence (or none could: fallback to the record rule)
+    m_ev = np.ones(len(allc), bool)                     # event-consistent set (sequential narrowing with skip, independent code)
+    for c in cl_:
+        lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
+        if hi > lo:
+            nm_ = m_ev & (Xp[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
+            if nm_.any(): m_ev = nm_
+    sel = np.isin(allc, PCs[v1][0]); strong = set(allc[w_ & m_ev])
+    if not strong: continue
+    nrep += 1; okr += set(allc[sel]) <= strong       # selected ⊆ event-consistent candidates with stand-replacing evidence
     if nrep >= 300: break
-check('T8b severity anchoring (training): pairs with FIA-recorded events and BA(v2) < 0.3 BA(v1) use only candidates with stand-replacing evidence in the window',
-      okr == nrep and nrep > 0, f'{nrep} stand-replacing pairs checked, violations {nrep - okr}')
+check('T8b severity anchoring: OFF under LOAD=1 (evaluation sets = records-only sets); ON in training (PAIR=both): stand-replacing pairs use only candidates with stand-replacing evidence',
+      off_ok and okr == nrep and nrep > 0, f'evaluation sets unchanged: {off_ok}; {nrep} stand-replacing pairs with strong candidates checked, violations {nrep - okr}')
 # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
 if os.path.exists(f'{D}/cand_prior.parquet'):
     def bcls(m, iw, inn):      # background per distance class (inner 800 m disk / ring), clipped as specified
@@ -388,4 +407,44 @@ if os.path.exists(f'{D}/cand_hist.parquet'):
         bad10 += int((CH.loc[g.cid.values].cons.values != m).sum() > 0); ne10 += int(not m.any())
     check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (all detectable clusters matched, no stand-replacing evidence in undisturbed periods)',
           bad10 == 0, f'{Cs.pid.nunique()} plots, mismatching plots {bad10}, empty sets {ne10}')
+# ======================= T11 Forest Explorer export (g07): GEN_* = stand map x unit conversions
+FEJ = os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson')
+if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
+    SV = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id'); fe = json.load(open(FEJ))['features']; e11 = []; n11 = 0
+    for f in fe:
+        p = f['properties']
+        if 'GEN_BA' not in p: continue
+        r = SV.loc[int(p['stand_id'])]; n11 += 1
+        e11.append(max(abs(p['GEN_BA'] - r.ba / 0.229568), abs(p['GEN_TPA'] - r.tph / 2.47105), abs(p['GEN_QMD'] - r.qmd / 2.54) * 10, abs(p['GEN_BA_SD'] - r.ba_sd / 0.229568)))
+        if p['GEN_DOM'] != r.dom_key: e11.append(99)
+    check('T11 Forest Explorer stand layer: GEN_BA / TPA / QMD / BA_SD / DOM = stand map (g05) x conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', n11 > 0 and max(e11) < 0.11,
+          f'{n11} stands, max abs diff {max(e11) if e11 else float("nan"):.3f} (rounding 0.05 / 0.005)')
+# ======================= T12 summary-reconstruction targets (g03b OBS_*) and the loss at a perfect prediction
+vv12 = torch.tensor(samp.vid.values[:300]); o12 = ns_['obs_summ'](vv12)
+okt = all(np.allclose(ns_[k][vv12].numpy(), o12[i].numpy(), rtol=1e-5, atol=1e-6) for i, k in enumerate(['OBS_T', 'OBS_B', 'OBS_Q']))
+lp_perf = torch.where(ns_['slot_p'][vv12] > 0, torch.tensor(60.0), torch.tensor(-60.0)) + torch.log(ns_['POSW'])
+se12 = ns_['summ_err'](lp_perf, ns_['slot_v'][vv12], vv12)
+check('T12 summary-loss targets = obs_summ (TPH, BA, QMD; BA independently = FIA formula by T4a) and the loss vanishes at a perfect prediction (incl. the Bray term)',
+      okt and float(se12.max()) < 1e-6, f'max loss at perfect prediction {float(se12.max()):.2e}')
+# ======================= T13 pixel-exact georeferencing of the targeted AlphaEarth windows (g02c): their 3x3 means must match the 2022 mosaic best at offset 0
+import glob as _gl
+LSg = pd.read_parquet(f'{D}/localisation.parquet'); RPw = int(1600 // 30) + 2; acc13 = {}; nv13 = 0
+for fnw in sorted(_gl.glob(f'{D}/visit_aef/*_2021.npy') + _gl.glob(f'{D}/visit_aef/*_2023.npy'))[:60]:
+    st_, u_, c_, p_, yr_ = map(int, os.path.basename(fnw)[:-4].split('_')); pp = P[(P.st == st_) & (P.u == u_) & (P.c == c_) & (P.p == p_)]
+    if not len(pp): continue
+    pid = int(pp.pid.iloc[0]); g = C[C.pid == pid].sample(min(40, (C.pid == pid).sum()), random_state=0); Wn = dq(np.load(fnw)); r0, c0 = land.index(pp.x.iloc[0], pp.y.iloc[0])
+    M22 = np.stack([np.nan_to_num(np.nanmean(dq(a22.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1)) for r, c in zip(g.row, g.col)])
+    M22 /= np.linalg.norm(M22, axis=1, keepdims=True) + 1e-9; nv13 += 1
+    for dr in range(-2, 3):
+        for dc in range(-2, 3):
+            rr = g.row.values - (r0 - RPw) + dr; cc = g.col.values - (c0 - RPw) + dc; ok_ = (rr >= 1) & (rr < Wn.shape[1] - 1) & (cc >= 1) & (cc < Wn.shape[2] - 1)
+            Wv = np.stack([np.nan_to_num(np.nanmean(Wn[:, r - 1:r + 2, c - 1:c + 2].reshape(64, -1), 1)) for r, c in zip(rr[ok_], cc[ok_])]); Wv /= np.linalg.norm(Wv, axis=1, keepdims=True) + 1e-9
+            acc13.setdefault((dr, dc), []).append(float(np.median((Wv * M22[ok_]).sum(1))))
+med13 = {k: np.median(v) for k, v in acc13.items()}; best13 = max(med13, key=med13.get)
+check('T13 targeted AlphaEarth windows are pixel-exact: agreement with the 2022 mosaic peaks at offset (0, 0) among ±2 px shifts', best13 == (0, 0),
+      f'{nv13} windows; median cosine at (0,0) {med13[(0, 0)]:.4f}, best {best13} {med13[best13]:.4f}, at (+1,0) {med13[(1, 0)]:.4f}, (0,+1) {med13[(0, 1)]:.4f}')
+# ======================= T14 no leakage: the joint AlphaEarth location posterior (g08) exists only for TRAINING plots (spatial blocks + buffer of g03b)
+if os.path.exists(f'{D}/cand_loc_aef.parquet'):
+    LA = pd.read_parquet(f'{D}/cand_loc_aef.parquet'); trp = set(ns_['vpid'][ns_['tr_v']]); bad14 = set(LA.pid) - trp
+    check('T14 same-year AlphaEarth location posterior only for training plots (no held-out / buffer plot)', not bad14, f'{LA.pid.nunique()} plots, outside training {len(bad14)}')
 nf = sum(1 for _, ok in RES if not ok); print(f'\n{len(RES) - nf} / {len(RES)} checks PASS'); sys.exit(1 if nf else 0)

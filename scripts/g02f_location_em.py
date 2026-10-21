@@ -11,7 +11,7 @@ Model (per plot; footprints c of the 1.6 km disk, each kept candidate standing f
   outside  a share s of plots is not in its disk (swapped plots, conversions): records explain nothing there, LR = 1
   P(c | records) = (1 - r) δ_in + r · uniform-over-disk, r = posterior probability of 'outside'; δ_in ∝ base_c LR_c.
 q_g, f, pi, s fitted by EM over all plots (location latent). Control: a permutation placebo (records of another plot of the same state).
-Writes data/proto/gafl/{cand_prior.parquet (cid, prior_loc, hi_loc), location_em.json, localisation.parquet (rewritten: credible-set size)}.
+Writes data/proto/gafl/{cand_prior.parquet (cid, prior_loc, hi_loc), location_em.json, localisation_em.parquet (credible-set size; g02g's localisation.parquet is left alone)}.
 hi_loc = the candidates of the 80 % credible set; localisation.n_hi = its footprint count, mass_hi = posterior mass on it."""
 import os, sys, json, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -102,7 +102,7 @@ for (pid, cid, iw, inn, per), (post, rin, evl, ngl, _, _) in zip(PL, res):
     loc.append((pid, float(iw[hi].sum()), float(p[hi].sum()), float(iw.sum()), rin, neff, len(evl), len(ngl)))
 pd.concat(out, ignore_index=True).to_parquet(f'{D}/cand_prior.parquet')
 L = pd.DataFrame(loc, columns=['pid', 'n_hi', 'mass_hi', 'n', 'p_in_disk', 'n_eff', 'n_clusters', 'n_negs']).set_index('pid').join(P[['st', 'u', 'c', 'p']])
-L.to_parquet(f'{D}/localisation.parquet')
+L.to_parquet(f'{D}/localisation_em.parquet')          # NOT localisation.parquet (g02g's, read by g03b / g04 / g08)
 json.dump(dict(theta=th, loglik_vs_noinfo=ll, loglik_permutation_placebo_refit=ll_pl, loglik_permutation_placebo_real_params=ll_perm_fixed, n_plots=len(PL), credible=0.8, inner_radius_m=R_IN), open(f'{D}/location_em.json', 'w'), indent=1)
 print(f'real {ll:.1f} vs permutation placebo refit {ll_pl:.1f} / with real parameters {ll_perm_fixed:.1f}; theta {th}')
 for nm, s_ in (('all', L), ('>=1 cluster', L[L.n_clusters > 0]), ('>=2', L[L.n_clusters > 1])):

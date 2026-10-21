@@ -6,7 +6,7 @@ g03b (LOC=history, default) draws every visit of the plot — MIL AlphaEarth mat
 set; if it is empty (FIA / LANDFIRE disagree: missed detections, timing, swapped plots) the plot keeps its prior.
 NOT a localisation claim: g02f's held-out test (2026-10-21) found ~0.003 nats / plot of footprint-level location information beyond a permutation
 placebo — the set constrains which disturbance HISTORIES the plot can have, which is what the dynamics need.
-Writes data/proto/gafl/cand_hist.parquet (cid, cons) and localisation.parquet (n_hi = consistent footprints, mass_hi = their prior mass)."""
+Writes data/proto/gafl/cand_hist.parquet (cid, pid, cons) and localisation.parquet (n_hi = consistent footprints, mass_hi = their prior mass)."""
 import os, sys, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     for pid, g in C.sort_values('cid').groupby('pid'):
         per = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); iw = g.incl_w.values
         m, ncl = consistent(per, ev.get(pid, []), ng.get(pid, []))
-        out.append(pd.DataFrame({'cid': g.cid.values, 'cons': m}))
+        out.append(pd.DataFrame({'cid': g.cid.values, 'pid': pid, 'cons': m}))           # pid with cid: consumers check the file belongs to THIS table
         loc.append((pid, float(iw[m].sum()), float(g.prior.values[m].sum()), float(iw.sum()), ncl))
     pd.concat(out, ignore_index=True).to_parquet(f'{D}/cand_hist.parquet')
     L = pd.DataFrame(loc, columns=['pid', 'n_hi', 'mass_hi', 'n', 'n_clusters']).set_index('pid').join(P[['st', 'u', 'c', 'p']])

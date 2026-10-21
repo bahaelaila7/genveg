@@ -15,8 +15,10 @@ FV = G2.fiadb_visits(fc); FE = G2.fiadb_events(fc)
 evs, negs, blocked = G2.fia_records(FE, FV, P, key)
 pd.DataFrame([(p, k, y) for p, s in evs.items() for k, y in sorted(s)], columns=['pid', 'kind', 'year']).to_parquet(f'{D}/fia_events.parquet')
 pd.DataFrame([(p, a, b) for p, l in negs.items() for a, b in l], columns=['pid', 'y_lo', 'y_hi']).to_parquet(f'{D}/fia_negs.parquet')
-yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)          # visits.year = year + day-of-year / 366
-md = pd.to_datetime(yi.astype(str) + '-01-01') + pd.to_timedelta(doy - 1, unit='D')
+if 'md' in V.columns: md = pd.to_datetime(V.md)                                            # the visit date (g02b keeps it since 2026-10-22)
+else:                                                                                       # older tables: invert year = year + day-of-year / 366
+    yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)
+    md = pd.to_datetime(yi.astype(str) + '-01-01') + pd.to_timedelta(doy - 1, unit='D')
 V['fia_blocked'] = [((int(a), int(b), int(c), int(d)), m) in blocked for a, b, c, d, m in zip(V.st, V.u, V.c, V.p, md)]
 V.to_parquet(f'{D}/visits.parquet')
 print(f'plots with typed events {len(evs)} ({sum(map(len, evs.values()))} events); negative periods {sum(map(len, negs.values()))}; '

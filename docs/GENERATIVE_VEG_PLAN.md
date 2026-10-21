@@ -516,3 +516,41 @@ Next:
 - build a JOINT per-plot location posterior from all visits' same-year matches × the history-consistent set (training plots only — localising
   a test plot with its own vegetation would leak);
 - use it for every visit of those plots in training.
+
+**CORRECTION (2026-10-22, after an independent review; user: "double check the correctness of everything").**
+The g08 claim above ("same-year AlphaEarth carries location information … footprint level") is RETRACTED.
+- The 'gain' compared the real visit latent with another plot's over ALL of the plot's candidates. That mixture is invariant to which candidate is
+  true, so it measured only how well the plot's vegetation fits its landscape's AlphaEarth. A simulation with zero location signal gives +19.6
+  nats.
+- The 'overlap vs permuted' baseline destroyed the shared prior, the 'generic' candidates and the year-to-year stability, all of which inflate
+  the real overlap without any location information (simulation: real > permuted 99.9 %).
+- Corrected tests (g08 now; bootstrap by plot; footprint statistic = cosine similarity of the two visits' posteriors, insensitive to sharpness;
+  placebo = ANOTHER plot's two latents on the SAME candidates / AlphaEarth / years / prior), 292 held-out visits:
+  - plot ↔ landscape fit +1.85 nats / visit (95 % CI 1.45–2.26): landscape information;
+  - FOOTPRINT selection +0.014 (95 % CI −0.042 to +0.073): no evidence of footprint-level location.
+- LOC=aef is dropped (code kept as a tool: cross-fitted, common candidates, tempered by the number of visits). The window georeferencing itself
+  is fine: gv_verify T13 shows the agreement with the 2022 mosaic peaks at offset (0, 0) among ±2 px shifts.
+
+Other review findings, fixed:
+- **Visit year:** year = y + doy/366 put 23 leap-year Dec-31 visits in the next calendar year (every floor(year) consumer was off). g02b now
+  keeps the visit date (md) and uses decimal_year = y + (doy − 0.5) / days-in-year. `scripts/g02h_fix_visit_dates.py` migrated the current
+  table (exact inverse); g02e reran.
+- **Pair construction (g03b):**
+  - A constraint that would empty the candidate set is now skipped (`_narrow`). The earlier ones are kept; before, a later empty result
+    discarded everything.
+  - A measured major loss with no recorded code no longer also gets the 'undisturbed period' constraint (they conflicted).
+  - Pairs weight candidates by the same location prior as MIL; the g02b prior is used only outside it.
+- **Stale files:** cand_hist / cand_loc_aef carry pid and are joined on (cid, pid) with full coverage required. LOC=history without
+  cand_hist.parquet fails loudly. g02f writes localisation_em.parquet (no longer overwriting g02g's localisation.parquet).
+- **gv_verify:**
+  - T8 follows the sequential-with-skip rule.
+  - T8b now checks: severity anchoring is OFF under LOAD=1 (evaluation sets = records-only sets); it is ON in training on the default
+    PAIR=both path; it is non-vacuous (only pairs whose event-consistent set holds strong-evidence candidates).
+  - New checks: T11 (Forest Explorer export = stand map × units), T12 (summary-loss targets = obs_summ, zero loss at a perfect prediction),
+    T13 (pixel-exact windows), T14 (the AlphaEarth posterior only for training plots).
+
+Interpretation note (review): held-out skill is 'given the plot's FIA records'. Candidate sets of held-out plots are restricted by their own
+TRT / DSTRB records, and kNN sees the same sets, so comparisons are fair, but the absolute numbers are not satellite-only.
+
+Remaining design concern: pair losses average over K sampled histories, which smears the jumps. A MIL soft-min over histories by fit to v2
+(training only) is a possible next step.

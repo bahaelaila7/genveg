@@ -37,17 +37,29 @@ vyear = torch.tensor(V.year.values, dtype=torch.float32); vpid = V.pid.values
 def bce(lp, tp, reduction='mean'): return Fn.binary_cross_entropy_with_logits(lp, tp, pos_weight=POSW, reduction=reduction)
 # ---- candidates per plot (index arrays) and spatial blocks
 LOC = os.environ.get('LOC', 'history')
+def _attach(C, fn, cols):
+    """merge a per-candidate file on (cid, pid) and require it to cover THIS table (cid / pid are row numbers that shift between rebuilds)"""
+    X = pd.read_parquet(fn); on = ['cid', 'pid'] if 'pid' in X.columns else ['cid']
+    if 'pid' not in X.columns: print(f'WARNING {os.path.basename(fn)} has no pid column: cannot check it belongs to this table (rerun its builder)', flush=True)
+    M_ = C.merge(X[on + cols], on=on, how='left', indicator=True)
+    return M_.drop(columns='_merge'), float((M_._merge == 'both').mean())
+if LOC in ('history', 'aef') and not os.path.exists(f'{D}/cand_hist.parquet'):
+    raise SystemExit(f'LOC={LOC} needs {D}/cand_hist.parquet (run scripts/g02g_history_consistency.py after g02b / g02e), or set LOC=prior')
 if LOC == 'history' and os.path.exists(f'{D}/cand_hist.parquet'):   # g02g: every visit of a plot draws from the candidates consistent with its WHOLE FIA history
-    C = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on='cid', how='left'); C['cons'] = C.cons.fillna(False).astype(bool)
+    C, cov_ = _attach(C, f'{D}/cand_hist.parquet', ['cons'])
+    if cov_ < 1.0: raise SystemExit(f'cand_hist.parquet covers {cov_:.3f} of the candidates: stale (rerun g02g)')
+    C['cons'] = C.cons.fillna(False).astype(bool)
     has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons                  # plots with an empty consistent set keep their prior
     C['prior0'] = C.prior; C['prior'] = np.where(keep_, C.prior, 0.0); C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); C['hi'] = np.where(has_, C.cons, C.hi)
     print(f"location: FIA-history-consistent candidates (g02g) for {int(has_.groupby(C.pid).first().sum())} of {C.pid.nunique()} plots", flush=True)
 if LOC == 'aef' and os.path.exists(f'{D}/cand_hist.parquet'):      # history-consistent set (as LOC=history) × the joint same-year AlphaEarth posterior (g08, training plots)
-    C = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on='cid', how='left'); C['cons'] = C.cons.fillna(False).astype(bool)
+    C, cov_ = _attach(C, f'{D}/cand_hist.parquet', ['cons'])
+    if cov_ < 1.0: raise SystemExit(f'cand_hist.parquet covers {cov_:.3f} of the candidates: stale (rerun g02g)')
+    C['cons'] = C.cons.fillna(False).astype(bool)
     has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons
     C['prior0'] = C.prior; C['prior'] = np.where(keep_, C.prior, 0.0); C['hi'] = np.where(has_, C.cons, C.hi)
     if os.path.exists(f'{D}/cand_loc_aef.parquet'):
-        LA = pd.read_parquet(f'{D}/cand_loc_aef.parquet')[['cid', 'prior_aef']]; C = C.merge(LA, on='cid', how='left'); ha = C.groupby('pid').prior_aef.transform(lambda x: x.notna().any())
+        C, _ = _attach(C, f'{D}/cand_loc_aef.parquet', ['prior_aef']); ha = C.groupby('pid').prior_aef.transform(lambda x: x.notna().any())
         C['prior'] = np.where(ha, C.prior_aef.fillna(0.0), C.prior); print(f'location: + same-year AlphaEarth posterior for {int(ha.groupby(C.pid).first().sum())} training plots', flush=True)
     C['prior'] = C.prior / C.groupby('pid').prior.transform('sum')
 elif LOC == 'plot' and os.path.exists(f'{D}/cand_prior.parquet'):   # g02f EM posterior (not used by default: held-out ~0.003 nats / plot of location information)
@@ -165,40 +177,44 @@ pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained':
 SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
 PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' | 'period'
+def _narrow(m, new, tag):
+    """apply a constraint only if candidates remain (a constraint that would empty the set is skipped and counted, the earlier ones are kept)"""
+    if (m & new).any(): return m & new
+    nanch[tag + '_skipped'] = nanch.get(tag + '_skipped', 0) + 1; return m
 for v1, v2 in vpair.items():
     p_ = vpid[v1]
     if p_ not in cand_of: continue
     if PAIR == 'plot': pair_cand[v1] = cand_of[p_]; continue
     cid, pr = cand_of[p_]; y1, y2 = float(vyr[v1]), float(vyr[v2]); per = DIST[cid].numpy(); m = np.ones(len(cid), bool)
-    cl_ = [c for c in G2.clusters([(k, y) for k, y in ev_of.get(p_, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
-    for c in cl_:
+    cl_ = [c for c in G2.clusters([(k, y) for k, y in ev_of.get(p_, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]; sk0 = nanch.get('event_skipped', 0)
+    for c in cl_:                                       # each detectable FIA event cluster of the period: compatible evidence in its window
         lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
-        if hi > lo: m &= (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
-    nanch['with_event'] += bool(cl_); nanch['event_matched'] += bool(cl_) and bool(m.any())
-    if cl_ and SEVER:      # training only: FIA's own outcome says how severe the period's event was -> what the true footprint must show
-        r_ = BAv.get(v2, 0.0) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
+        if hi > lo: m = _narrow(m, (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1), 'event')
+    nanch['with_event'] += bool(cl_); nanch['event_matched'] += bool(cl_) and nanch.get('event_skipped', 0) == sk0
+    r_ = BAv.get(v2, 0.0) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None; loss_applied = False
+    if cl_ and SEVER and r_ is not None:   # training only: FIA's measured outcome says how severe the recorded event was
         srw = np.zeros(len(cid), bool)
         for c in cl_:
             lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
             if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
-        if r_ is not None and r_ < 0.3 and (m & srw).any(): m = m & srw; nanch['replacing'] = nanch.get('replacing', 0) + 1     # stand-replacing: strong evidence
-        elif r_ is not None and r_ > 0.6 and (m & ~srw).any(): m = m & ~srw; nanch['partial'] = nanch.get('partial', 0) + 1     # partial: no full-footprint loss
-    if SEVER2 and not cl_:   # training only, every pair: FIA's MEASURED outcome between the visits (also where FIA recorded no / no detectable event)
-        r_ = BAv.get(v2, 0.0) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
+        if r_ < 0.3: m = _narrow(m, srw, 'replacing'); loss_applied = True; nanch['replacing'] = nanch.get('replacing', 0) + 1
+        elif r_ > 0.6: m = _narrow(m, ~srw, 'partial'); nanch['partial'] = nanch.get('partial', 0) + 1
+    if SEVER2 and not cl_ and r_ is not None:   # training only, pairs without a detectable record: the measured outcome alone
         a_, b_ = max(int(math.floor(y1)) - YEARS[0], 0), min(int(math.floor(y2)) - YEARS[0], NY - 1) + 1
-        if r_ is not None and b_ > a_:
+        if b_ > a_:
             srw = (np.maximum(per[:, a_:b_, G2.IX['harvest']], per[:, a_:b_, G2.H_]) >= 0.5).any(1)
-            if r_ < 0.3 and (m & srw).any(): m = m & srw; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
-            elif r_ > 0.6 and (m & ~srw).any(): m = m & ~srw; nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
-    if not vblk[v2]:
+            if r_ < 0.3: m = _narrow(m, srw, 'outcome_loss'); loss_applied = True; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
+            elif r_ > 0.6: m = _narrow(m, ~srw, 'outcome_kept'); nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
+    if not vblk[v2] and not loss_applied:   # FIA-undisturbed period (a measured major loss overrides the 'no code' reading)
         a, b = int(math.floor(y1)) + 1 - YEARS[0], int(math.floor(y2)) - 1 - YEARS[0]
-        if b >= max(a, 0): m &= ~(np.maximum(per[:, max(a, 0):b + 1, G2.IX['harvest']], per[:, max(a, 0):b + 1, G2.H_]) >= 0.5).any(1); nanch['neg_constrained'] += 1
+        if b >= max(a, 0): m = _narrow(m, ~(np.maximum(per[:, max(a, 0):b + 1, G2.IX['harvest']], per[:, max(a, 0):b + 1, G2.H_]) >= 0.5).any(1), 'neg'); nanch['neg_constrained'] += 1
+    pr0 = pr
     if PAIR == 'both' and p_ in cand_hist:
-        pr0, cons = cand_hist[p_]; pr = pr0
+        pr0, cons = cand_hist[p_]
         if (m & cons).any(): m = m & cons; nanch['history_and_period'] = nanch.get('history_and_period', 0) + 1
         else: nanch['period_only'] = nanch.get('period_only', 0) + 1
-    if not m.any(): m = np.ones(len(cid), bool); nanch['fallback_all'] += 1
-    pair_cand[v1] = (cid[m], pr[m] / pr[m].sum() if pr[m].sum() > 0 else np.full(int(m.sum()), 1.0 / m.sum()))
+    w_ = pr[m] if pr[m].sum() > 0 else pr0[m]            # the plot's location prior (as for MIL); outside it (period-only) the g02b prior
+    pair_cand[v1] = (cid[m], w_ / w_.sum() if w_.sum() > 0 else np.full(int(m.sum()), 1.0 / m.sum()))
 print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {nanch}', flush=True)
 if os.environ.get('LOAD') == '1':
     sd = torch.load(f"{D}/{os.environ.get('MODEL', 'model.pt')}"); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])

@@ -4,9 +4,11 @@ Visits of the g02g-localised plots (<= 50 history-consistent footprints) measure
 consistent candidate (3x3 mean, de-quantised) — 2022 from the mosaic (candidate features), other years from the targeted windows of g02c.
 Model: frozen encoder z(visit) (g03b model.pt) → small head → AlphaEarth(visit year); MIL over the plot's consistent candidates,
 loss = −T logsumexp_c(−d_c / T + log p_c), trained on TRAINING plots only (g03b spatial blocks + buffer).
-Test on held-out plots: per visit, log-likelihood gain  log Σ_c p_c exp(−d_c(z_real)/T) − log Σ_c p_c exp(−d_c(z_placebo)/T), z_placebo = the
-latent of a random other held-out visit of the same year (permutation placebo). Mean gain > 0 (with a bootstrap CI) = location information.
-Also: posterior concentration (effective footprints) real vs placebo. Writes data/proto/gafl/sameyear_aef_test.json."""
+Held-out tests (corrected 2026-10-22 after review: the earlier 'gain' and 'overlap vs permuted' did NOT test location):
+  (1) plot <-> landscape fit: log Σ_c p_c exp(−d_c(z_real)/T) − the same with another plot's latent. Invariant to which candidate is true -> landscape
+      information only (bootstrap by plot).
+  (2) FOOTPRINT test: overlap (cosine similarity, insensitive to sharpness) of the candidate posteriors of two visits of a plot with its OWN latents minus the overlap with ANOTHER plot's two
+      latents on the same candidates / AlphaEarth / years / prior (bootstrap by plot). > 0 = footprint selection specific to the plot's vegetation. Writes data/proto/gafl/sameyear_aef_test.json."""
 import os, sys, json, math, numpy as np, pandas as pd, torch, torch.nn as nn
 os.environ.setdefault('DATA', 'gafl'); os.environ['LOAD'] = '1'; os.environ['EPOCHS'] = '0'
 _argv = sys.argv; sys.argv = ['g03b']
@@ -30,75 +32,81 @@ for v in range(nv):
     ok = np.abs(A).sum(1) > 0
     if ok.sum() < 2: continue
     pr = g.prior.values[ok]; rows.append((v, pid, g.cid.values[ok], pr / pr.sum(), torch.tensor(A[ok], dtype=torch.float32), y))
-# georeferencing check of the targeted windows: AlphaEarth is stable year to year in undisturbed forest -> window (2021 / 2023) vs the 2022 mosaic at the
-# same candidates should agree far better than at candidates shifted by 3 footprints
-cs_ok, cs_sh = [], []
-for r in rows:
-    if r[5] not in (2021, 2023): continue
-    a22 = AEF[r[2]][:, :64].numpy(); A = r[4].numpy(); n_ = len(A)
-    if n_ < 8: continue
-    nrm = lambda X: X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-9)
-    cs_ok.append(float(np.median((nrm(A) * nrm(a22)).sum(1)))); cs_sh.append(float(np.median((nrm(A) * nrm(np.roll(a22, 3, axis=0))).sum(1))))
-print(f'window georeferencing: median cosine to the 2022 mosaic, same candidates {np.median(cs_ok):.3f} vs shuffled candidates {np.median(cs_sh):.3f} ({len(cs_ok)} visits)', flush=True)
+# georeferencing of the windows is checked at pixel precision by gv_verify T13 (the agreement with the 2022 mosaic peaks at offset 0 among ±2 px)
 tr_p = set(vpid[tr_v]); te_p = test_pid
 TR = [r for r in rows if r[1] in tr_p]; TE = [r for r in rows if r[1] in te_p]
 print(f'visits with same-year AlphaEarth: train {len(TR)}, held-out {len(TE)}', flush=True)
 with torch.no_grad(): ZV = {r[0]: enc(torch.tensor([r[0]]), vyear[[r[0]]])[0] for r in rows}
-head = nn.Sequential(nn.Linear(D_Z + 1, 64), nn.GELU(), nn.Linear(64, 64)); opt = torch.optim.AdamW(head.parameters(), lr=1e-3, weight_decay=1e-4)
-def hz(z, y): return head(torch.cat([z, torch.tensor([(y - 2020) / 4.0])]))
-def lse(z, r): d = ((hz(z, r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1); return torch.logsumexp(-d / TEMP + torch.log(torch.tensor(r[3], dtype=torch.float32)), 0)
-for ep in range(int(os.environ.get('EP8', 20))):
-    tot = 0.0
-    for i in np.random.permutation(len(TR)):
-        r = TR[i]; l = -lse(ZV[r[0]], r) * TEMP; opt.zero_grad(); l.backward(); opt.step(); tot += float(l)
-    if ep % 5 == 4: print(f'epoch {ep + 1} loss {tot / max(len(TR), 1):.4f}', flush=True)
-gains, ne_r, ne_p = [], [], []
+def new_head(): return nn.Sequential(nn.Linear(D_Z + 1, 64), nn.GELU(), nn.Linear(64, 64))
+def hz(head, z, y): return head(torch.cat([z, torch.tensor([(y - 2020) / 4.0])]))
+def dists(head, z, r): return ((hz(head, z, r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1)
+def lse(head, z, r): return torch.logsumexp(-dists(head, z, r) / TEMP + torch.log(torch.tensor(r[3], dtype=torch.float32)), 0)
+def train_head(R_):
+    head = new_head(); opt = torch.optim.AdamW(head.parameters(), lr=1e-3, weight_decay=1e-4)
+    for ep in range(int(os.environ.get('EP8', 20))):
+        for i in np.random.permutation(len(R_)):
+            r = R_[i]; l = -lse(head, ZV[r[0]], r) * TEMP; opt.zero_grad(); l.backward(); opt.step()
+    return head
+head = train_head(TR)
+def boot_by_plot(vals, pids, n=2000):         # visits of one plot are not independent: resample PLOTS
+    byp = {}
+    for v_, p_ in zip(vals, pids): byp.setdefault(p_, []).append(v_)
+    ks = list(byp); bs = []
+    for _ in range(n):
+        pick = np.random.choice(len(ks), len(ks)); bs.append(np.mean([x for k in pick for x in byp[ks[k]]]))
+    return [float(np.quantile(bs, .025)), float(np.quantile(bs, .975))]
+out = {'n_train_visits': len(TR), 'n_heldout_visits': len(TE)}
 with torch.no_grad():
+    # (1) PLOT <-> LANDSCAPE fit (NOT location): real latent vs another held-out plot's latent (same year) over all of this plot's candidates.
+    #     The mixture is invariant to which candidate is true, so this measures only how well the plot's vegetation fits its landscape's AlphaEarth.
     byy = {}
     for r in TE: byy.setdefault(r[5], []).append(r)
+    g1, p1 = [], []
     for r in TE:
         others = [o for o in byy[r[5]] if o[1] != r[1]]
         if not others: continue
-        zp = ZV[others[np.random.randint(len(others))][0]]
-        lr_, lp_ = lse(ZV[r[0]], r), lse(zp, r); gains.append(float(lr_ - lp_))
-        for z_, acc in ((ZV[r[0]], ne_r), (zp, ne_p)):
-            d = ((hz(z_, r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1); w = torch.softmax(-d / TEMP + torch.log(torch.tensor(r[3], dtype=torch.float32)), 0); acc.append(float(1 / (w ** 2).sum()))
-# FOOTPRINT-level test: two visits (different years) of the same held-out plot must put their posterior on the SAME footprints more than chance
-ov_r, ov_p = [], []
-with torch.no_grad():
+        zp = ZV[others[np.random.randint(len(others))][0]]; g1.append(float(lse(head, ZV[r[0]], r) - lse(head, zp, r))); p1.append(r[1])
+    out['landscape_fit_gain_nats_per_visit'] = float(np.mean(g1)) if g1 else None; out['landscape_fit_gain_ci95_by_plot'] = boot_by_plot(g1, p1) if g1 else None
+    # (2) FOOTPRINT test: two visits of a held-out plot A; overlap of their candidate posteriors with A's OWN latents vs with the two latents of another
+    #     held-out plot B (same candidates, same AlphaEarth, same years, same prior; B's latents stable across its visits too). Only footprint
+    #     selection specific to A's vegetation separates them.
     byp = {}
     for r in TE: byp.setdefault(r[1], []).append(r)
-    for pid, rs in byp.items():
-        if len(rs) < 2: continue
-        post = []
-        for r in rs:
-            d = ((hz(ZV[r[0]], r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1); w = torch.softmax(-d / TEMP + torch.log(torch.tensor(r[3], dtype=torch.float32)), 0).numpy()
-            post.append(dict(zip(r[2].tolist(), w)))
-        for i in range(len(post)):
-            for j in range(i + 1, len(post)):
-                com = sorted(set(post[i]) & set(post[j]))
-                if len(com) < 5: continue
-                a1 = np.array([post[i][c] for c in com]); a2 = np.array([post[j][c] for c in com]); a1, a2 = a1 / a1.sum(), a2 / a2.sum()
-                ov_r.append(float((a1 * a2).sum())); ov_p.append(float(np.mean([(a1 * np.random.permutation(a2)).sum() for _ in range(50)])))
-g_ = np.array(gains); bs = [np.mean(np.random.choice(g_, len(g_))) for _ in range(2000)] if len(g_) else [np.nan]
-out = dict(window_cosine_same=float(np.median(cs_ok)) if cs_ok else None, window_cosine_shuffled=float(np.median(cs_sh)) if cs_sh else None, n_train=len(TR), n_heldout=len(g_), mean_gain_nats=float(g_.mean()) if len(g_) else None, ci95=[float(np.quantile(bs, .025)), float(np.quantile(bs, .975))],
-           share_positive=float((g_ > 0).mean()) if len(g_) else None, eff_candidates_real=float(np.median(ne_r)) if ne_r else None, eff_candidates_placebo=float(np.median(ne_p)) if ne_p else None,
-           cross_visit_pairs=len(ov_r), cross_visit_overlap_real=float(np.mean(ov_r)) if ov_r else None, cross_visit_overlap_permuted=float(np.mean(ov_p)) if ov_p else None,
-           cross_visit_share_real_gt_perm=float(np.mean(np.array(ov_r) > np.array(ov_p))) if ov_r else None)
+    multi = [p for p, rs in byp.items() if len(rs) >= 2]; d2, pp2 = [], []
+    def post(z, r): return dict(zip(r[2].tolist(), torch.softmax(-dists(head, z, r) / TEMP + torch.log(torch.tensor(r[3], dtype=torch.float32)), 0).numpy()))
+    def overlap(pa, pb):
+        com = sorted(set(pa) & set(pb))
+        if len(com) < 5: return None
+        a1 = np.array([pa[c] for c in com]); a2 = np.array([pb[c] for c in com]); return float((a1 * a2).sum() / np.sqrt((a1 ** 2).sum() * (a2 ** 2).sum()))   # cosine: insensitive to sharpness
+    for pA in multi:
+        rs = byp[pA]; others = [q for q in multi if q != pA]
+        if not others: continue
+        for i in range(len(rs)):
+            for j in range(i + 1, len(rs)):
+                pB = others[np.random.randint(len(others))]; zB = [ZV[x[0]] for x in byp[pB][:2]]
+                o_r = overlap(post(ZV[rs[i][0]], rs[i]), post(ZV[rs[j][0]], rs[j])); o_p = overlap(post(zB[0], rs[i]), post(zB[1], rs[j]))
+                if o_r is None or o_p is None: continue
+                d2.append(o_r - o_p); pp2.append(pA)
+    out['footprint_pairs'] = len(d2); out['footprint_plots'] = len(set(pp2))
+    out['footprint_overlap_real_minus_placebo'] = float(np.mean(d2)) if d2 else None; out['footprint_ci95_by_plot'] = boot_by_plot(d2, pp2) if d2 else None
 print(json.dumps(out, indent=1)); json.dump(out, open(f'{D}/sameyear_aef_test.json', 'w'), indent=1)
-# ---- joint per-plot location posterior from ALL of the plot's same-year matches (TRAINING plots only: localising a held-out plot with its own
-# vegetation would leak into the evaluation): log w_c = log p_c + Σ_visits (−d_cv / T), candidates common to the visits; written for g03b LOC=aef
+# ---- joint per-plot location posterior (TRAINING plots only; CROSS-FITTED: the head that scores a plot never saw it), over the candidates COMMON to
+# all of the plot's visits, log w_c = log p_c + (1 / n_visits) Σ_v (−d_cv / T)   (tempered: AlphaEarth is autocorrelated across years)
 if os.environ.get('WRITE_LOC') == '1':
-    recs = []; ess = []
+    trp = sorted({r[1] for r in TR}); rg = np.random.default_rng(5); fold = dict(zip(trp, rg.integers(0, 2, len(trp))))
+    heads = {f: train_head([r for r in TR if fold[r[1]] != f]) for f in (0, 1)}; recs = []; ess = []
     with torch.no_grad():
         byp = {}
         for r in TR: byp.setdefault(r[1], []).append(r)
         for pid, rs in byp.items():
-            lw = {}
+            hd = heads[fold[pid]]; com = set(rs[0][2].tolist())
+            for r in rs[1:]: com &= set(r[2].tolist())
+            if len(com) < 2: continue
+            cs = np.array(sorted(com)); g = C[C.pid == pid].set_index('cid').loc[cs]; lw = np.log(np.maximum(g.prior.values / g.prior.values.sum(), 1e-300))
+            acc = np.zeros(len(cs))
             for r in rs:
-                d = ((hz(ZV[r[0]], r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1) / TEMP
-                for c, dd, pp in zip(r[2].tolist(), d.tolist(), r[3].tolist()): lw[c] = lw.get(c, math.log(max(pp, 1e-300))) - dd
-            cs = np.array(list(lw)); l_ = np.array([lw[c] for c in cs]); w = np.exp(l_ - l_.max()); w /= w.sum(); ess.append(1 / (w ** 2).sum())
+                ix = {c: k for k, c in enumerate(r[2].tolist())}; d = dists(hd, ZV[r[0]], r).numpy() / TEMP; acc -= np.array([d[ix[c]] for c in cs])
+            lw = lw + acc / len(rs); w = np.exp(lw - lw.max()); w /= w.sum(); ess.append(1 / (w ** 2).sum())
             recs.append(pd.DataFrame({'pid': pid, 'cid': cs, 'prior_aef': w}))
     L8 = pd.concat(recs, ignore_index=True); L8.to_parquet(f'{D}/cand_loc_aef.parquet')
-    print(f'joint AlphaEarth location posterior written for {L8.pid.nunique()} training plots; effective candidates median {np.median(ess):.1f}', flush=True)
+    print(f'joint AlphaEarth location posterior (cross-fitted, common candidates) for {L8.pid.nunique()} training plots; effective candidates median {np.median(ess):.1f}', flush=True)
