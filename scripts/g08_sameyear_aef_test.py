@@ -86,3 +86,19 @@ out = dict(window_cosine_same=float(np.median(cs_ok)) if cs_ok else None, window
            cross_visit_pairs=len(ov_r), cross_visit_overlap_real=float(np.mean(ov_r)) if ov_r else None, cross_visit_overlap_permuted=float(np.mean(ov_p)) if ov_p else None,
            cross_visit_share_real_gt_perm=float(np.mean(np.array(ov_r) > np.array(ov_p))) if ov_r else None)
 print(json.dumps(out, indent=1)); json.dump(out, open(f'{D}/sameyear_aef_test.json', 'w'), indent=1)
+# ---- joint per-plot location posterior from ALL of the plot's same-year matches (TRAINING plots only: localising a held-out plot with its own
+# vegetation would leak into the evaluation): log w_c = log p_c + Σ_visits (−d_cv / T), candidates common to the visits; written for g03b LOC=aef
+if os.environ.get('WRITE_LOC') == '1':
+    recs = []; ess = []
+    with torch.no_grad():
+        byp = {}
+        for r in TR: byp.setdefault(r[1], []).append(r)
+        for pid, rs in byp.items():
+            lw = {}
+            for r in rs:
+                d = ((hz(ZV[r[0]], r[5]).unsqueeze(0) - r[4]) ** 2).sum(-1) / TEMP
+                for c, dd, pp in zip(r[2].tolist(), d.tolist(), r[3].tolist()): lw[c] = lw.get(c, math.log(max(pp, 1e-300))) - dd
+            cs = np.array(list(lw)); l_ = np.array([lw[c] for c in cs]); w = np.exp(l_ - l_.max()); w /= w.sum(); ess.append(1 / (w ** 2).sum())
+            recs.append(pd.DataFrame({'pid': pid, 'cid': cs, 'prior_aef': w}))
+    L8 = pd.concat(recs, ignore_index=True); L8.to_parquet(f'{D}/cand_loc_aef.parquet')
+    print(f'joint AlphaEarth location posterior written for {L8.pid.nunique()} training plots; effective candidates median {np.median(ess):.1f}', flush=True)

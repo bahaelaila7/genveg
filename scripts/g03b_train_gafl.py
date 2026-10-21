@@ -42,6 +42,14 @@ if LOC == 'history' and os.path.exists(f'{D}/cand_hist.parquet'):   # g02g: ever
     has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons                  # plots with an empty consistent set keep their prior
     C['prior0'] = C.prior; C['prior'] = np.where(keep_, C.prior, 0.0); C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); C['hi'] = np.where(has_, C.cons, C.hi)
     print(f"location: FIA-history-consistent candidates (g02g) for {int(has_.groupby(C.pid).first().sum())} of {C.pid.nunique()} plots", flush=True)
+if LOC == 'aef' and os.path.exists(f'{D}/cand_hist.parquet'):      # history-consistent set (as LOC=history) × the joint same-year AlphaEarth posterior (g08, training plots)
+    C = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on='cid', how='left'); C['cons'] = C.cons.fillna(False).astype(bool)
+    has_ = C.groupby('pid').cons.transform('any'); keep_ = ~has_ | C.cons
+    C['prior0'] = C.prior; C['prior'] = np.where(keep_, C.prior, 0.0); C['hi'] = np.where(has_, C.cons, C.hi)
+    if os.path.exists(f'{D}/cand_loc_aef.parquet'):
+        LA = pd.read_parquet(f'{D}/cand_loc_aef.parquet')[['cid', 'prior_aef']]; C = C.merge(LA, on='cid', how='left'); ha = C.groupby('pid').prior_aef.transform(lambda x: x.notna().any())
+        C['prior'] = np.where(ha, C.prior_aef.fillna(0.0), C.prior); print(f'location: + same-year AlphaEarth posterior for {int(ha.groupby(C.pid).first().sum())} training plots', flush=True)
+    C['prior'] = C.prior / C.groupby('pid').prior.transform('sum')
 elif LOC == 'plot' and os.path.exists(f'{D}/cand_prior.parquet'):   # g02f EM posterior (not used by default: held-out ~0.003 nats / plot of location information)
     C = C.merge(pd.read_parquet(f'{D}/cand_prior.parquet'), on='cid', how='left'); C['prior'] = C.prior_loc.fillna(0.0); C['hi'] = C.hi_loc.fillna(False).astype(bool)
     C['prior'] = C.prior / C.groupby('pid').prior.transform('sum'); print('location: plot-level EM posterior (g02f)', flush=True)
