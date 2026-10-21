@@ -458,3 +458,21 @@ g06 now reports the reconstruction fidelity. Full 14-epoch runs (2 seeds) → g0
 - **B localisation:** still at chance.
 - **Forest Explorer:** the Baker layer now carries these v3 values via `scripts/g07_fe_attach.py`, a reproducible exporter that replaces the
   ad-hoc attach. GEN_SRC is the version tag; the backup is baker_fl.geojson.bak_v2. The server was restarted.
+
+**+ Composition term (W_COMP = 1; seeds 0 / 1; gv_verify 42 / 42 PASS) — current model (m_comp_s0 = model.pt):**
+- **Reconstruction:** slope 0.90–0.97, corr 0.96–0.98.
+- **Dynamics:** growth corr 0.68 / 0.65, change error 0.147 / 0.157 vs zero-change 0.172. Cut pairs corr 0.55 / 0.50, median predicted −0.21 /
+  −0.36 vs −0.43 observed, error 0.651 / 0.706 vs zero 0.586. Synthetic clear-cut ×0.08.
+- **Composition:** prior Bray 0.609 (was 0.706 without the term; kNN 0.579, null 0.743); dominant-species accuracy 0.414 vs kNN 0.366. Mapping
+  path Bray 0.599 vs kNN 0.574.
+- **Totals:** prior BA 0.465 ≈ null 0.464 (sum-only run 0.432). Mapping path BA 0.414 vs null 0.454 / kNN 0.421 (sum-only 0.395). These are
+  single g04 runs, so part of the gap may be run-to-run variance.
+- **Baker map, B1:** harvested 30.0 vs forest 64.2 ft²/ac; corr with TreeMap BA 0.37 (the highest so far); likelihood ESS 53 / 64. The
+  Forest Explorer layer carries this version (GEN_SRC tag).
+
+**Open problems:**
+1. Cut pairs: the change magnitude is right, but per-plot accuracy is no better than zero change (candidate histories are not the plot's own).
+2. Minor events (fire, insects, weather) produce spurious declines.
+3. The AlphaEarth likelihood B is at chance.
+4. The landscape prior's totals are ≈ null.
+5. There is no TreeMap-independent stand-level validation yet.
