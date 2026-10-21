@@ -554,3 +554,20 @@ TRT / DSTRB records, and kNN sees the same sets, so comparisons are fair, but th
 
 Remaining design concern: pair losses average over K sampled histories, which smears the jumps. A MIL soft-min over histories by fit to v2
 (training only) is a possible next step.
+
+**Final model after the correctness review (m_final_s0 = model.pt, 2026-10-22). gv_verify 45 / 45, gv_verify_upstream 5 / 5 PASS.**
+- **Reconstruction** (held-out): slope 0.91–0.98, corr 0.96–0.98.
+- **Dynamics**, held-out pairs (s0 / s1):
+  - undisturbed: err 0.148 / 0.155 vs zero 0.172 (corr 0.68 / 0.65);
+  - cut: err 0.639 / 0.703 vs zero 0.586 (corr 0.55 / 0.50; predicted −0.25 / −0.35 vs observed −0.43);
+  - other events: 0.345 / 0.365 vs 0.197 (location-limited);
+  - synthetic clear-cut ×0.07, fire ×0.85.
+- **Landscape prior:** TPH 0.645 / BA 0.447 / QMD 0.326 vs null 0.638 / 0.464 / 0.341 and kNN 0.703 / 0.454 / 0.357. Bray 0.582 (kNN 0.579,
+  null 0.743); dominant species 0.412 (kNN 0.367).
+- **Mapping path, visits 2022–25** (n = 1,073): TPH 0.607 / BA 0.424 / QMD 0.299 vs null 0.608 / 0.454 / 0.327 and kNN 0.674 / 0.421 / 0.354;
+  Bray 0.575 (kNN 0.574).
+- **B localisation:** chance (0.046 vs 0.043).
+- **Baker stand map** (Forest Explorer layer, GEN_SRC 'v3 2026-10-22'), harvested vs forest stands:
+  - B1: 39.8 vs 66.0 ft²/ac; corr with TreeMap BA 0.31;
+  - B0: 42.4 vs 67.7.
+- The numbers are within seed noise of the composition model (m_comp). The review fixes changed correctness, not skill.
