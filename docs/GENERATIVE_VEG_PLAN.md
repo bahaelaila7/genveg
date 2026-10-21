@@ -476,3 +476,23 @@ g06 now reports the reconstruction fidelity. Full 14-epoch runs (2 seeds) → g0
 3. The AlphaEarth likelihood B is at chance.
 4. The landscape prior's totals are ≈ null.
 5. There is no TreeMap-independent stand-level validation yet.
+
+**Outcome anchoring for every pair (SEVERITY_ANCHOR = 2, 2026-10-22): not adopted.** In training, the measured BA outcome constrains every pair:
+- kept above 0.6 → no stand-replacing evidence between the visits (17.5k pairs);
+- lost below 0.3 → stand-replacing evidence required (193 pairs).
+
+Held-out vs the composition model:
+
+| pairs | outcome-anchored | composition model |
+|---|---|---|
+| minor events (error) | 0.347 / 0.349 | 0.332 / 0.366 |
+| undisturbed (error) | 0.141 / 0.142 | 0.147 / 0.157 |
+
+Cut pairs are about the same and the synthetic clear-cut is ×0.02. Everything is within seed noise; the current model stays m_comp_s0.
+
+The remaining errors on disturbed pairs are LOCATION-limited. The records-only evaluation draws candidate histories, and for weather / insect
+events the compatible evidence includes Hansen loss, so the model (correctly) predicts a decline for those candidates. Stands mapped through
+their own co-located history do not have this problem.
+
+**Next:** same-year AlphaEarth at the candidates (the g02c windows, fetched for the g02g localised plots) as a direct visit ↔ footprint match
+without long flows — the last unused source of location information.

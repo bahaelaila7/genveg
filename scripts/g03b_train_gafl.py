@@ -154,7 +154,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_buil
 FEV = pd.read_parquet(f'{D}/fia_events.parquet'); ev_of = {p: list(zip(g.kind, g.year.astype(int))) for p, g in FEV.groupby('pid')}
 vblk = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool); vyr = V.year.values
 pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0, 'fallback_all': 0}
-SEVER = os.environ.get('SEVERITY_ANCHOR', '1') == '1' and os.environ.get('LOAD') != '1'   # outcome-informed candidate selection (training only, never in evaluation)
+SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
 PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' | 'period'
 for v1, v2 in vpair.items():
@@ -175,6 +175,13 @@ for v1, v2 in vpair.items():
             if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
         if r_ is not None and r_ < 0.3 and (m & srw).any(): m = m & srw; nanch['replacing'] = nanch.get('replacing', 0) + 1     # stand-replacing: strong evidence
         elif r_ is not None and r_ > 0.6 and (m & ~srw).any(): m = m & ~srw; nanch['partial'] = nanch.get('partial', 0) + 1     # partial: no full-footprint loss
+    if SEVER2 and not cl_:   # training only, every pair: FIA's MEASURED outcome between the visits (also where FIA recorded no / no detectable event)
+        r_ = BAv.get(v2, 0.0) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
+        a_, b_ = max(int(math.floor(y1)) - YEARS[0], 0), min(int(math.floor(y2)) - YEARS[0], NY - 1) + 1
+        if r_ is not None and b_ > a_:
+            srw = (np.maximum(per[:, a_:b_, G2.IX['harvest']], per[:, a_:b_, G2.H_]) >= 0.5).any(1)
+            if r_ < 0.3 and (m & srw).any(): m = m & srw; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
+            elif r_ > 0.6 and (m & ~srw).any(): m = m & ~srw; nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
     if not vblk[v2]:
         a, b = int(math.floor(y1)) + 1 - YEARS[0], int(math.floor(y2)) - 1 - YEARS[0]
         if b >= max(a, 0): m &= ~(np.maximum(per[:, max(a, 0):b + 1, G2.IX['harvest']], per[:, max(a, 0):b + 1, G2.H_]) >= 0.5).any(1); nanch['neg_constrained'] += 1
