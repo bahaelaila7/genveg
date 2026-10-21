@@ -1,11 +1,12 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import json, time, numpy as np, geopandas as gpd, rasterio, pandas as pd
 from rasterio.windows import Window, from_bounds
 from rasterio.features import rasterize
 from common import *
 t0=time.time()
-TM='/workspace/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif'
-c=gpd.read_file('/workspace/TIGER/tl_2024_us_county/tl_2024_us_county.shp')
+TM=_WS + '/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif'
+c=gpd.read_file(_WS + '/TIGER/tl_2024_us_county/tl_2024_us_county.shp')
 c=c[c.STATEFP.isin(['13','12'])].to_crs(5070)
 geom=c.dissolve().geometry.iloc[0].buffer(1000)
 aoi=gpd.GeoDataFrame({'name':['GA_FL']},geometry=[geom],crs=5070)

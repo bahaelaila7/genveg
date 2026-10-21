@@ -35,6 +35,7 @@ for (r, c) in nodes:
     XLg.append(landscape(F[:, :128], F[:, DS].reshape(-1, NY, NC + 2), F[:, SO]))
 ok = [i for i, x in enumerate(XLg) if x is not None]; from scipy.spatial import cKDTree
 kt = cKDTree(np.array([nodes[i] for i in ok])); print('landscape nodes', len(ok), flush=True)
+np.savez(f'{D}/stand_nodes.npz', nodes=np.array([nodes[i] for i in ok]), XL=np.stack([XLg[i] for i in ok]))      # for gv_verify_upstream (U8)
 USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []
 with torch.no_grad():
     for sid, g in S.groupby('stand_id'):
@@ -50,7 +51,7 @@ with torch.no_grad():
         idx = torch.multinomial(w / w.sum(), 16, replacement=True); fpi = [fp[i % len(fp)] for i in range(16)]   # samples spread over the stand's footprints
         st = flow(zs[idx], torch.full((16,), 2021.0), [2025], SD[fpi], SS[fpi]); s_ = list(summaries(*dec(st[2025])))
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]; comp = s_[4].mean(0)
-        rows.append(dict(stand_id=int(sid), tph=float(s_[0].median()), ba=float(s_[1].median()), qmd=float(s_[2].median()), ba_sd=float(s_[1].std()), dom=int(comp.argmax())))
+        rows.append(dict(stand_id=int(sid), node=int(j), tph=float(s_[0].median()), ba=float(s_[1].median()), qmd=float(s_[2].median()), ba_sd=float(s_[1].std()), dom=int(comp.argmax())))
 out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3.parquet')
 st_ = gpd.read_file(f'{ROOT}/out/stands_gafl_pilot.gpkg', layer='stands', ignore_geometry=True).set_index('stand_id'); d = st_.join(out.set_index('stand_id'), how='inner')
 d['gen_ba_ft'] = d.ba * 4.356; d['gen_tpa'] = d.tph / 2.471

@@ -1,8 +1,9 @@
 """Fetch only the 20 m overview (level 0) byte span of each AEF COG into a sparse local copy (same offsets)."""
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import os, io, time, requests, pandas as pd, tifffile
 from concurrent.futures import ThreadPoolExecutor
-ROOT='/workspace/standmap'
+ROOT=_SM
 IDX=pd.read_csv(f'{ROOT}/data/aef/files_aoi.csv')
 def https(p): return p.replace('s3://us-west-2.opendata.source.coop','https://data.source.coop')
 def local(p): return f'{ROOT}/data/aef/cache/'+p.split('/annual/')[1].replace('/','_')

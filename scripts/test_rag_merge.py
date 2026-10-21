@@ -1,4 +1,5 @@
-import sys, numpy as np; sys.path.insert(0, '/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys, numpy as np; sys.path.insert(0, _SM + '/scripts')
 from rag_merge import merge
 # 1-D chain of 12 regions: two homogeneous groups (features 0 and 5) separated, + status split in group 1
 f = np.array([0,0.1,0,0.05,0, 5,5.1,5,4.9, 5,5,5.05], float)[:, None]

@@ -1,11 +1,12 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import time, numpy as np, rasterio
 from rasterio.warp import reproject, Resampling
 from rasterio.windows import Window, transform as wtransform, from_bounds
 from multiprocessing import Pool
 from common import *
 tr,W,H,crs=grid()
-S='/workspace/SOLUS/SOLUS100/'
+S=_WS + '/SOLUS/SOLUS100/'
 DEP=[(0,5),(5,10),(15,15)]  # layer top, thickness within 0-30 cm
 # name: (file pattern, scale)
 LAYERED={'clay030':('claytotal_{d}_cm_p',1.0),'sand030':('sandtotal_{d}_cm_p',1.0),'soc030':('soc_{d}_cm_p',1000.0),

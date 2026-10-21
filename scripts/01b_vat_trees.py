@@ -1,8 +1,9 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import numpy as np, pandas as pd, rasterio
 from common import *
 from pyogrio import read_dataframe
-D='/workspace/FVSclaude/treemap/Data/'
+D=_WS + '/FVSclaude/treemap/Data/'
 vat=read_dataframe(D+'TreeMap2022_CONUS.tif.vat.dbf',read_geometry=False)
 print(vat.shape, list(vat.columns)[:12])
 with rasterio.open(f'{ROOT}/data/treemap/tm_id.tif') as s:

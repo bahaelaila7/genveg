@@ -1,4 +1,5 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import os, requests, math
 from common import *
 g=json.load(open(f'{ROOT}/data/grid/grid.json')) if False else None

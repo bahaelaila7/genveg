@@ -1,11 +1,12 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import time, numpy as np, geopandas as gpd, rasterio
 from rasterio.features import rasterize
 from rasterio.windows import Window
 from common import *
 t0=time.time()
 tr,W,H,crs=grid()
-g=gpd.read_file('/workspace/fl_5_co_parcels.geojson',engine='pyogrio')
+g=gpd.read_file(_WS + '/fl_5_co_parcels.geojson',engine='pyogrio')
 print(len(g),g.crs); print(g.CNTYNAME.value_counts())
 PII=['ONAME','OADDR1','OADDR2','OCITY','OSTATE','OZIPCD','PHYADDR1','PHYCITY','PHYZIP','Owner','GOOGLEMAP']
 g=g.drop(columns=[c for c in PII if c in g.columns]).to_crs(5070)

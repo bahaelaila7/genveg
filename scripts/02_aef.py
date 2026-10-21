@@ -2,7 +2,8 @@
 Reads the 20 m overview (level 0) of the raw bottom-up COGs via /vsicurl/ (the provided VRTs are warped VRTs without
 overviews, so we open the .tiff directly and flip rows ourselves). Averaging is done in de-quantized float domain,
 then renormalized to unit length and re-quantized. Per-tile outputs in data/aef/tiles_<year>/ (resumable)."""
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import os, time, numpy as np, pandas as pd, rasterio
 from rasterio.warp import reproject, Resampling, transform_bounds
 from rasterio.windows import Window, transform as wtransform

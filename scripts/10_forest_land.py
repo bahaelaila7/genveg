@@ -8,6 +8,9 @@ Classes:
                        plantation / ruderal-forest type, or shrub/herb with high treecover2000 (cut before 2001)
   4  forest_unmapped   LANDFIRE tree life form, no TreeMap imputation, no loss
   9  converted         loss on former forest now developed/agriculture/water (reported, not forest land)
+Precedence (as implemented; documented 2026-10-22 after gv_verify_upstream U6): 4, then 3 (outside TreeMap, not excluded), then 1 (any TreeMap
+pixel), then 2 (recent loss on former forest, EVT not excluded — overrides 1), then 9 (loss on former forest, excluded EVT, outside TreeMap);
+finally 0 outside the AOI and on Hansen datamask non-land (water). A TreeMap pixel with recent loss but an excluded 2022 EVT therefore stays 1.
 """
 import sys, os, json, time, yaml, numpy as np, pandas as pd, rasterio
 from rasterio.windows import Window

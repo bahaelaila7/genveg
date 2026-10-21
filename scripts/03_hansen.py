@@ -1,4 +1,5 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import glob, time, numpy as np, rasterio
 from rasterio.warp import reproject, Resampling
 from rasterio.windows import Window, transform as wtransform

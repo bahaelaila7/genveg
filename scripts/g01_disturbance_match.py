@@ -4,12 +4,13 @@ reset (STDAGE <= MEASYEAR - TRTYR1 + 2). Controls: no TRT / DSTRB codes, STDAGE 
 Per plot, within the public-coordinate fuzz disk (r = 800 m and 1600 m): matching area = pixels with Hansen loss in [year-1, year+1];
 'match' = a connected matching patch >= 1 ha; also the public point itself (3x3 window). For controls the year is drawn from the harvest years.
 Output: data/derived/g01_match.csv + printed summary."""
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
 import sys, os, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
 from scipy import ndimage
-ROOT = '/workspace/standmap'; rng = np.random.default_rng(1)
-c = duckdb.connect('/workspace/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+ROOT = _SM; rng = np.random.default_rng(1)
+c = duckdb.connect(_WS + '/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
 q = """select p.CN, p.STATECD, p.LAT, p.LON, p.MEASYEAR, c.STDAGE, c.STDORGCD, c.TRTCD1, c.TRTYR1, c.DSTRBCD1, c.TRTCD2, c.DSTRBCD2, c.CONDPROP_UNADJ
        from COND c join PLOT p on c.PLT_CN = p.CN
        where p.STATECD in (12, 13) and c.COND_STATUS_CD = 1 and c.CONDPROP_UNADJ >= 0.9 and p.MEASYEAR >= 2005 order by p.CN"""

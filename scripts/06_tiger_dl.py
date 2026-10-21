@@ -1,8 +1,9 @@
-import sys; sys.path.insert(0,'/workspace/standmap/scripts')
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
+import sys; sys.path.insert(0,_SM + '/scripts')
 import os, requests, geopandas as gpd, time
 from concurrent.futures import ThreadPoolExecutor
 from common import *
-c=gpd.read_file('/workspace/TIGER/tl_2024_us_county/tl_2024_us_county.shp')
+c=gpd.read_file(_WS + '/TIGER/tl_2024_us_county/tl_2024_us_county.shp')
 fips=sorted((c[c.STATEFP.isin(['13','12'])].GEOID).tolist()); print(len(fips))
 os.makedirs(f'{ROOT}/data/tiger/raw',exist_ok=True)
 jobs=[(t,f) for f in fips for t in('ROADS','AREAWATER','LINEARWATER')]

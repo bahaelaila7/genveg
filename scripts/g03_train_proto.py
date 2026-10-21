@@ -9,9 +9,10 @@
   decoder  z → cohort slots (species x age class): presence (BCE) + log N, log QMD, H, CR (masked MSE)
   Q        inverse encoder: candidate features (AlphaEarth 2022 + 2025, disturbance history, soils) → z(2025) (Gaussian) — the mapping model
 Held-out: plots of 20 % of 10-km blocks. Baseline: kNN on the prior-weighted mean candidate features. Writes data/proto/baker/{model.pt, eval.json, stand_veg.parquet}."""
+import os as _os; _SM = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _WS = _os.environ.get('WORKSPACE', _os.path.dirname(_SM))   # relocatable paths
 import os, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
 torch.manual_seed(0); np.random.seed(0); torch.set_num_threads(int(os.environ.get('NT', 6)))
-D = '/workspace/standmap/data/proto/baker'; M = json.load(open(f'{D}/meta.json'))
+D = _SM + '/data/proto/baker'; M = json.load(open(f'{D}/meta.json'))
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy').astype(np.float32)
 NK, NA = len(M['keys']), 16; YEARS = M['years']; NY = len(YEARS); NC = len(M['classes']); D_Z = int(os.environ.get('DZ', 16))
