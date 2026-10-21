@@ -1,0 +1,125 @@
+% beamerthemeperseus — clean, forest-palette theme for "Tools for Forest Simulation" (16:9).
+% Metropolis-inspired: flat frame titles with a thin progress rule, quiet footer, section pages, flat blocks.
+\mode<presentation>
+
+\RequirePackage{tikz}
+\RequirePackage{xcolor}
+\usetikzlibrary{calc}
+
+% ---------- palette ----------
+\definecolor{pGreen}{HTML}{1F4E3D}     % deep forest (primary)
+\definecolor{pMoss}{HTML}{5E8C31}      % moss (secondary)
+\definecolor{pBark}{HTML}{7A5C3E}      % bark
+\definecolor{pSky}{HTML}{2F6F9F}       % sky / water
+\definecolor{pAmber}{HTML}{D08A12}     % accent
+\definecolor{pRust}{HTML}{B5462B}      % warnings / flags
+\definecolor{pInk}{HTML}{1E2421}       % text
+\definecolor{pMuted}{HTML}{6B726E}     % secondary text
+\definecolor{pPaper}{HTML}{FAFAF6}     % background
+\definecolor{pTint}{HTML}{E9EFE6}      % light green tint (blocks, table stripes)
+
+% ---------- fonts ----------
+\usefonttheme{professionalfonts}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{title}{size=\LARGE,series=\bfseries}
+\setbeamerfont{subtitle}{size=\large}
+\setbeamerfont{author}{size=\normalsize}
+\setbeamerfont{institute}{size=\small}
+\setbeamerfont{date}{size=\small}
+\setbeamerfont{footline}{size=\tiny}
+\setbeamerfont{block title}{size=\normalsize,series=\bfseries}
+\setbeamerfont{caption}{size=\scriptsize}
+
+% ---------- colours ----------
+\setbeamercolor{normal text}{fg=pInk,bg=pPaper}
+\setbeamercolor{background canvas}{bg=pPaper}
+\setbeamercolor{structure}{fg=pGreen}
+\setbeamercolor{alerted text}{fg=pRust}
+\setbeamercolor{example text}{fg=pMoss}
+\setbeamercolor{frametitle}{fg=white,bg=pGreen}
+\setbeamercolor{title}{fg=pGreen}
+\setbeamercolor{subtitle}{fg=pMoss}
+\setbeamercolor{footline}{fg=pMuted}
+\setbeamercolor{block title}{fg=white,bg=pGreen}
+\setbeamercolor{block body}{fg=pInk,bg=pTint}
+\setbeamercolor{block title alerted}{fg=white,bg=pRust}
+\setbeamercolor{block body alerted}{fg=pInk,bg=pRust!8}
+\setbeamercolor{block title example}{fg=white,bg=pMoss}
+\setbeamercolor{block body example}{fg=pInk,bg=pMoss!10}
+\setbeamercolor{item}{fg=pMoss}
+\setbeamercolor{subitem}{fg=pBark}
+\setbeamercolor{caption name}{fg=pMuted}
+
+% ---------- inner ----------
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}{\raisebox{0.15em}{\tikz\fill[pMoss] (0,0) rectangle (0.42em,0.42em);}}
+\setbeamertemplate{itemize subitem}{\raisebox{0.18em}{\tikz\fill[pBark] (0,0) circle (0.16em);}}
+\setbeamertemplate{enumerate item}{\insertenumlabel.}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamertemplate{caption}{\raggedright\insertcaption\par}
+\setlength{\leftmargini}{1.1em}
+\setlength{\leftmarginii}{1.0em}
+
+% ---------- progress rule under the frame title ----------
+\newlength{\perseus@prog}
+\def\perseus@progress{%
+  \ifnum\inserttotalframenumber>1
+    \setlength{\perseus@prog}{\dimexpr\paperwidth*\insertframenumber/\inserttotalframenumber\relax}%
+  \else\setlength{\perseus@prog}{0pt}\fi}
+
+\setbeamertemplate{frametitle}{%
+  \nointerlineskip
+  \perseus@progress
+  \begin{beamercolorbox}[wd=\paperwidth,ht=2.6ex,dp=1.2ex,leftskip=0.9em,rightskip=0.9em]{frametitle}%
+    \usebeamerfont{frametitle}\insertframetitle
+    \ifx\insertframesubtitle\@empty\else{\usebeamerfont{framesubtitle}\normalfont\small\quad\color{white!80!pGreen}\insertframesubtitle}\fi
+  \end{beamercolorbox}%
+  \nointerlineskip
+  \begin{tikzpicture}[overlay]
+    \fill[pAmber] (0,0) rectangle (\perseus@prog,0.05);
+  \end{tikzpicture}%
+  \vspace{0.35em}}
+
+% ---------- footer ----------
+\setbeamertemplate{footline}{%
+  \leavevmode\hbox to \paperwidth{%
+    \hspace{0.9em}{\usebeamerfont{footline}\usebeamercolor[fg]{footline}\insertshorttitle\ \textbullet\ \insertsectionhead}%
+    \hfill{\usebeamerfont{footline}\usebeamercolor[fg]{footline}\insertframenumber}\hspace{0.9em}}%
+  \vspace{0.6em}}
+
+% ---------- title page ----------
+\setbeamertemplate{title page}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[pGreen] (current page.north west) rectangle ([yshift=-0.50\paperheight]current page.north east);
+    \fill[pAmber] ([yshift=-0.50\paperheight]current page.north west) rectangle ([yshift=-0.507\paperheight]current page.north east);
+    % a small stand of conifers on the band's right end
+    \foreach \x/\h in {0.78/0.11,0.82/0.17,0.865/0.13,0.905/0.21,0.95/0.12}{%
+      \fill[pMoss!65!pGreen] ([xshift=\x\paperwidth,yshift=-0.50\paperheight]current page.north west)
+        -- ++(-0.022\paperwidth,0) -- ++(0.022\paperwidth,\h\paperheight) -- ++(0.022\paperwidth,-\h\paperheight) -- cycle;}
+    \node[anchor=south west,text=white,font=\usebeamerfont{title},text width=0.66\paperwidth,align=left]
+      at ([xshift=0.07\paperwidth,yshift=-0.27\paperheight]current page.north west) {\inserttitle};
+    \node[anchor=north west,text=white!78!pGreen,font=\usebeamerfont{subtitle},text width=0.70\paperwidth,align=left]
+      at ([xshift=0.07\paperwidth,yshift=-0.29\paperheight]current page.north west) {\raggedright\hyphenpenalty=10000 \insertsubtitle};
+    \node[anchor=north west,text=pInk,font=\usebeamerfont{author},align=left]
+      at ([xshift=0.07\paperwidth,yshift=-0.60\paperheight]current page.north west) {\insertauthor};
+    \node[anchor=north west,text=pMuted,font=\usebeamerfont{institute},align=left]
+      at ([xshift=0.07\paperwidth,yshift=-0.68\paperheight]current page.north west) {\insertinstitute};
+    \node[anchor=north west,text=pMuted,font=\usebeamerfont{date},align=left]
+      at ([xshift=0.07\paperwidth,yshift=-0.75\paperheight]current page.north west) {\insertdate};
+  \end{tikzpicture}}
+
+% ---------- section page ----------
+\setbeamertemplate{section page}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[pGreen] (current page.south west) rectangle (current page.north east);
+    \fill[pAmber] ([yshift=0.47\paperheight,xshift=0.07\paperwidth]current page.south west) rectangle ++(0.18\paperwidth,0.006\paperheight);
+    \node[anchor=south west,text=white,font=\Large\bfseries,text width=0.8\paperwidth,align=left]
+      at ([yshift=0.50\paperheight,xshift=0.07\paperwidth]current page.south west) {\insertsectionhead};
+    \node[anchor=north west,text=white!70!pGreen,font=\small,text width=0.8\paperwidth,align=left]
+      at ([yshift=0.44\paperheight,xshift=0.07\paperwidth]current page.south west) {\perseus@sectionblurb};
+  \end{tikzpicture}}
+\def\perseus@sectionblurb{}
+\newcommand{\sectionblurb}[1]{\gdef\perseus@sectionblurb{#1}}
+\AtBeginSection[]{{\setbeamertemplate{footline}{}\begin{frame}[plain,noframenumbering]\sectionpage\end{frame}}\gdef\perseus@sectionblurb{}}
+
+\mode<all>
