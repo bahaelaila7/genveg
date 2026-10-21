@@ -1,10 +1,11 @@
 """Export stands to a Forest Explorer prototype layer: stands of out/stands_<name>.gpkg clipped to an area polygon, simplified (5 m, topology kept
 by simplifying shared boundaries once via a coverage), EPSG:4326, rounded coordinates, attributes for the popup.
-Usage: python scripts/24_export_fe.py <area polygon gpkg> <out geojson>"""
-import sys, json, numpy as np, geopandas as gpd, shapely
+Usage: python scripts/24_export_fe.py <area polygon gpkg> <out geojson> [stands gpkg, default data/derived/runs/<config name>/finalize/stands.gpkg]"""
+import sys, os, json, numpy as np, geopandas as gpd, shapely
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from features import CFG, ROOT
 area = gpd.read_file(sys.argv[1]); out = sys.argv[2]
-st = gpd.read_file(f'{ROOT}/out/stands_{CFG["name"]}.gpkg', layer='stands')
+st = gpd.read_file(sys.argv[3] if len(sys.argv) > 3 else f'{ROOT}/data/derived/runs/{CFG["name"]}/finalize/stands.gpkg', layer='stands')
 area = area.to_crs(st.crs); poly = area.union_all()
 st = st[st.intersects(poly)].copy(); st['geometry'] = st.intersection(poly)
 st = st[~st.is_empty & st.geometry.geom_type.isin(['Polygon', 'MultiPolygon'])]

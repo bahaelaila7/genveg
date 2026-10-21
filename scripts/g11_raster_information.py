@@ -87,6 +87,7 @@ if __name__ == '__main__':
     fams = ['aef', 'soil', 'dist', 'evt'] + (['evc'] if HAS_EVC else []) + ['treemap'] + (['terrain'] if TERR else [])
     def X_of(pl, fs): return np.hstack([np.vstack([res[p][(pl, f)] for p in T.pid]) for f in fs])
     targets = {'lba': 'reg', 'ltph': 'reg', 'lqmd': 'reg', 'soft': 'reg', 'dom': 'clf', 'planted': 'clf'}
+    top = T.dom.value_counts().index[:int(os.environ.get('G11_DOM_TOP', 12))]; T['dom'] = np.where(T.dom.isin(top), T.dom, -2)   # dominant key: top classes, -2 = other (a boosted classifier fits one tree per class)
     gkf = GroupKFold(5); out = {}
     def cv(X, tgt, kind):
         y = T[tgt].values.astype(float if kind == 'reg' else int); pred = np.zeros(len(y)) if kind == 'reg' else np.zeros(len(y), int)

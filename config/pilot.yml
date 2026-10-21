@@ -1,6 +1,7 @@
 # Stand delineation pilot — GA + FL. All thresholds live here.
 name: gafl_pilot
 grid: data/grid/grid.json
+window: [15963, 16523, 17657, 18058]   # processing window r0 c0 r1 c1 [px] of the windowed stages (sp, finalize, verify, metrics): Baker County FL pilot; null = full extent
 forest_land:
   recent_loss_from: 2017      # Hansen loss year >= this -> status "harvested" (recent clear-cut / stand-replacing loss)
   treecover2000_min: 25       # % canopy in 2000 for a loss pixel to count as former forest
@@ -13,11 +14,26 @@ segmentation:
   target_ha: [5, 50]          # typical stand size range
   max_ha: 200                 # segments larger than this are split
   aef_pcs: 16                 # AlphaEarth PCs used in the feature vector
-  weights: {aef: 1.0, aef_change: 0.5, treemap: 0.6, soil: 0.3}
-  status_is_hard: true        # forest / harvested / regenerating never share a stand
+  weights: {aef: 1.0, aef_old: 0.4, aef_change: 0.5, treemap: 0.6, soil: 0.3}   # feature-group weights (each group scaled to total variance weight²)
+  status_is_hard: true        # forest / harvested / regenerating never share a stand (also in the MMU absorption of 22 / 23)
   superpixel_ha: 1.0          # SLIC superpixel size (building blocks; smaller than the MMU)
+  sp_tile: 512                # superpixel tile size [px] (superpixels never cross tile edges; the RAG merge joins them)
   slic_compactness: 0.3
   merge_threshold: auto       # Ward threshold; auto = calibrate to target_median_ha
   target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
   shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
   barriers: [roads, water, parcels]
+clean:
+  max_dist_px: 15             # a sub-MMU status patch takes the class of the nearest larger forest-land patch within this distance
+fit:
+  tiles: 60                   # random 1024-px tiles (>= 20 % forest land) sampled for the feature transforms
+  px_per_tile: 4000
+  seed: 1
+finalize:
+  hole_dist_px: 3             # barrier / sliver pixels join the nearest stand of the same status within this distance (else any stand)
+  mmu_max_passes: 20          # MMU generalisation passes (stops when nothing merges)
+  mmu_across_barriers: true   # a fragment < MMU boxed in by barrier lines may join a stand across the line
+verify:
+  attr_sample: 200            # stands whose attributes are recomputed from pixels
+metrics:
+  heldout: [hansen/treecover2000.tif, terrain/elevation.tif, terrain/slope.tif, terrain/tpi300.tif, derived/tree_cover.tif]   # layers NOT used by the segmentation

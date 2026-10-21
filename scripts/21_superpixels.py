@@ -1,7 +1,8 @@
 """Stage A: SLIC superpixels per 2048-px tile and per land status, inside forest land minus barrier pixels.
-Writes data/derived/sp.tif (int32 global superpixel id, 0 = none) and data/derived/sp_stats.npz
+Writes <OUT>/sp.tif (int32 global superpixel id, 0 = none) and <OUT>/sp_stats.npz
 (id, n, status, feature sums). Superpixels never cross barriers, statuses or tile edges; the global RAG merge
-(stage C) joins them across tile edges."""
+(stage C) joins them across tile edges. Window (driver) = the tiles whose origin lies inside (r0, c0, r1, c1). Ids are assigned in tile order
+(deterministic: the merge's tie-breaking depends on ids)."""
 import sys, os, time, numpy as np, rasterio
 from rasterio.windows import Window
 from multiprocessing import Pool
@@ -9,14 +10,15 @@ from skimage.segmentation import slic
 sys.path.insert(0, os.path.dirname(__file__))
 from features import *
 from common import PROFILE
-T = int(os.environ.get("SP_TILE", 2048))     # superpixel tile size (smaller = more parallel jobs; superpixels never cross tile edges, the RAG merge joins them)
+from stands_cfg import OUT, IN, WINDOW
+T = int(CFG['segmentation']['sp_tile'])     # superpixel tile size (superpixels never cross tile edges, the RAG merge joins them)
 SEG = CFG['segmentation']; SP_PX = max(4, int(round(SEG.get('superpixel_ha', 1.0) * 1e4 / 900)))
 BARRIERS = [f'{ROOT}/data/barriers/{b}.tif' for b in SEG.get('barriers', ['roads', 'water', 'parcels'])]
 _fz = None
 
 def init():
     global _fz, _src, _fit, _bar
-    _fit = dict(np.load(f'{ROOT}/data/derived/feature_fit.npz'))
+    _fit = dict(np.load(f"{IN('fit')}/feature_fit.npz"))
     _fz = Featurizer(_fit); _src = open_sources()
     _bar = [rasterio.open(b) for b in BARRIERS if os.path.exists(b)]
 
@@ -65,14 +67,16 @@ def work(job):
 
 if __name__ == '__main__':
     t0 = time.time()
-    with rasterio.open(f'{ROOT}/data/derived/land_clean.tif') as s: prof = s.profile; H, W = s.shape
+    with rasterio.open(f"{IN('clean')}/land_clean.tif") as s: prof = s.profile; H, W = s.shape
     jobs = [(i, r, c, H, W) for i, (r, c) in enumerate((r, c) for r in range(0, H, T) for c in range(0, W, T))]
-    if len(sys.argv) > 1:      # optional pilot window: r0 c0 r1 c1 (pixels)
-        r0, c0, r1, c1 = map(int, sys.argv[1:5]); jobs = [j for j in jobs if r0 <= j[1] < r1 and c0 <= j[2] < c1]
+    win = WINDOW or (tuple(map(int, sys.argv[1:5])) if len(sys.argv) > 4 else None)     # pilot window r0 c0 r1 c1 (pixels)
+    if win:
+        r0, c0, r1, c1 = win; jobs = [j for j in jobs if r0 - T < j[1] < r1 and c0 - T < j[2] < c1]   # every tile overlapping the window
     prof = dict(prof, **PROFILE, dtype='int32', nodata=0)
     ids, ns, sts, Ss = [], [], [], []; off = 0
-    with rasterio.open(f'{ROOT}/data/derived/sp.tif', 'w', **prof) as d, Pool(int(os.environ.get('NPROC', 6)), initializer=init) as p:
-        for j, (ti, r, c, lab, st) in enumerate(p.imap_unordered(work, jobs)):
+    os.makedirs(OUT, exist_ok=True)
+    with rasterio.open(f'{OUT}/sp.tif', 'w', **prof) as d, Pool(int(os.environ.get('NPROC', 6)), initializer=init) as p:
+        for j, (ti, r, c, lab, st) in enumerate(p.imap(work, jobs)):
             if lab is None: continue
             n, stt, S = st
             g = np.where(lab > 0, lab + off, 0).astype(np.int32)
@@ -80,6 +84,6 @@ if __name__ == '__main__':
             ids.append(np.arange(off + 1, off + 1 + n.size)); ns.append(n); sts.append(stt); Ss.append(S.astype(np.float32))
             off += n.size
             print(f'tile {j+1}/{len(jobs)} sp {n.size} total {off} {time.time()-t0:.0f}s', flush=True)
-    np.savez(f'{ROOT}/data/derived/sp_stats.npz', id=np.concatenate(ids), n=np.concatenate(ns),
+    np.savez(f'{OUT}/sp_stats.npz', id=np.concatenate(ids), n=np.concatenate(ns),
              status=np.concatenate(sts), S=np.concatenate(Ss))
     print('done', off, time.time() - t0)

@@ -5,7 +5,8 @@ length). A merge's cost is the Ward increase of within-region squared error
     w = n_a n_b / (n_a + n_b) * |mu_a - mu_b|^2
 times a shape factor 1 + shape_w * (1 - shared / min(perim_a, perim_b)) that prefers merging along long shared
 boundaries (compact stands). Each round, every region finds its cheapest admissible neighbour; mutual pairs below
-`threshold` merge. Admissible: same status, n_a + n_b <= max_n.
+`threshold` merge. Admissible: same status, n_a + n_b <= max_n. When no mutual pair is left, regions smaller than min_n are absorbed into
+their cheapest neighbour (size cap off; a different status only when status_hard is False, at a 1e6 cost penalty).
 """
 import numpy as np
 
@@ -30,7 +31,7 @@ def _best_per_node(n_nodes, a, b, cost):
     best[ends[first]] = eidx[first]
     return best
 
-def merge(n, S, status, a, b, ln, perim, threshold, max_n, shape_w=0.5, min_n=0, max_rounds=10_000, verbose=False):
+def merge(n, S, status, a, b, ln, perim, threshold, max_n, shape_w=0.5, min_n=0, max_rounds=10_000, verbose=False, status_hard=True):
     """Returns label array (len = #regions) mapping each input region to its merged region id (0..k-1)."""
     n = n.astype(np.float64).copy(); S = S.astype(np.float64).copy(); perim = perim.astype(np.float64).copy()
     status = status.copy(); N = n.size
@@ -48,7 +49,7 @@ def merge(n, S, status, a, b, ln, perim, threshold, max_n, shape_w=0.5, min_n=0,
             cost = np.where(ok, cost, np.inf)
         else:   # absorb regions smaller than min_n: only edges touching a small region; prefer same status
             small_a = n[a] < min_n; small_b = n[b] < min_n
-            ok = small_a | small_b
+            ok = (small_a | small_b) & ((status[a] == status[b]) | (not status_hard))
             cost = np.where(ok, cost * np.where(status[a] == status[b], 1.0, 1e6), np.inf)
         best = _best_per_node(N, a, b, cost)
         e = np.arange(a.size)

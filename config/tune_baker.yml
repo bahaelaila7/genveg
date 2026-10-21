@@ -1,0 +1,12 @@
+# Stand-delineation tuning on the Baker County FL pilot window (scripts/stands_tune.py). Variant 0 = the base configuration.
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]          # area-weighted median stand size accepted [ha]
+  small_area_pct_max: 2.0      # area share in stands < MMU [%]
+grid:
+  segmentation.target_median_ha: [10, 15, 25]
+  segmentation.shape_weight: [0.0, 0.5, 1.5]
+  segmentation.weights.treemap: [0.3, 0.6, 1.2]
+  segmentation.weights.aef_change: [0.5, 1.5]
+random: {n: 12, seed: 1}

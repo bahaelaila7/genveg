@@ -1,5 +1,5 @@
 """Stages B + C: region-adjacency graph of superpixels (streamed), then Ward/mutual-best merging into stands.
-Writes data/derived/sp2stand.npy (superpixel id -> stand id, 0 = none) and data/derived/stand_feat.npz
+Writes <OUT>/sp2stand.npy (superpixel id -> stand id, 0 = none) and <OUT>/stand_feat.npz
 (stand id, n px, status, mean features). Threshold: config segmentation.merge_threshold, or 'auto' = bisection so the
 area-weighted median stand size matches segmentation.target_median_ha on a sample of graph components."""
 import sys, os, time, numpy as np, rasterio
@@ -8,13 +8,14 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 sys.path.insert(0, os.path.dirname(__file__))
 from features import CFG, ROOT
+from stands_cfg import OUT, IN
 from rag_merge import merge
 SEG = CFG['segmentation']; PXHA = 900 / 1e4
 t0 = time.time()
-st = np.load(f'{ROOT}/data/derived/sp_stats.npz'); N = st['n'].size
+st = np.load(f"{IN('sp')}/sp_stats.npz"); N = st['n'].size
 n = st['n'].astype(np.float64); S = st['S'].astype(np.float64); status = st['status'].astype(np.int64)
 # --- B: edges + perimeter ---
-src = rasterio.open(f'{ROOT}/data/derived/sp.tif'); H, W = src.shape
+src = rasterio.open(f"{IN('sp')}/sp.tif"); H, W = src.shape
 internal = np.zeros(N + 1, np.int64); keys = []; prev = None
 def pairs(a, b):
     m = (a > 0) & (b > 0)
@@ -45,7 +46,7 @@ def run(nodes_mask, thr):
     idx = np.flatnonzero(nodes_mask); loc = np.full(N, -1); loc[idx] = np.arange(idx.size)
     em = nodes_mask[ea] & nodes_mask[eb]
     lab = merge(n[idx], S[idx], status[idx], loc[ea[em]], loc[eb[em]], eln[em], perim[idx], thr, max_n,
-                shape_w=SEG.get('shape_weight', 0.5), min_n=min_n)
+                shape_w=SEG['shape_weight'], min_n=min_n, status_hard=SEG['status_is_hard'])
     return idx, lab
 def wmedian_ha(idx, lab):
     sz = np.bincount(lab, weights=n[idx]) * PXHA; o = np.argsort(sz); cw = np.cumsum(sz[o]); return sz[o][np.searchsorted(cw, cw[-1] / 2)]
@@ -84,8 +85,9 @@ sS = np.zeros((K + 1, S.shape[1])); np.add.at(sS, sid, S)
 # status = status of the largest share
 W_ = np.stack([np.bincount(sid, weights=n * (status == s_), minlength=K + 1) for s_ in (1, 2, 3, 4)], 1)
 sst = W_.argmax(1) + 1
-np.save(f'{ROOT}/data/derived/sp2stand.npy', sp2stand)
-np.savez(f'{ROOT}/data/derived/stand_feat.npz', n=sn[1:], status=sst[1:], mean=(sS[1:] / np.maximum(sn[1:, None], 1)).astype(np.float32),
+os.makedirs(OUT, exist_ok=True)
+np.save(f'{OUT}/sp2stand.npy', sp2stand)
+np.savez(f'{OUT}/stand_feat.npz', n=sn[1:], status=sst[1:], mean=(sS[1:] / np.maximum(sn[1:, None], 1)).astype(np.float32),
          threshold=thr)
 a = sn[1:] * PXHA
 print(f'stands {K}; area ha quantiles 5/25/50/75/95%: {np.quantile(a, [.05, .25, .5, .75, .95]).round(1)}; '

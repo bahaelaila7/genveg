@@ -1,5 +1,5 @@
 """Forest land + status on the TreeMap grid, keeping clear-cut (temporarily non-forest) land.
-Outputs data/derived/land.tif (uint8 class) and data/derived/loss_year.tif (uint8, 0 = none, else 2000+v).
+Outputs <OUT>/land.tif (uint8 class) and data/derived/loss_year.tif (uint8, 0 = none, else 2000+v).
 Classes:
   0  not forest land (outside AOI, developed, agriculture, water, barren, natural non-forest)
   1  forest            TreeMap 2022 forest pixel, no stand-replacing loss since recent_loss_from
@@ -16,9 +16,10 @@ import sys, os, json, time, yaml, numpy as np, pandas as pd, rasterio
 from rasterio.windows import Window
 sys.path.insert(0, os.path.dirname(__file__))
 from common import ROOT, PROFILE
+from stands_cfg import CFG, OUT
 
-cfg = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))['forest_land']
-os.makedirs(f'{ROOT}/data/derived', exist_ok=True)
+cfg = CFG['forest_land']
+os.makedirs(OUT, exist_ok=True)
 evt = pd.read_csv(f'{ROOT}/data/landfire/evt_classes.csv').rename(columns={'value': 'VALUE'})
 evt = evt[evt.VALUE >= 0].reset_index(drop=True)   # -9999 Fill-NoData row (raster nodata is handled below)
 lut_size = int(max(evt.VALUE.max(), 32767)) + 1
@@ -38,8 +39,8 @@ for k, s in src.items():
     assert s.transform == ref.transform and s.shape == ref.shape, f'{k} not on grid'
 H, W = ref.shape
 prof = dict(PROFILE, width=W, height=H, count=1, dtype='uint8', crs=ref.crs, transform=ref.transform, nodata=None)
-out = rasterio.open(f'{ROOT}/data/derived/land.tif', 'w', **prof)
-outl = rasterio.open(f'{ROOT}/data/derived/loss_year.tif', 'w', **prof)
+out = rasterio.open(f'{OUT}/land.tif', 'w', **prof)
+outl = rasterio.open(f'{OUT}/loss_year.tif', 'w', **prof)
 counts = np.zeros(10, np.int64); t0 = time.time()
 rf = cfg['recent_loss_from'] - 2000
 for r in range(0, H, 2048):
@@ -64,4 +65,4 @@ for r in range(0, H, 2048):
 out.close(); outl.close()
 names = {0: 'none', 1: 'forest', 2: 'harvested', 3: 'regenerating', 4: 'forest_unmapped', 9: 'converted'}
 rep = {names[k]: dict(px=int(counts[k]), km2=round(counts[k] * 900 / 1e6, 1)) for k in names}
-json.dump(rep, open(f'{ROOT}/data/derived/land_summary.json', 'w'), indent=1); print(json.dumps(rep, indent=1))
+json.dump(rep, open(f'{OUT}/land_summary.json', 'w'), indent=1); print(json.dumps(rep, indent=1))

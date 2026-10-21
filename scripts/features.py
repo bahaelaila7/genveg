@@ -10,7 +10,8 @@ import os, numpy as np, pandas as pd, rasterio, yaml
 from rasterio.windows import Window
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))          # the standmap checkout (relocatable)
 WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))                    # sibling projects (FIA databases)
-CFG = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))
+import sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stands_cfg import CFG, IN                                              # resolved configuration of the running stage
 SOILS = ['clay030', 'sand030', 'soc030', 'awc030', 'ph030', 'restrdepth']
 TM_ATTRS = ['BALIVE', 'STANDHT', 'QMD', 'CANOPYPCT', 'TPA_LIVE', 'SOFTWOOD_FRAC']
 TM_LOG = {'BALIVE', 'QMD', 'TPA_LIVE'}
@@ -32,7 +33,7 @@ def vat_table():
     return v
 
 def open_sources():
-    s = dict(land=f'{ROOT}/data/derived/land_clean.tif', tm=f'{ROOT}/data/treemap/tm_id.tif',
+    s = dict(land=f"{IN('clean')}/land_clean.tif", tm=f'{ROOT}/data/treemap/tm_id.tif',
              a25=f'{ROOT}/data/aef/aef_2025.tif', a22=f'{ROOT}/data/aef/aef_2022.tif')
     for k in SOILS: s[k] = f'{ROOT}/data/soils/{k}.tif'
     return {k: rasterio.open(p) for k, p in s.items()}
@@ -72,7 +73,7 @@ class Featurizer:
             y = (np.nan_to_num(x - mean)) @ comp.T
             return y * (weight / scale)
         out.append(grp(r['a25'], f['aef_mean'], f['aef_comp'], f['aef_scale'], w['aef']))
-        out.append(grp(r['a22'], f['aef_mean'], f['aef_comp'][:8], f['aef_scale8'], w.get('aef_old', 0.4)))
+        out.append(grp(r['a22'], f['aef_mean'], f['aef_comp'][:8], f['aef_scale8'], w['aef_old']))
         cos = np.nansum(r['a25'] * r['a22'], -1) / np.sqrt(np.nansum(r['a25'] ** 2, -1) * np.nansum(r['a22'] ** 2, -1) + 1e-12)
         ch = (1 - np.nan_to_num(cos, nan=1.0))[..., None]
         out.append(ch * (w['aef_change'] / f['change_sd']))
