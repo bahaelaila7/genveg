@@ -137,3 +137,20 @@ verify FAIL counts. Variant 0 is the base configuration.
   - 7,631 interior stands < MMU (0.65 % of the area) are isolated, with no same-status neighbour.
   - Held-out R² gain over equal-count blocks: Hansen 2000 canopy +0.110, TPI-300 +0.123, EVC tree cover +0.055, slope +0.030, elevation ≈ 0.
     Mind the independence caveats above.
+
+## Tuning result (2026-10-22, `config/tune_baker.yml`, 12 random variants; `data/derived/tune/tune_baker/results.md`)
+
+| variant | Baker mean gain | Waycross mean gain (report) |
+|---|---|---|
+| base: target median 15 ha, shape 0.5, superpixel 1 ha, aef_change 0.5 | **0.064** | **0.065** |
+| shape 1.5 | 0.063 | 0.065 |
+| aef_change 1.5 | 0.057 | 0.044 |
+| target 10 ha | 0.054 | — |
+| target 25 ha | 0.050 | — |
+| superpixel 0.5 ha | 0.047 | — |
+
+- The base configuration is the best of the grid on both windows, so it stays the default.
+- Shape weight is irrelevant.
+- A higher AlphaEarth-change weight and smaller superpixels hurt.
+- 15 ha beats 10 and 25 ha, with the gain normalised to equal-count blocks.
+- Duplicate variants (a random draw equal to the base) are now skipped.

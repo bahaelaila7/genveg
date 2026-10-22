@@ -21,6 +21,12 @@ else:
     if 'random' in spec: random.Random(spec['random'].get('seed', 0)).shuffle(combos); combos = combos[:spec['random']['n']]
     V = [[f'{k}={json.dumps(v)}' for k, v in zip(keys, c)] for c in combos]
 V = [[]] + [v for v in V if v]                                     # variant 0 = the base configuration
+_b = yaml.safe_load(open(base)); _seen = [json.dumps(SC.apply_overrides(_b, []), sort_keys=True, default=str)]; _V = [[]]
+for v in V[1:]:                                                    # drop variants whose resolved configuration repeats an earlier one (e.g. = base)
+    k = json.dumps(SC.apply_overrides(_b, v), sort_keys=True, default=str)
+    if k not in _seen: _seen.append(k); _V.append(v)
+    else: print('skip duplicate variant', v, flush=True)
+V = _V
 OUTD = os.path.join(SC.ROOT, 'data', 'derived', 'tune', NAME); os.makedirs(OUTD, exist_ok=True)
 cons = spec.get('constraints', {}); rows = []
 for i, sets in enumerate(V):
