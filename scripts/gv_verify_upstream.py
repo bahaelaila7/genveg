@@ -66,7 +66,7 @@ for sid, row in sa.iterrows():
     A = sr.read(1, window=Window(c0, r0, c1 - c0 + 1, r1 - r0 + 1)); arr.append(abs((A == sid).sum() * 900 / row.geometry.area - 1))
 check('U7 stand polygons: a point inside each polygon falls on its own id in stands.tif; polygon area = its pixel count x 900 m2', ins / n7 > 0.99 and np.median(arr) < 0.02,
       f'{n7} polygons: id match {ins / n7:.3f}; |area ratio − 1| median {np.median(arr):.4f}, max {max(arr):.3f}')
-# ======================= U8 stand-mapping internals (g05): node landscapes recomputed from the rasters with independent code (full disk; g05 uses a
+# ======================= U8 stand-mapping internals (g05): each stand's own landscape (disk at its centroid) recomputed from the rasters with independent code (full disk; g05 uses a
 #                         uniform 256-subsample, so compared as an unbiased estimate: signed errors across nodes)
 if os.environ.get('GV_SKIP_U8') == '1':                     # genveg_pipeline stage vup runs before the stand mapping; U8 runs in stage verify
     print('   (U8 skipped here: it checks the stand mapping, run after it in the verify stage)')
@@ -75,8 +75,7 @@ elif os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/
     NZ = np.load(f'{D}/stand_nodes.npz'); km = pickle.load(open(f'{D}/bayes_kmeans.pkl', 'rb')); a22, a25 = rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'), rasterio.open(f'{ROOT}/data/aef/aef_2025.tif')
     RP = int(1600 // 30) + 2; dd8 = []; sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet')
     Ssub = pd.read_parquet(f'{D}/stands.parquet'); cen = Ssub.groupby('stand_id')[['row', 'col']].mean()
-    from scipy.spatial import cKDTree
-    kt = cKDTree(NZ['nodes']); _, jj = kt.query(cen.loc[sv.stand_id.values].values); okn = (jj == sv.node.values).mean()
+    okn = (np.abs(NZ['nodes'][sv.node.values] - np.rint(cen.loc[sv.stand_id.values].values)).max(1) == 0).mean()   # each stand's landscape is centred on its own centroid
     for i in rng.choice(len(NZ['nodes']), 20, replace=False):
         r, c = NZ['nodes'][i]; L = land.read(1, window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=0)
         rr, cc = np.mgrid[1:2 * RP:3, 1:2 * RP:3]; rr, cc = rr.ravel(), cc.ravel(); m = (L[rr, cc] >= 1) & (L[rr, cc] <= 4) & (np.hypot(rr - RP, cc - RP) * 30 <= 1600)
@@ -87,8 +86,8 @@ elif os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/
         e22, e25 = m3(A2), m3(A5); hist = np.bincount(km.predict(e25.astype(np.float32)), minlength=32) / len(rr)
         x_ind = np.r_[e22.mean(0), e25.mean(0), hist]; dd8.append(NZ['XL'][i][:160] - x_ind)
     dd8 = np.array(dd8); sd8 = dd8.std(0, ddof=1); okd = sd8 > 1e-9; t8 = np.abs(dd8.mean(0)[okd]) / (sd8[okd] / np.sqrt(len(dd8)))
-    check('U8 g05: every stand uses its nearest landscape node; node landscape (AlphaEarth means + cluster histogram) = independent full-disk recomputation (unbiased)',
-          okn == 1.0 and (t8 > 3.5).mean() < 0.05 and np.abs(dd8[:, :128]).mean() < 0.02, f'nearest-node agreement {okn:.3f}; {len(dd8)} nodes: dims with significant bias {(t8 > 3.5).mean():.3f}, mean |Δ AEF| {np.abs(dd8[:, :128]).mean():.4f}')
+    check('U8 g05: every stand landscape is centred on the stand centroid; landscape (AlphaEarth means + cluster histogram) = independent full-disk recomputation (unbiased)',
+          okn == 1.0 and (t8 > 3.5).mean() < 0.05 and np.abs(dd8[:, :128]).mean() < 0.02, f'own-centroid agreement {okn:.3f}; {len(dd8)} nodes: dims with significant bias {(t8 > 3.5).mean():.3f}, mean |Δ AEF| {np.abs(dd8[:, :128]).mean():.4f}')
 else:
     print('   (U8 skipped: stand_nodes.npz / stand_veg_v3.node not yet written by g05)')
 # ======================= U9 Forest Explorer display: unit labels of the generative attributes match g07's conversions

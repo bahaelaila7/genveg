@@ -1,6 +1,7 @@
 """Generative vegetation v3 — stand mapping with CONSISTENT landscape descriptors (fix of g04's stand mapping, whose landscapes came from 4 footprints per stand
-and were not comparable with the plots' disks). Landscape descriptors on a 1 km grid over the area: all forest footprints (3x3, stride 3) within 1.6 km, the same
-uniform 256-subsample as the plots (g02b), the same descriptor (g04.landscape). Per stand: X_L of the nearest grid node; z ~ p(z | X_L, 2021) (MDN, saved by g04);
+and were not comparable with the plots' disks). Per stand, its OWN landscape: the forest footprints (3x3, stride 3) within 1.6 km of the stand's centroid, the
+same uniform 256-subsample as the plots (g02b; seed = stand id), the same descriptor (g04.landscape). (Until 2026-10-22 every stand took the descriptor of the
+nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, 2021) (MDN, saved by g04);
 optional likelihood weighting (USE_B=1, B's flow + heads saved by g04 — likelihood only; joint evidence of the stand's footprints = mean AlphaEarth distance); flow to 2025
 through the footprints' disturbance histories with the v2 flow (decoder-consistent; samples spread over the footprints); decode;
 the mapping-path calibration factors of g04 (validated there on held-out plots). Writes data/proto/gafl/stand_veg_v3.parquet and prints diagnostics (by status, correlation with TreeMap)."""
@@ -24,23 +25,31 @@ CAL = json.load(open(f'{D}/bayes_eval.json'))['calibration_log_factors_mapping_p
 G2.init(); land = G2._S['land']
 S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
 SA = torch.tensor(SF[:, :128]); SD = torch.tensor(SF[:, DS].reshape(-1, NY, NC + 2)); SS = torch.tensor(SF[:, SO])
-# ---- landscape grid (1 km) over the stands' extent, descriptors exactly as for the plots
-r0, r1, c0, c1 = S.row.min(), S.row.max(), S.col.min(), S.col.max(); step = 33; RP = int(1600 // 30) + 2
-nodes = [(r, c) for r in range(r0, r1 + step, step) for c in range(c0, c1 + step, step)]
-XLg = []; rng = np.random.default_rng(0)
-for (r, c) in nodes:
-    rr, cc, F = G2.feats(r - RP, c - RP, 2 * RP + 1, 2 * RP + 1); d = np.hypot(rr - RP, cc - RP) * 30; F = F[d <= 1600]
-    if len(F) > 256: F = F[rng.choice(len(F), 256, replace=False)]
-    if len(F) == 0: XLg.append(None); continue
-    F[:, SO] = (F[:, SO] - smu) / ssd; F = torch.tensor(F)
-    XLg.append(landscape(F[:, :128], F[:, DS].reshape(-1, NY, NC + 2), F[:, SO]))
-ok = [i for i, x in enumerate(XLg) if x is not None]; from scipy.spatial import cKDTree
-kt = cKDTree(np.array([nodes[i] for i in ok])); print('landscape nodes', len(ok), flush=True)
-np.savez(f'{D}/stand_nodes.npz', nodes=np.array([nodes[i] for i in ok]), XL=np.stack([XLg[i] for i in ok]))      # for gv_verify_upstream (U8)
+# ---- per-stand landscapes: footprint features once over the extent (global stride-3 grid, row bands), then each stand's own 1.6 km disk
+RP = int(1600 // 30) + 2; cen = S.groupby('stand_id')[['row', 'col']].mean()
+r0, r1, c0, c1 = int(cen.row.min()) - RP, int(cen.row.max()) + RP + 1, int(cen.col.min()) - RP, int(cen.col.max()) + RP + 1
+FR, FC, FF = [], [], []; BAND = 600                                                 # multiple of 3: the stride-3 grid continues across bands
+for rb in range(r0, r1, BAND):
+    rr, cc, F = G2.feats(rb, c0, min(BAND, r1 - rb) + 2, c1 - c0 + 2)
+    keep = rr <= min(BAND, r1 - rb)                                                   # rows of this band only (feats' grid starts at row 1 of the window)
+    FR.append(rr[keep] + rb); FC.append(cc[keep] + c0); FF.append(F[keep])
+FR, FC = np.concatenate(FR), np.concatenate(FC); FF = np.concatenate(FF); FF[:, SO] = (FF[:, SO] - smu) / ssd; FF = torch.tensor(FF)
+from scipy.spatial import cKDTree
+kf = cKDTree(np.stack([FR, FC], 1)); sids = cen.index.values; ctr = np.rint(cen.values).astype(int); XLs = {}
+for sid, (cr, cc_) in zip(sids, ctr):
+    ix = np.array(kf.query_ball_point([cr, cc_], 1600 / 30), dtype=int)
+    if len(ix) == 0: continue
+    if len(ix) > 256: ix = np.sort(np.random.default_rng(int(sid)).choice(ix, 256, replace=False))
+    F = FF[ix]; XLs[int(sid)] = landscape(F[:, :128], F[:, DS].reshape(-1, NY, NC + 2), F[:, SO])
+print(f'stand landscapes {len(XLs)} of {len(sids)} stands ({len(FR)} footprints in the extent)', flush=True)
+order = [int(x) for x in sids if int(x) in XLs]; node_of = {sid: k for k, sid in enumerate(order)}
+np.savez(f'{D}/stand_nodes.npz', nodes=np.array([ctr[list(sids).index(sid)] for sid in order]), XL=np.stack([XLs[sid] for sid in order]))   # for gv_verify_upstream (U8)
 USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []
 with torch.no_grad():
     for sid, g in S.groupby('stand_id'):
-        fp = g.index.values; _, j = kt.query([g.row.mean(), g.col.mean()]); xl = nx(XLg[ok[j]]).unsqueeze(0)
+        fp = g.index.values
+        if int(sid) not in XLs: continue
+        j = node_of[int(sid)]; xl = nx(XLs[int(sid)]).unsqueeze(0)
         zs = mdn.sample(xl, torch.tensor([2021.0]), Mz)[0]
         w = torch.ones(Mz)
         if USE_B:     # every footprint of the stand observes the SAME vegetation: tempered joint evidence = mean distance over the footprints
