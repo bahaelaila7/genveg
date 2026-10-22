@@ -134,7 +134,32 @@ def freerun_layer(L):
     return dict(type='circle', url=f"/proto/{L['id']}.geojson", props=props, color='err_BA',
                 note=f'{len(feats)} val plots at the PUBLIC (fuzzed) FIA coordinates; free run first -> last visit'), None
 
-KINDS = dict(stands=stands_layer, geojson_file=geojson_layer, raster=raster_layer, freerun=freerun_layer)
+def latent_layer(L):
+    """IWAE latent (posterior mean) of the raster window, encoded tile by tile with a 1-px halo, shown as its principal components 1-3 (RGB)."""
+    mp = src_path(L['model'])
+    if not os.path.exists(mp): return None, f'missing {mp}'
+    import torch, embed_iwae as EI
+    from features import Featurizer, open_sources
+    torch.set_num_threads(4); model, ck = EI.load(mp)
+    run_dir = os.path.dirname(os.path.dirname(os.path.realpath(mp)))              # data/derived/cache (the embed dir's parent)
+    fit = dict(np.load(src_path(L['fit']))); fz = Featurizer(fit); src = open_sources()
+    Z = np.full((r1 - r0, c1 - c0, ck['D']), np.nan, np.float32); T = 512
+    for r in range(r0, r1, T):
+        for c in range(c0, c1, T):
+            h, w = min(T, r1 - r), min(T, c1 - c); win = Window(c - 1, r - 1, w + 2, h + 2)
+            raw = fz.raw(src, win); z = EI.encode_tile(model, raw, fit)[1:-1, 1:-1]
+            Z[r - r0:r - r0 + h, c - c0:c - c0 + w] = z
+    fl = forest_mask(); v = Z.reshape(-1, Z.shape[-1]); v = v[np.isfinite(v).all(1)][::50]; mu = v.mean(0)
+    _, _, Vt = np.linalg.svd(v - mu, full_matrices=False); P = (Z - mu) @ Vt[:3].T
+    rgba = np.zeros((DH, DW, 4)); rgb = np.zeros((DH, DW, 3))
+    for j in range(3):
+        wv = warp(P[..., j].astype(np.float32), False); lo, hi = np.nanpercentile(wv[fl], [2, 98]); rgb[..., j] = np.clip((wv - lo) / (hi - lo), 0, 1) * 255
+    ok = np.isfinite(rgb).all(-1) & fl; rgba[ok, :3] = rgb[ok]; rgba[ok, 3] = 255
+    d = save_png(rgba, L['id']); d['legend'] = [dict(label=f"RGB = latent principal components 1 / 2 / 3 ({ck['D']}-d IWAE posterior mean, 90 m neighbourhood), forest land only", color=None)]
+    d['note'] = f"embedding {os.path.relpath(os.path.realpath(mp), ROOT)}"
+    return d, None
+
+KINDS = dict(stands=stands_layer, geojson_file=geojson_layer, raster=raster_layer, freerun=freerun_layer, latent=latent_layer)
 mf = f'{OUT}/manifest.json'; man = json.load(open(mf)) if os.path.exists(mf) else dict(layers=[])
 old = {l['id']: l for l in man['layers']}; layers = []
 for L in CFG['layers']:
