@@ -67,7 +67,15 @@ g = [v['gain'] for v in out['heldout'].values() if isinstance(v, dict)]
 out['mean_gain'] = float(np.mean(g)) if g else float('nan')
 sh = [v['share'] for v in out['heldout'].values() if isinstance(v, dict) and v['headroom'] >= CFG['metrics']['headroom_min']]
 out['mean_share'] = float(np.mean(sh)) if sh else float('nan')        # THE ranking metric: share of the blocks' unexplained variance captured
+# tile-seam artifact: share of forest pixel pairs ACROSS a superpixel-tile seam that are stand boundaries vs the share among all pairs (1 = none)
+Tt = int(SEG['sp_tile']); colg = np.arange(c0, c1 - 1) + 1; rowg = np.arange(r0, r1 - 1) + 1
+pv = (A[:, :-1] > 0) & (A[:, 1:] > 0); ph = (A[:-1] > 0) & (A[1:] > 0); bv = pv & (A[:, :-1] != A[:, 1:]); bh = ph & (A[:-1] != A[1:])
+sv, sh = colg % Tt == 0, rowg % Tt == 0
+seam_pairs = pv[:, sv].sum() + ph[sh, :].sum()
+if seam_pairs > 0:
+    seam_rate = (bv[:, sv].sum() + bh[sh, :].sum()) / seam_pairs; all_rate = (bv.sum() + bh.sum()) / (pv.sum() + ph.sum())
+    out['seam_boundary_rate'] = float(seam_rate); out['boundary_rate'] = float(all_rate); out['seam_excess'] = float(seam_rate / all_rate)
 json.dump(out, open(f'{OUT}/metrics.json', 'w'), indent=1)
 print(json.dumps(out['heldout']))
 print(f"stands {K} (block units {out['block_units']}, side {side} px); area-weighted median {out['wmedian_ha']:.1f} ha; area < MMU {100*out['small_area_share']:.2f} %; held-out R² gain over equal-count blocks: "
-      + ', '.join(f"{os.path.basename(k).split('.')[0]} {v['gain']:+.3f}" for k, v in out['heldout'].items() if isinstance(v, dict)) + f" | mean gain {out['mean_gain']:+.3f} | mean SHARE of the blocks' unexplained variance {out['mean_share']:.3f}")
+      + ', '.join(f"{os.path.basename(k).split('.')[0]} {v['gain']:+.3f}" for k, v in out['heldout'].items() if isinstance(v, dict)) + f" | mean gain {out['mean_gain']:+.3f} | mean SHARE of the blocks' unexplained variance {out['mean_share']:.3f}" + (f" | tile-seam excess {out['seam_excess']:.2f}x" if 'seam_excess' in out else ''))

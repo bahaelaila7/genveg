@@ -18,7 +18,7 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
 | `land` | `10_forest_land.py` | full | `forest_land.*` | `land.tif` status classes 0/1 forest/2 harvested/3 regenerating/4 forest_unmapped/9 converted, `loss_year.tif`, `land_summary.json` |
 | `clean` | `11_land_clean.py` | full | `segmentation.mmu_ha`, `clean.*` | `land_clean.tif`: status patches < MMU take the class of the nearest larger patch |
 | `fit` | `20_fit_features.py` | full | `segmentation.aef_pcs`, `fit.*` | `feature_fit.npz`: AEF-2025 PCA basis, scales, TreeMap / soil standardisation |
-| `sp` | `21_superpixels.py` | window tiles | weights, `superpixel_ha`, `slic_compactness`, `barriers`, `sp_tile` | `sp.tif`, `sp_stats.npz`: SLIC per tile × status, never across barriers / statuses / tiles; ids in tile order (deterministic) |
+| `sp` | `21_superpixels.py` | window tiles | weights, `superpixel_ha`, `slic_compactness`, `barriers`, `sp_tile`, `sp_seam_halo` | `sp.tif`, `sp_stats.npz`: SLIC per tile × status, never across barriers / statuses; tile seams reconciled (halo); ids in tile order (deterministic) |
 | `merge` | `22_merge.py` | window | `merge_threshold` (auto: calibrated to `target_median_ha`), `max_ha`, `mmu_ha`, `shape_weight`, `status_is_hard` | `sp2stand.npy`, `stand_feat.npz` |
 | `finalize` | `23_finalize.py` | window | `mmu_ha`, `status_is_hard`, `finalize.*` | `stands.tif`, `stands.gpkg` (polygons + attributes), `generalisation.json` |
 | `verify` | `stands_verify.py` | window | `verify.*` | run dir `verify.txt` (PASS/FAIL; non-zero exit on FAIL) |
@@ -58,6 +58,10 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
    - soil PCs (`soil`).
 4. **Superpixels.** SLIC of about `superpixel_ha` per tile and status, inside forest land minus barrier pixels (roads, water, parcel lines). They are
    split into 4-connected parts.
+   **Seam reconciliation** (`sp_seam_halo`, default 16 px since 2026-10-22): each tile's SLIC runs on the tile plus a 16-px halo of its neighbours;
+   a superpixel cut by a tile seam is re-joined with the one across the seam when both tiles' overlap is ≥ 0.5 and the status is the same. Baker:
+   1,511 joins; stand boundaries on the 512-px seams fall from 1.76× to 1.20× the boundary rate elsewhere (`metrics.json` `seam_excess`), held-out
+   share 0.1971 → 0.1984, all checks pass. Without tiles (Baker as one 2048-px tile) SLIC would need ≈ 263 GiB.
 5. **Merging.** Region-adjacency graph over superpixels; barriers disconnect it.
    - Each round, mutual-best pairs merge when their Ward cost n_a n_b/(n_a+n_b)·|μ_a−μ_b|² × (1 + shape_weight·(1 − shared / min perimeter)) is below the
      threshold. Pairs must have the same status, and the merged size must stay ≤ `max_ha`.

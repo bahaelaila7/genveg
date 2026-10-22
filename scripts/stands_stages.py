@@ -19,7 +19,7 @@ STAGES = {
                      inputs=AEF + SOIL + TM),
     'sp':       dict(script='21_superpixels.py', mods=['common.py', 'features.py', 'stands_cfg.py', 'embed_iwae.py'], keys=['segmentation.weights', 'segmentation.superpixel_ha',
                      'segmentation.slic_compactness', 'segmentation.barriers', 'segmentation.aef_pcs', 'segmentation.sp_tile', 'segmentation.slic_scale', 'segmentation.slic_range',
-                     'segmentation.slic_groups', 'segmentation.treemap_smooth_px', 'segmentation.merge_groups'], up=['clean', 'fit', 'embed'], windowed=True,
+                     'segmentation.slic_groups', 'segmentation.treemap_smooth_px', 'segmentation.merge_groups', 'segmentation.sp_seam_halo'], up=['clean', 'fit', 'embed'], windowed=True,
                      inputs=AEF + SOIL + TM + ['{barriers}']),
     'merge':    dict(script='22_merge.py', mods=['features.py', 'rag_merge.py', 'graph_slic.py', 'stands_cfg.py'], keys=['segmentation.merge_method', 'graph_slic', 'segmentation.merge_threshold', 'segmentation.target_median_ha',
                      'segmentation.max_ha', 'segmentation.mmu_ha', 'segmentation.shape_weight', 'segmentation.status_is_hard', 'merge'], up=['sp'], windowed=False, inputs=[]),
