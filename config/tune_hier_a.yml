@@ -1,0 +1,12 @@
+# Hierarchical segmentation A (user, 2026-10-22): a finer SLIC base level under the same Ward merge — superpixel size with SLIC on raw AlphaEarth (c 0.15).
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]
+  small_area_pct_max: 2.0
+variants:
+  - [segmentation.superpixel_ha=0.25]
+  - [segmentation.superpixel_ha=0.5]
+  - [segmentation.superpixel_ha=2.0]
+report_window: [12288, 14336, 16384, 18432]
+report_top: 3
