@@ -10,7 +10,7 @@ Output data/derived/tune/<spec name>/results.csv + results.md: overrides, verify
 gain per layer and their mean (the ranking key; size constraints of the spec — wmedian_ha [lo, hi], max small_area_share — are flagged, not optimised)."""
 import os, sys, json, itertools, random, time, yaml, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import stands_cfg as SC
+import stands_stages as SC
 from stands_pipeline import run
 spec_path = sys.argv[1]; spec = yaml.safe_load(open(spec_path)); NAME = os.path.splitext(os.path.basename(spec_path))[0]
 base = os.path.join(SC.ROOT, spec.get('base', 'config/pilot.yml')); stages = spec.get('stages', ['sp', 'merge', 'finalize', 'verify', 'metrics'])
@@ -35,12 +35,12 @@ for i, sets in enumerate(V):
     RD, summ = run(base, sets, spec.get('window'), f'{NAME}__{i}', full, quiet=True)
     m = json.load(open(f'{RD}/metrics.json')); vf = summ['stages'].get('verify', 0)
     r = dict(variant=i, sets='; '.join(sets) or '(base)', verify_fails=vf, stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
-             small_area_pct=round(100 * m['small_area_share'], 2), mean_gain=round(m['mean_gain'], 4))
+             small_area_pct=round(100 * m['small_area_share'], 2), mean_share=round(m['mean_share'], 4), mean_gain=round(m['mean_gain'], 4))
     for k, v in m['heldout'].items():
         if isinstance(v, dict): r['gain:' + os.path.basename(k).split('.')[0]] = v['gain']
     lo, hi = cons.get('wmedian_ha', [0, 1e9]); r['ok_size'] = lo <= m['wmedian_ha'] <= hi and 100 * m['small_area_share'] <= cons.get('small_area_pct_max', 100)
     rows.append(r); print(f'    {r} ({time.time()-t0:.0f}s)', flush=True)
-    df = pd.DataFrame(rows).sort_values(['ok_size', 'mean_gain'], ascending=[False, False])
+    df = pd.DataFrame(rows).sort_values(['ok_size', 'mean_share'], ascending=[False, False])
     df.to_csv(f'{OUTD}/results.csv', index=False)
     md = '| ' + ' | '.join(df.columns) + ' |\n|' + '---|' * len(df.columns) + '\n' + ''.join('| ' + ' | '.join(str(v) for v in r) + ' |\n' for r in df.itertuples(index=False))
     open(f'{OUTD}/results.md', 'w').write(f'# Stand-delineation tuning {NAME} (base {os.path.relpath(base, SC.ROOT)})\n\n' + md)
@@ -53,7 +53,7 @@ if spec.get('report_window'):
         RD, summ = run(base, V[i], spec['report_window'], f'{NAME}__report{i}', ['land', 'clean', 'fit'] + [s for s in stages if s not in ('land', 'clean', 'fit')], quiet=True)
         m = json.load(open(f'{RD}/metrics.json'))
         rep.append(dict(variant=i, sets='; '.join(V[i]) or '(base)', verify_fails=summ['stages'].get('verify', 0), stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
-                        small_area_pct=round(100 * m['small_area_share'], 2), mean_gain=round(m['mean_gain'], 4),
+                        small_area_pct=round(100 * m['small_area_share'], 2), mean_share=round(m['mean_share'], 4), mean_gain=round(m['mean_gain'], 4),
                         **{'gain:' + os.path.basename(k).split('.')[0]: v['gain'] for k, v in m['heldout'].items() if isinstance(v, dict)}))
         print(f'  report window: {rep[-1]}', flush=True)
     R = pd.DataFrame(rep); R.to_csv(f'{OUTD}/report_window.csv', index=False)

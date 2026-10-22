@@ -15,7 +15,7 @@ a variant re-runs only the stages its changes affect. data/derived/runs/<NAME>/ 
 NAME defaults to the config name (no --set) or <config name>_<finalize hash>."""
 import os, sys, json, time, argparse, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import stands_cfg as SC
+import stands_stages as SC
 
 def resolve(config, sets, window):
     cfg = SC.apply_overrides(yaml.safe_load(open(config)), sets)

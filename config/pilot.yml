@@ -18,6 +18,12 @@ segmentation:
   superpixel_ha: 1.0          # SLIC superpixel size (building blocks; smaller than the MMU)
   sp_tile: 512                # superpixel tile size [px] (superpixels never cross tile edges; the RAG merge joins them)
   slic_compactness: 0.3
+  slic_scale: tile            # tile = scikit-image's own min-max rescale per tile (its effective compactness then follows each tile's most extreme
+                              # feature value, in practice the AEF-change outliers); fixed = compactness rescaled per tile so features / space weigh the
+                              # same everywhere: as if every tile spanned slic_range
+  slic_range: 5.0             # reference feature range for slic_scale: fixed (the measured tile ranges are 3.8-5.5)
+  slic_groups: [aef, aef_old, aef_change, treemap, soil]   # feature groups SLIC sees (the merge always uses all of them)
+  treemap_smooth_px: 0        # > 0: masked mean of the TreeMap channels over n x n px for SLIC only (TreeMap imputes a plot per pixel: salt-and-pepper)
   merge_threshold: auto       # Ward threshold; auto = calibrate to target_median_ha
   target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
   shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
@@ -38,4 +44,6 @@ finalize:
 verify:
   attr_sample: 200            # stands whose attributes are recomputed from pixels
 metrics:
+  headroom_min: 0.05          # layers whose equal-count blocks already reach R² > 1 - this have no headroom: left out of the mean share
+  oracle: false               # also compute the oracle ceiling (superpixels merged on the layer itself to the same unit count; slow: base / final runs)
   heldout: [hansen/treecover2000.tif, terrain/elevation.tif, terrain/slope.tif, terrain/tpi300.tif, derived/tree_cover.tif]   # layers NOT used by the segmentation

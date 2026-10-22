@@ -1,0 +1,19 @@
+# Is SLIC directly on the feature stack the right over-segmentation? (2026-10-22) — scikit-image rescales the stack per tile by its global min-max (set by
+# AEF-change outliers), and at the neighbour scale the TreeMap channels (a plot imputed per pixel: salt-and-pepper) weigh as much as AlphaEarth.
+# Ranked by mean_share (share of the equal-count blocks' unexplained variance captured, layers with headroom only); top 3 re-run on the report window.
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]
+  small_area_pct_max: 2.0
+variants:
+  - [segmentation.slic_scale=fixed]
+  - [segmentation.slic_scale=fixed, "segmentation.slic_groups=[aef, aef_old, aef_change]"]
+  - [segmentation.slic_scale=fixed, "segmentation.slic_groups=[aef, aef_old, aef_change, soil]"]
+  - [segmentation.slic_scale=fixed, segmentation.treemap_smooth_px=3]
+  - [segmentation.slic_scale=fixed, segmentation.treemap_smooth_px=5]
+  - [segmentation.slic_scale=fixed, segmentation.slic_compactness=0.15]
+  - [segmentation.slic_scale=fixed, segmentation.slic_compactness=0.6]
+  - [segmentation.slic_scale=fixed, "segmentation.slic_groups=[aef, aef_old, aef_change]", segmentation.slic_compactness=0.6]
+report_window: [12288, 14336, 16384, 18432]
+report_top: 3

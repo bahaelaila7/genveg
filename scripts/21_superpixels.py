@@ -16,6 +16,20 @@ SEG = CFG['segmentation']; SP_PX = max(4, int(round(SEG.get('superpixel_ha', 1.0
 from stands_cfg import barrier_files
 BARRIERS = barrier_files(CFG)                    # configured barriers; a missing raster is an error, not a silent skip
 _fz = None
+from scipy.ndimage import uniform_filter
+def slic_input(X, raw):
+    """The SLIC input: the configured feature groups of X (column blocks in features() order), TreeMap optionally smoothed (masked mean)."""
+    dims = [('aef', _fit['aef_comp'].shape[0]), ('aef_old', 8), ('aef_change', 1), ('treemap', len(TM_ATTRS)), ('soil', _fit['soil_comp'].shape[0])]
+    assert sum(k for _, k in dims) == X.shape[-1], 'feature block layout changed'
+    parts, off = {}, 0
+    for g, k in dims: parts[g] = X[..., off:off + k]; off += k
+    n = SEG['treemap_smooth_px']
+    if n > 0:
+        v = np.isfinite(raw['tma']).all(-1).astype(np.float32); den = uniform_filter(v, n, mode='constant')
+        parts['treemap'] = np.stack([uniform_filter(parts['treemap'][..., j] * v, n, mode='constant') / np.maximum(den, 1e-6) for j in range(parts['treemap'].shape[-1])], -1) * v[..., None]
+    bad = set(SEG['slic_groups']) - set(parts)
+    if bad: raise KeyError(f'slic_groups: unknown groups {bad}')
+    return np.concatenate([parts[g] for g in SEG['slic_groups']], -1).astype(np.float32)
 
 def init():
     global _fz, _src, _fit, _bar
@@ -31,7 +45,7 @@ def work(job):
     if fl.sum() < 4: return ti, r, c, None, None
     bar = np.zeros(land.shape, bool)
     for b in _bar: bar |= b.read(1, window=win) > 0
-    raw = _fz.raw(_src, win); X = _fz.features(raw)
+    raw = _fz.raw(_src, win); X = _fz.features(raw); Y = slic_input(X, raw)
     lab = np.zeros(land.shape, np.int32); nxt = 1
     for st in (1, 2, 3, 4):
         m = fl & ~bar & (land == st)
@@ -40,7 +54,9 @@ def work(job):
         if npx < SP_PX * 2:
             from scipy import ndimage
             l, n = ndimage.label(m); l[l > 0] += nxt - 1; lab = np.where(m, l, lab); nxt += n; continue
-        s = slic(X, n_segments=max(1, npx // SP_PX), compactness=SEG.get('slic_compactness', 0.3), mask=m,
+        comp = SEG['slic_compactness']
+        if SEG['slic_scale'] == 'fixed': comp = comp * float(Y[m].max() - Y[m].min()) / SEG['slic_range']   # undo scikit-image's per-tile min-max
+        s = slic(Y, n_segments=max(1, npx // SP_PX), compactness=comp, mask=m,
                  channel_axis=-1, convert2lab=False, enforce_connectivity=True, start_label=1, max_num_iter=10)
         s = s.astype(np.int32); s[s > 0] += nxt - 1
         lab = np.where(m, s, lab); nxt = int(lab.max()) + 1

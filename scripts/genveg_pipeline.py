@@ -19,7 +19,7 @@ skipped; --force re-runs it; --adopt records existing outputs as current WITHOUT
 Logs: data/proto/<data>/pipeline_logs/<stage>.log."""
 import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from stands_cfg import apply_overrides
+from stands_stages import apply_overrides
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
 LIB = ['common.py', 'features.py', 'stands_cfg.py', 'stand_runs.py']
 STAGES = {   # stage: scripts (code hash), config sections, upstream stages, stand-run stages it depends on
