@@ -1,0 +1,52 @@
+% ---------------------------------------------------------------- climate model and CO2 (inputs, continued)
+\begin{frame}{Climate model: from PRISM to the simulated future}
+\centering
+\begin{tikzpicture}[every node/.append style={minimum height=0.85cm}]
+\node[dat=2.6cm, anchor=west] (pr) at (0,0) {PRISM monthly 4\,km, 1895–2025: Tmin, Tmax, Tmean, Tdmean, precip., VPD min/max};
+\node[fb=2.5cm, anchor=west] (l4) at (3.05,0) {spatial mean per EPA L4 polygon (967 CONUS; 99 in Region 4)};
+\node[repl=3.0cm, anchor=west] (bl) at (6.0,0) {\textbf{baseline} 2025–2150: AutoETS for Tmin / Tmax (no trend); 1995–2024 climatology for precipitation, VPD};
+\node[repl=2.9cm, anchor=west] (sc) at (9.45,0) {\textbf{scenario}: user changes (add / multiply, step or ramp, months); Tmax $\ge$ Tmin, precip.\ $\ge$ 0};
+\node[drv=2.9cm, anchor=west] (pn) at (9.45,-1.65) {\textbf{PnET}: monthly Tmin, Tmax, precip.; derived PAR, VPD, day length};
+\node[drv=2.9cm, anchor=west] (h3) at (6.0,-1.65) {\textbf{HBAD3P}: water index $W$ = AET/PET (Thornthwaite, AWC); drought anomaly};
+\node[off=2.5cm, anchor=west] (no) at (3.05,-1.65) {Biomass Succession, HBAD v1: no climate input};
+\draw[ar] (pr) -- (l4); \draw[ar] (l4) -- (bl); \draw[ar] (bl) -- (sc); \draw[ar] (sc) -- (pn); \draw[ar] (sc.south west) -- (h3.north east);
+\end{tikzpicture}
+
+\vspace{0.3em}
+\begin{columns}[T]
+\begin{column}{0.56\textwidth}
+\figw[width=\linewidth,height=0.36\textheight,keepaspectratio]{figures/reused/climate_benchmark.pdf}
+\end{column}
+\begin{column}{0.42\textwidth}
+\scriptsize
+\begin{itemize}\setlength\itemsep{1pt}
+\item method chosen by a rolling-origin backtest (20 Region-4 L4s, origins 1964–2014): AutoETS best for Tmin / Tmax at 10 and 30 yr (annual-mean error 0.57–0.61\,°C); trends and Prophet worse at 30 yr
+\item precipitation is unpredictable: every method within $\approx$3\,\% $\Rightarrow$ climatology
+\item the baseline has no warming trend and no interannual variability: warming / drying enter as scenarios
+\end{itemize}
+\end{column}
+\end{columns}
+\data{\texttt{pan\_climate.duckdb}; backtest \texttt{scripts/bench\_main.csv}; scenario rules \texttt{julia/ClimateScenario.jl}.}
+\end{frame}
+
+\begin{frame}{Climate: observed, baseline and a scenario for one ecoregion}
+\figw[width=\linewidth,height=0.66\textheight,keepaspectratio]{figures/new/fig_climate_l4.png}
+\data{L4 8.3.5.65m (Southeastern Plains), annual means of the monthly series in \texttt{pan\_climate.duckdb}: PRISM 1895–2024, baseline forecast 2025–2100; example scenario = Tmean $+2$\,°C and precipitation $-10$\,\% ramped 2025 $\rightarrow$ 2075, then held (ClimateScenario \texttt{ramp}). Scenarios are what Forest Explorer users set.}
+\end{frame}
+
+\begin{frame}{CO$_2$: NOAA observations and SSP pathways}
+\begin{columns}[T]
+\begin{column}{0.64\textwidth}
+\figw[width=\linewidth,height=0.70\textheight,keepaspectratio]{figures/new/fig_co2.png}
+\end{column}
+\begin{column}{0.34\textwidth}
+\footnotesize
+\begin{itemize}\setlength\itemsep{2pt}
+\item observed years: NOAA Mauna Loa annual means (calibration, hindcasts)
+\item future: SSP2-4.5 or SSP5-8.5 global-mean concentrations (RCMIP v5.1.0, Meinshausen et al.\ 2020), decadal values interpolated; or constant / linear
+\item in PnET: Amax $\times\frac{C_i-40}{C_i+80}\cdot\frac{430}{310}$, $C_i=C_a(0.875-0.075\,\text{FolN})$; water-use efficiency rises with $C_a-C_i$
+\end{itemize}
+\end{column}
+\end{columns}
+\data{\texttt{landis\_region4/data\_r4/co2\_annual.csv} (NOAA MLO 1959–2025); \texttt{pan\_climate/README.md} (RCMIP values); Pan \texttt{PnET/plugin.jl} (\texttt{sublayer!}: \texttt{delamax}, \texttt{jco2}).}
+\end{frame}

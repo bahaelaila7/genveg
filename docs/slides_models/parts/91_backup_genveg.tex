@@ -1,0 +1,316 @@
+% Backup: generative vegetation, step by step (code: standmap/scripts g02b, g02e, g02g, g02j, g03b, g04, g05, g06, gv_verify; run data/proto/gafl_pipe)
+\def\gvsrc#1{\src{\texttt{standmap/scripts/}#1; run \texttt{data/proto/gafl\_pipe}}}
+
+\begin{frame}{Backup: generative vegetation — the pipeline, stage by stage}
+\centering
+\begin{tikzpicture}[node distance=0.25cm and 0.28cm, every node/.append style={minimum height=0.85cm}]
+\node[dat=2.3cm] (t) {\textbf{table} (g02b): visits, tokens, pairs, candidates, prior};
+\node[fb=2.0cm, right=of t] (r) {\textbf{records} (g02e): typed FIA events, quiet periods};
+\node[fb=2.1cm, right=of r] (h) {\textbf{history} (g02g): consistent footprints per plot};
+\node[fb=2.0cm, right=of h] (s) {\textbf{stands\_fp} (g02j): footprints of the stands};
+\node[off=1.7cm, right=of s] (vu) {\textbf{vup}: upstream checks};
+\node[repl=2.3cm, below=0.75cm of vu.south east, anchor=north east] (tr) {\textbf{train} (g03b): encoder, flow, decoder, Q; 2 seeds};
+\node[fb=2.0cm, left=of tr] (dy) {\textbf{dynamics} (g06): held-out disturbance response};
+\node[repl=2.3cm, left=of dy] (ds) {\textbf{downscale} (g04): prior A, likelihood B, calibration};
+\node[repl=2.0cm, left=of ds] (mp) {\textbf{map} (g05): stand vegetation};
+\node[dat=2.0cm, left=of mp] (fe) {\textbf{fe}: Forest Explorer layer};
+\node[off=2.0cm, below=0.5cm of fe] (vf) {\textbf{verify}: 45 independent checks};
+\draw[ar] (t) -- (r); \draw[ar] (r) -- (h); \draw[ar] (h) -- (s); \draw[ar] (s) -- (vu); \draw[ar] (vu) -- (tr);
+\draw[ar] (tr) -- (dy); \draw[ar] (dy) -- (ds); \draw[ar] (ds) -- (mp); \draw[ar] (mp) -- (fe); \draw[ar] (fe) -- (vf);
+\end{tikzpicture}
+
+\vspace{0.4em}
+\footnotesize
+\begin{itemize}\setlength\itemsep{1pt}
+\item one driver \texttt{genveg\_pipeline.py} + \texttt{config/genveg.yml}; each stage hashed (config, code, upstream, pixel content of the stand rasters) and skipped when current
+\item inputs: FIADB (read-only), \texttt{curated\_trees}, AlphaEarth 2022 / 2025, LANDFIRE disturbance 2000–2025, Hansen loss year, SOLUS, the stand run's \texttt{land\_clean} and \texttt{stands.tif}
+\end{itemize}
+\src{\texttt{standmap/docs/GENVEG\_PIPELINE.md}, \texttt{scripts/genveg\_pipeline.py}}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 1a, visits and cohort tokens}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.35cm, every node/.append style={minimum height=0.85cm}]
+\node[dat=2.6cm] (db) {FIADB PLOT, COND, TREE; \texttt{curated\_trees} (imputed ages)};
+\node[fb=2.9cm, right=of db] (vis) {\textbf{visit} = (plot, date) since 2000 with a forested condition; bare visits kept};
+\node[fb=3.1cm, right=of vis] (dens) {densities per \emph{forested} area: TPA\_UNADJ / forest share of subplot (trees) or microplot (saplings)};
+\node[repl=3.1cm, right=of dens] (tok) {\textbf{token} per (species key, 10-yr age class): $N$, QMD, $H$, mean age, CR};
+\node[fb=2.6cm, below=0.6cm of tok] (sl) {decoder target: 18 keys $\times$ 16 age classes = 288 slots};
+\node[fb=2.6cm, left=of sl] (pr) {\textbf{pairs} = consecutive visits of a plot};
+\draw[ar] (db) -- (vis); \draw[ar] (vis) -- (dens); \draw[ar] (dens) -- (tok); \draw[ar] (tok) -- (sl); \draw[ar] (vis.south) |- (pr.west);
+\end{tikzpicture}
+
+\vspace{0.5em}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item species keys: the 16 commonest live species + catch-alls \_H (hardwood), \_S (softwood)
+\item age class $=\lfloor$age/10$\rfloor$, clipped to 0–15; $N$ = $\sum$ TPA$\cdot$2.471/share; QMD TPA-weighted quadratic mean; $H$, age, CR TPA-weighted means
+\end{itemize}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item table: 8,712 plots, 34,300 visits, 270,488 tokens ($\le$32 per visit), 25,588 pairs
+\item vetting: visits with forest share $<$ 0.25 excluded from training (inflated densities)
+\end{itemize}
+\end{column}
+\end{columns}
+\gvsrc{\texttt{g02b\_build\_gafl.py} (visits, tokens, pairs); checks T1a–T1j}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 1b, candidate footprints and their features}
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\centering
+\begin{tikzpicture}
+\draw[pMuted, dashed] (0,0) circle (1.75);
+\node[font=\tiny, text=pMuted] at (0,1.95) {fuzz disk, $r$ = 1.6\,km around the public coordinates};
+\foreach \x/\y in {-1.1/0.4,-0.6/-0.9,0.2/0.9,0.9/-0.3,-0.2/-0.2,0.6/0.5,-1.0/-0.5,1.2/0.6,0.3/-1.2,-0.5/1.1,1.0/-1.0,-1.3/0.0}
+  \draw[pMoss, fill=pMoss!25] (\x-0.09,\y-0.09) rectangle (\x+0.09,\y+0.09);
+\draw[pAmber, fill=pAmber!40, thick] (0.6-0.09,0.5-0.09) rectangle (0.6+0.09,0.5+0.09);
+\node[font=\tiny, anchor=west] at (0.75,0.5) {candidate $c$ (3$\times$3 px = 90\,m)};
+\fill[pRust] (0,0) circle (0.05); \node[font=\tiny, anchor=north] at (0,-0.05) {public plot};
+\end{tikzpicture}
+
+\scriptsize footprints on forest land (status 1–4), stride 3\,px; $\le$256 kept per plot (high-prior stratum + random fill), each with an inverse inclusion weight so disk statistics stay unbiased
+\end{column}
+\begin{column}{0.52\textwidth}
+\centering\scriptsize footprint feature vector (394-d)\par\smallskip
+\begin{tikzpicture}[x=0.95cm, y=0.55cm]
+\draw[fill=pSky!25] (0,0) rectangle (1.6,1) node[midway, align=center, font=\tiny] {AEF 2022\\64};
+\draw[fill=pSky!40] (1.6,0) rectangle (3.2,1) node[midway, align=center, font=\tiny] {AEF 2025\\64};
+\draw[fill=pAmber!25] (3.2,0) rectangle (5.6,1) node[midway, align=center, font=\tiny] {disturbance\\26 yr $\times$ 10};
+\draw[fill=pBark!25] (5.6,0) rectangle (6.2,1) node[midway, align=center, font=\tiny] {soil\\6};
+\end{tikzpicture}
+
+\smallskip
+\begin{itemize}\setlength\itemsep{1pt}
+\item AlphaEarth: 3$\times$3 mean of the de-quantised 64-d embedding
+\item per year 2000–2025: fraction of the 9 pixels in 8 LANDFIRE classes (harvest, thin, fire, insects/disease, weather, chemical, development, unknown change) at the event's calendar year, max severity, Hansen loss fraction
+\item SOLUS 0–30\,cm at the centre: clay, sand, SOC, AWC, pH, restrictive depth
+\item 2.19 M candidate rows in all
+\end{itemize}
+\end{column}
+\end{columns}
+\gvsrc{\texttt{g02b\_build\_gafl.py} (\texttt{feats}, \texttt{plot\_job}); checks T3a–T3i, T5}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 2, FIA records, location prior, consistent histories}
+\scriptsize
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}lp{2.6cm}cc@{}}
+\toprule
+FIA record & compatible evidence & window & LR \\
+\midrule
+T10 cutting & harvest, thin, unknown, Hansen & $\pm$1 & 4 \\
+T20 site preparation & harvest, chem., fire, unknown, Hansen & $\pm$1 & 4 \\
+T30 artificial regen. & harvest, chem., unknown, Hansen & $-$2..$+$1 & 4 \\
+T40 natural regen. & harvest, fire, unknown, Hansen & $-$2..$+$1 & 4 \\
+T50 other treatment & thin, chem. & $\pm$1 & 2 \\
+crown fire & fire, Hansen & $\pm$1 & 4 \\
+ground fire, insects, weather, human & own class & $\pm$1 & 2 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+classes and lifts from the data (\texttt{g09}): e.g.\ cutting $\rightarrow$ harvest $\times$4.4–4.8, Hansen $\times$2.5–2.8; mild records never match Hansen
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{tikzpicture}[node distance=0.28cm, every node/.append style={minimum height=0.75cm}]
+\node[dat=5.2cm] (e) {COND TRT / DSTRB codes of the forested conditions $\rightarrow$ typed events (year)};
+\node[fb=5.2cm, below=of e] (c) {clusters: records within 2\,yr = one event (union of evidence, max LR)};
+\node[repl=5.2cm, below=of c] (w) {prior $w_c$ = $\prod$ LR if footprint $c$ shows compatible evidence in the window; $\times$0.25 if a quiet period (no code) shows stand-replacing evidence; $\times$ inclusion weight};
+\node[repl=5.2cm, below=of w] (h) {history-consistent set: every detectable cluster (LR $\ge$ 4) matched, no quiet period violated; constraints applied in time order, one that empties the set is skipped};
+\draw[ar] (e) -- (c); \draw[ar] (c) -- (w); \draw[ar] (w) -- (h);
+\end{tikzpicture}
+\end{column}
+\end{columns}
+
+\smallskip
+\muted{The set constrains which disturbance \emph{histories} a plot can have, not where it is: held-out location information $\approx$0.003 nats per plot.}
+\gvsrc{\texttt{g02b} (\texttt{EVK}, \texttt{clusters}, \texttt{prior\_weights}), \texttt{g02e\_fia\_records.py}, \texttt{g02g\_history\_consistency.py}; checks T3f, T7, T10}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 3, model architecture}
+\centering
+\begin{tikzpicture}[every node/.append style={minimum height=0.8cm}]
+% row 1: encoder
+\node[dat=2.2cm, anchor=west] (tok) at (0,0) {visit tokens: key, age class, $\ln N$, $\ln$QMD, $H/30$, CR};
+\node[repl=2.6cm, anchor=west] (phi) at (2.65,0) {embed key (8), age (4) + 5 values; $\varphi$: 17$\rightarrow$64$\rightarrow$64};
+\node[repl=2.0cm, anchor=west] (pool) at (5.7,0) {mean $\oplus$ max pool $\oplus$ year};
+\node[repl=2.4cm, anchor=west] (rho) at (8.15,0) {$\rho$: 129$\rightarrow$64$\rightarrow$16; $3\tanh(\cdot/3)$};
+\node[shared=1.4cm, anchor=west] (z) at (11.0,0) {$z\in\mathbb R^{16}$};
+% row 2: dynamics
+\node[drv=2.2cm, anchor=west] (cand) at (0,-1.6) {candidate: history, soil, AlphaEarth};
+\node[repl=4.1cm, anchor=west] (fl) at (2.65,-1.6) {\textbf{flow}: $\frac{dz}{dt}=-(\frac1\tau+g)\odot z+g\odot3\tanh A$, $g=\sigma(\text{MLP}_{22\to64\to16}[z,\text{soil}])$};
+\node[repl=2.9cm, anchor=west] (jp) at (7.2,-1.6) {\textbf{jump} at events: $z\mathrel{+}=\tanh J([z,\text{ev}_{10}])$, $J$: 26$\rightarrow$64$\rightarrow$16};
+\node[repl=2.2cm, anchor=west] (hd) at (10.55,-1.6) {\textbf{heads} 16$\rightarrow$64: $z_{2022}$, $z_{2025}$ $\rightarrow$ AEF};
+% row 3: decoder, Q
+\node[repl=4.1cm, anchor=west] (dec) at (2.65,-3.15) {\textbf{decoder} 16$\rightarrow$128$\rightarrow$288$\times$5: per slot presence logit, $\ln N$, $\ln$QMD, $H$, CR};
+\node[repl=5.6cm, anchor=west] (q) at (7.2,-3.15) {\textbf{Q} (inverse encoder): candidate features 394$\rightarrow$256$\rightarrow$128$\rightarrow$(mean, log sd) of $z_{2025}$};
+\draw[ar] (tok) -- (phi); \draw[ar] (phi) -- (pool); \draw[ar] (pool) -- (rho); \draw[ar] (rho) -- (z);
+\draw[ar] (z.south) -- ++(0,-0.3) -| (fl.north); \draw[ar] (fl) -- (jp); \draw[ar] (jp) -- (hd); \draw[ad] (cand) -- (fl);
+\draw[ar] (fl.south) -- node[right, font=\tiny]{$z$ at any date} (dec.north);
+\draw[ad] (cand.south) |- ($(q.south west)+(0,-0.2)$) -- ($(q.south)+(0,-0.2)$) -- (q.south);
+\end{tikzpicture}
+
+\vspace{0.3em}
+\scriptsize $\tau$ per latent dimension (learned; initial $e^2\approx7.4$\,yr); $A$ = learned attractor. Decoder slots: 18 species keys $\times$ 16 ten-year age classes. Q is the earlier mapping model (direct predictor); the final mapping uses A $\times$ B (step 4).
+\gvsrc{\texttt{g03b\_train\_gafl.py} (classes \texttt{Enc}, \texttt{Flow}, \texttt{Dec}, \texttt{Q}; heads \texttt{h22}, \texttt{h25})}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 3, losses and training}
+\scriptsize
+\begin{columns}[T]
+\begin{column}{0.56\textwidth}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}p{1.6cm}p{4.4cm}c@{}}
+\toprule
+term & definition & weight \\
+\midrule
+MIL & $K$ = 48 candidates drawn iid from the (history-consistent) prior; $d_c$ = AlphaEarth error of the flowed $z$ at 2022 / 2025 (years after the visit); $-T\log\frac1K\sum_c e^{-d_c/T}$, $T$ = 0.05 & 1 \\
+decoder & slot BCE (class-weighted) + masked MSE of values + summary error (TPH, BA, QMD, Bray–Curtis of BA shares) + absent-slot pull & 1 \\
+pair & flowed $z(v_1)$ at $v_2$'s date vs stop-grad $z(v_2)$ & 0.5 \\
+pair decode & flowed $z(v_1)$ decoded vs $v_2$'s cohorts & 0.5 \\
+SIGReg & Epps–Pulley test of 32 random 1-D projections of $z$ vs $\mathcal N(0,1)$ (LeJEPA), $\times\sqrt{B}$ & 1 \\
+Q & Gaussian NLL of $z_{2025}$, posterior-weighted; decoded Q mean vs the visit's cohorts & 0.2, 0.5 \\
+\bottomrule
+\end{tabular}
+\end{column}
+\begin{column}{0.42\textwidth}
+\begin{itemize}\setlength\itemsep{2pt}
+\item \hl{split}: 20\,\% of 10-km blocks held out; training plots within 3.2\,km of a test plot excluded (disks could overlap): 26,291 train / 6,732 test visits
+\item \hl{curriculum}: first 4 of 14 epochs on the 5,729 visits of plots with $\le$50 consistent footprints
+\item AdamW, lr 10$^{-3}$, weight decay 10$^{-4}$, batch 64, gradient clip 5; 2 seeds (seed 0 used downstream)
+\item the encoder sees the visit's own cohorts; satellite data enter only through the heads (MIL) and Q
+\end{itemize}
+\end{column}
+\end{columns}
+\gvsrc{\texttt{g03b\_train\_gafl.py} (training loop); \texttt{config/genveg.yml} \texttt{train.env}; checks T4a–T4j, T12}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 3, FIA-anchored remeasurement pairs}
+\centering
+\begin{tikzpicture}[every node/.append style={minimum height=0.85cm}]
+\node[dat=2.0cm, anchor=west] (v1) at (0,0) {visit $v_1$ cohorts};
+\node[repl=1.5cm, anchor=west] (e1) at (2.4,0) {encoder};
+\node[repl=4.2cm, anchor=west] (fl) at (4.3,0) {flow + jumps from $v_1$'s date to $v_2$'s date along a candidate's disturbance history};
+\node[fb=1.6cm, anchor=west] (z2) at (8.9,0) {$\hat z(v_2)$};
+\node[fb=2.4cm, anchor=west] (dl) at (10.9,0) {decode $\hat z(v_2)$ vs $v_2$'s cohorts};
+\node[dat=2.0cm, anchor=west] (v2) at (0,-2.05) {visit $v_2$ cohorts};
+\node[repl=1.5cm, anchor=west] (e2) at (2.4,-2.05) {encoder (stop-grad)};
+\node[fb=4.2cm, anchor=west] (cs) at (4.3,-2.05) {candidates: the period's detectable FIA records matched; no stand-replacing evidence in a quiet period; $\cap$ the plot's consistent set};
+\node[fb=1.6cm, anchor=west] (ls) at (8.9,-2.05) {$\lVert\hat z-z(v_2)\rVert^2$};
+\draw[ar] (v1) -- (e1); \draw[ar] (e1) -- (fl); \draw[ar] (fl) -- (z2); \draw[ar] (z2) -- (dl); \draw[ar] (v2) -- (e2);
+\draw[ar] (z2) -- (ls); \draw[ar] (e2.south) -- ++(0,-0.25) -| (ls.south); \draw[ad] (cs) -- (fl);
+\end{tikzpicture}
+
+\vspace{0.4em}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item the plot's own FIA records select which LANDFIRE / Hansen histories the flow may take: the records anchor the jumps
+\item $\hat z(v_2)$ is also decoded against $v_2$'s cohorts (a clear-cut must decode to few trees)
+\end{itemize}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item training only: the measured BA ratio $v_2/v_1$ $<$ 0.3 requires stand-replacing evidence, $>$ 0.6 forbids it
+\item 25,213 pairs; 5,091 with a detectable event (5,065 matched); 18,235 constrained by a quiet period
+\end{itemize}
+\end{column}
+\end{columns}
+\gvsrc{\texttt{g03b\_train\_gafl.py} (\texttt{pair\_cand}); checks T8, T8b}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 4, landscape prior A, likelihood B, calibration}
+\centering
+\begin{tikzpicture}[every node/.append style={minimum height=0.8cm}]
+\node[drv=4.4cm, anchor=west] (xl) at (0,0) {$X_L$ (202-d) of the 1.6\,km disk, inclusion-weighted: mean AEF 22/25 (128), 32-cluster histogram of AEF 2025 (32), event fractions by class + Hansen in 4 periods (36), soils (6)};
+\node[repl=3.2cm, anchor=west] (mdn) at (4.9,0) {\textbf{A}: MDN $[X_L,\text{year}]$ $\rightarrow$ 256 $\rightarrow$ 256 $\rightarrow$ 8 diagonal Gaussians over $z$};
+\node[shared=3.2cm, anchor=west] (zv) at (8.6,0) {targets: frozen encoder $z$ of 22,197 training visits};
+\node[dat=4.4cm, anchor=west] (loc) at (0,-1.9) {well-localised plots: $\le$50 consistent footprints holding $\ge$50\,\% of the prior (5,729 visits)};
+\node[repl=3.2cm, anchor=west] (b) at (4.9,-1.9) {\textbf{B}: copy of flow + heads, fine-tuned (6 epochs, lr $5\cdot10^{-4}$) by MIL over the pinned footprints};
+\node[fb=3.2cm, anchor=west] (cal) at (8.6,-1.9) {calibration: 15\,\% of training blocks (1,027 plots); median log factor per TPH, BA, QMD};
+\draw[ar] (xl) -- (mdn); \draw[ad] (zv) -- (mdn); \draw[ar] (loc) -- (b);
+\end{tikzpicture}
+
+\vspace{0.4em}
+\footnotesize
+\begin{itemize}\setlength\itemsep{1pt}
+\item A describes the plot as a random draw from the forest of its whole disk: robust to the coordinate fuzzing. MDN NLL train $-25.5$, test $-23.8$
+\item B is used only as a likelihood; the original flow stays the vegetation dynamics the decoder was trained on. Calibration log factors of the mapping path: 0.19 (TPH), 0.20 (BA), 0.06 (QMD)
+\end{itemize}
+\gvsrc{\texttt{g04\_bayes\_downscale.py} (\texttt{landscape}, \texttt{MDN}, B fine-tuning, \texttt{map\_path}); check T5}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 5, mapping one stand}
+\centering
+\begin{tikzpicture}[node distance=0.28cm and 0.3cm, every node/.append style={minimum height=0.85cm}]
+\node[dat=2.2cm] (st) {stand (delineation run) and its footprints};
+\node[fb=2.4cm, right=of st] (nd) {nearest node of a 1\,km grid: $X_L$ from $\le$256 forest footprints within 1.6\,km};
+\node[repl=2.2cm, right=of nd] (a) {A: 64 draws $z\sim p(z\,|\,X_L, 2021)$};
+\node[repl=2.6cm, right=of a] (b) {B (optional): weight $\propto e^{-\bar d/T}$, $\bar d$ = mean AEF error over the stand's footprints};
+\node[repl=2.5cm, below=0.65cm of b] (fl) {16 resamples, spread over the footprints; flow 2021 $\rightarrow$ 2025 through each footprint's disturbance history};
+\node[repl=2.2cm, left=of fl] (dc) {decode: 288 slots $\rightarrow$ TPH, BA, QMD, BA by species};
+\node[fb=2.4cm, left=of dc] (cl) {$\times$ calibration factors; median of the 16; dominant key};
+\node[dat=2.2cm, left=of cl] (out) {\texttt{stand\_veg\_v3} $\rightarrow$ Forest Explorer (GEN\_*)};
+\draw[ar] (st) -- (nd); \draw[ar] (nd) -- (a); \draw[ar] (a) -- (b); \draw[ar] (b) -- (fl); \draw[ar] (fl) -- (dc); \draw[ar] (dc) -- (cl); \draw[ar] (cl) -- (out);
+\end{tikzpicture}
+
+\vspace{0.4em}
+\footnotesize
+\begin{itemize}\setlength\itemsep{1pt}
+\item stand landscapes are built exactly as the plots' disks (same footprint grid, subsample, descriptor), so A sees the same kind of input it was fitted on
+\item two maps: without B (\texttt{B0}) and with B (\texttt{B1}); the last one written is the default layer. The same path is validated on held-out plots (step 6)
+\end{itemize}
+\gvsrc{\texttt{g05\_map\_stands.py}, \texttt{g02j\_stand\_footprints.py}; checks T6a–T6c, T11}
+\end{frame}
+
+% ------------------------------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Backup: generative vegetation — step 6, evaluation and verification}
+\scriptsize
+\begin{columns}[T]
+\begin{column}{0.54\textwidth}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+median $|\log$ error$|$, held-out & TPH & BA & QMD \\
+\midrule
+mapping path (visits 2022–25, $n$ 1,058) & 0.611 & \textbf{0.412} & \textbf{0.308} \\
+\quad kNN on $X_L$ & 0.664 & 0.414 & 0.359 \\
+\quad null (median, $\pm$3 yr) & \textbf{0.609} & 0.453 & 0.327 \\
+A alone, all held-out ($n$ 1,733) & 0.643 & 0.460 & 0.330 \\
+A $\times$ B, localised plots ($n$ 333) & 0.791 & 0.451 & 0.313 \\
+\quad A alone, same plots & 0.706 & 0.460 & 0.320 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\textbf{Localisation by B}: posterior mass on the pinned footprints 0.048 vs their share 0.049 $\Rightarrow$ no location skill.\\
+\textbf{Dynamics} (seed 0, held-out): own-visit reconstruction BA corr 0.96, slope 0.90; synthetic clear-cut $\rightarrow$ BA $\times$0.08, fire $\times$0.94; 996 cut pairs: log BA error 0.67 vs persistence 0.59 (change corr 0.53).
+\end{column}
+\begin{column}{0.44\textwidth}
+\hl{45 independent checks} (\texttt{gv\_verify}, \texttt{gv\_verify\_upstream}): SQL against FIADB, direct raster reads, re-implemented specifications.
+\begin{itemize}\setlength\itemsep{1pt}
+\item T1: visits, keys, tokens, pairs, BA = FIA formula
+\item T2–T3: plot coordinates, candidates, AlphaEarth, soils, disturbance and Hansen fractions, prior, inclusion weights
+\item T4: summaries, split disjointness, flow timing, MIL sampling, SIGReg
+\item T5–T13: landscape unbiasedness, stand footprints, localisation, pairs, history sets, FE layer, loss targets
+\end{itemize}
+\end{column}
+\end{columns}
+\gvsrc{\texttt{g04} (\texttt{bayes\_eval.json}), \texttt{g06\_dynamics\_check.py} (\texttt{dynamics\_check\_*\_s0.json}), \texttt{gv\_verify.py}}
+\end{frame}
