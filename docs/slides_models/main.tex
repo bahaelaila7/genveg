@@ -60,11 +60,11 @@ Speckle cleaning: same-class patches $<$ 2\,ha take the class of the nearest lar
 \footnotesize
 Each group is projected and scaled so that its total variance on a fit sample (60 tiles $\times$ 4000 forest-land pixels) equals $w^2$:
 \begin{align*}
-\mathbf{y}_{\text{AEF}}  &= (\mathbf a_{25}-\boldsymbol\mu)\,V_{16}^{\top}\;1.0\,/\sqrt{\textstyle\sum_{k\le16}\lambda_k} &&\text{16 PCs, AlphaEarth 2025}\\
-\mathbf{y}_{\text{old}}  &= (\mathbf a_{22}-\boldsymbol\mu)\,V_{8}^{\top}\;0.4\,/\sqrt{\textstyle\sum_{k\le8}\lambda_k} &&\text{AlphaEarth 2022 on the 2025 basis (8)}\\
+\mathbf{y}_{\text{AEF}}  &= (\mathbf a_{25}-\boldsymbol\mu)\,V_{16}^{\mathsf{T}}\;1.0\,/\sqrt{\textstyle\sum_{k\le16}\lambda_k} &&\text{16 PCs, AlphaEarth 2025}\\
+\mathbf{y}_{\text{old}}  &= (\mathbf a_{22}-\boldsymbol\mu)\,V_{8}^{\mathsf{T}}\;0.4\,/\sqrt{\textstyle\sum_{k\le8}\lambda_k} &&\text{AlphaEarth 2022 on the 2025 basis (8)}\\
 y_{\text{chg}} &= \bigl(1-\cos(\mathbf a_{25},\mathbf a_{22})\bigr)\;0.5\,/\operatorname{sd}(1-\cos) &&\text{change since 2022 (1)}\\
 \mathbf{y}_{\text{TM}} &= (\mathbf x-\boldsymbol\mu)/\boldsymbol\sigma\;\cdot\;0.6/\sqrt6 &&\text{TreeMap attributes (6)}\\
-\mathbf{y}_{\text{soil}} &= \mathbf z\,V_{3}^{\top}\;0.3\,/\sqrt{\textstyle\sum_{k\le3}\lambda_k} &&\text{3 PCs of the z-scored soils}
+\mathbf{y}_{\text{soil}} &= \mathbf z\,V_{3}^{\mathsf{T}}\;0.3\,/\sqrt{\textstyle\sum_{k\le3}\lambda_k} &&\text{3 PCs of the z-scored soils}
 \end{align*}
 \begin{itemize}\setlength\itemsep{1pt}
 \item TreeMap: ln BA, height, ln QMD, cover, ln TPA, softwood share; zeroed (= sample mean) off TreeMap forest or where harvested.
