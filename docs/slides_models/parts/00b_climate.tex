@@ -6,9 +6,9 @@
 \node[fb=2.5cm, anchor=west] (l4) at (3.05,0) {spatial mean per EPA L4 polygon (967 CONUS; 99 in Region 4)};
 \node[repl=3.0cm, anchor=west] (bl) at (6.0,0) {\textbf{baseline} 2025–2150: AutoETS for Tmin / Tmax (no trend); 1995–2024 climatology for precipitation, VPD};
 \node[repl=2.9cm, anchor=west] (sc) at (9.45,0) {\textbf{scenario}: user changes (add / multiply, step or ramp, months); Tmax $\ge$ Tmin, precip.\ $\ge$ 0};
-\node[drv=2.9cm, anchor=west] (pn) at (9.45,-1.65) {\textbf{PnET}: monthly Tmin, Tmax, precip.; derived PAR, VPD, day length};
-\node[drv=2.9cm, anchor=west] (h3) at (6.0,-1.65) {\textbf{HBAD3P}: water index $W$ = AET/PET (Thornthwaite, AWC); drought anomaly};
-\node[off=2.5cm, anchor=west] (no) at (3.05,-1.65) {Biomass Succession, HBAD v1: no climate input};
+\node[drv=2.9cm, anchor=west] (pn) at (9.45,-1.9) {\textbf{PnET}: monthly Tmin, Tmax, precip.; derived PAR, VPD, day length};
+\node[drv=2.9cm, anchor=west] (h3) at (6.0,-1.9) {\textbf{HBAD3P}: $W$ = AET/PET (actual / potential evapotranspiration)};
+\node[off=2.5cm, anchor=west] (no) at (3.05,-1.9) {Biomass Succession, HBAD v1: no climate input};
 \draw[ar] (pr) -- (l4); \draw[ar] (l4) -- (bl); \draw[ar] (bl) -- (sc); \draw[ar] (sc) -- (pn); \draw[ar] (sc.south west) -- (h3.north east);
 \end{tikzpicture}
 

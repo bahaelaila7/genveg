@@ -57,7 +57,7 @@
 \begin{frame}{HBAD3P: process and trait-bound growth, climate through water}
 \centering
 \begin{tikzpicture}[node distance=0.3cm and 0.3cm]
-\node[drv=2.6cm] (w) {water $W$ = AET/PET (PRISM precip., Thornthwaite PET, AWC); normal $W_n$};
+\node[drv=2.6cm] (w) {water $W$ = AET/PET: actual / potential evapotranspiration (soil bucket, PRISM, AWC); normal $W_n$};
 \node[repl=2.3cm, right=of w] (o) {overtopping $O$, RD, crown ratio CR};
 \node[repl=3.3cm, right=of o] (v) {stem volume $\Delta V$ = $\varepsilon_k\,(D/20)^b$ $\times$ light $\times$ crowding $\times$ $W^{\omega}$ $\times$ crown $\times$ hydraulic limit $-$ maintenance};
 \node[repl=2.4cm, right=of v] (dh) {$\Delta D=\Delta V/2DH$; $\Delta H$: trait $H$–$D$ curve + light};
@@ -71,7 +71,7 @@
 \end{tikzpicture}
 
 \vspace{0.5em}
-\footnotesize Fitted: growth efficiency $\varepsilon_k$ per key + globals (33 coordinates; v2: 175) by CMA-ES; fecundity $F_k$ and the light window in a separate recruitment fit. GA+FL val NLL $-273{,}469$ vs v2 $-272{,}655$ on the same data; the deployed pipeline fit (forested-area densities, 42 coordinates) $-272{,}208$ on its own data. In Pan: plugin \texttt{hbad3p} (bit-identical to the reference), Forest Explorer engine.
+\footnotesize Fitted: growth efficiency $\varepsilon_k$ per key + globals (33 coordinates; v2: 175) by CMA-ES; fecundity $F_k$ and the light window in a separate recruitment fit. GA+FL val NLL $-273{,}469$ vs v2 $-272{,}655$ on the same data; the deployed pipeline fit (forested-area densities, 42 coordinates) $-272{,}208$ on its own data. In Pan: plugin \texttt{hbad3p} (bit-identical to the reference); Forest Explorer engine, climate scenarios act through $W$ each year.
 \src{\texttt{landis\_hbad3} \texttt{docs/hbad3\_design.md} \S4, \texttt{results/hbad3/fit3p\_P3\_GAFL/log.txt}; Pan \texttt{src/plugins/HBAD3P}; equations: backup}
 \end{frame}
 
