@@ -68,7 +68,9 @@ check('U7 stand polygons: a point inside each polygon falls on its own id in sta
       f'{n7} polygons: id match {ins / n7:.3f}; |area ratio − 1| median {np.median(arr):.4f}, max {max(arr):.3f}')
 # ======================= U8 stand-mapping internals (g05): node landscapes recomputed from the rasters with independent code (full disk; g05 uses a
 #                         uniform 256-subsample, so compared as an unbiased estimate: signed errors across nodes)
-if os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/stand_veg_v3.parquet').columns:
+if os.environ.get('GV_SKIP_U8') == '1':                     # genveg_pipeline stage vup runs before the stand mapping; U8 runs in stage verify
+    print('   (U8 skipped here: it checks the stand mapping, run after it in the verify stage)')
+elif os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/stand_veg_v3.parquet').columns:
     import pickle
     NZ = np.load(f'{D}/stand_nodes.npz'); km = pickle.load(open(f'{D}/bayes_kmeans.pkl', 'rb')); a22, a25 = rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'), rasterio.open(f'{ROOT}/data/aef/aef_2025.tif')
     RP = int(1600 // 30) + 2; dd8 = []; sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet')

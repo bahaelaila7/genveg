@@ -6,13 +6,13 @@ Stages (default all, in order):
   records       g02e_fia_records.py      typed FIA events / negative-evidence periods (fia_events, fia_negs, visits.fia_blocked)
   history       g02g_history_consistency.py  candidates consistent with each plot's whole FIA history (cand_hist; overwrites localisation)
   stands_fp     g02j_stand_footprints.py stand footprints of the mapping set from the stand run (stands.parquet, stand_feat.npy)
-  vup           gv_verify_upstream.py    upstream logic checks (grid, forest-land rules, stands, FE display)          [check: exit 0 required]
+  vup           gv_verify_upstream.py    upstream logic checks (grid, forest-land rules, stands, FE display; U8 later) [check: exit 0 required]
   train         g03b_train_gafl.py       temporal JEPA model, one per seed (<model_prefix>_s<seed>.pt)
   dynamics      g06_dynamics_check.py    held-out disturbance-response test of every seed and eval_loc
   downscale     g04_bayes_downscale.py   landscape prior (MDN) + likelihood B + mapping-path calibration (model = model_seed)
   map           g05_map_stands.py        stand vegetation per use_b (stand_veg_v3_B<b>.parquet; the last = stand_veg_v3.parquet)
   fe            24_export_fe.py + g07_fe_attach.py   Forest Explorer stands layer of the stand run + GEN_* attributes (the host serves it)
-  verify        gv_verify.py             independent recomputation of every stage                                   [check: exit 0 required]
+  verify        gv_verify.py + gv_verify_upstream.py   independent recomputation of every stage (+ U8 stand mapping) [check: exit 0 required]
 Outputs are the scripts' own files under data/proto/<data>/. The driver keeps data/proto/<data>/pipeline_state.json: per stage the hash of its config
 section, the code of its scripts and local modules, the upstream stage hashes and pixel-content fingerprints of the stand-run rasters it reads
 (land_clean / land / stands), so a re-run of the stand pipeline with identical outputs does not invalidate genveg. A stage whose hash is unchanged is
@@ -35,7 +35,7 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train'], stands=[]),
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),
     'fe':           dict(code=['24_export_fe.py', 'g07_fe_attach.py'], cfg=['fe'], up=['map'], stands=['finalize']),
-    'verify':       dict(code=['gv_verify.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py'], cfg=['verify', 'train'], up=['fe', 'history'], stands=['finalize']),
+    'verify':       dict(code=['gv_verify.py', 'gv_verify_upstream.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py'], cfg=['verify', 'train'], up=['fe', 'history'], stands=['finalize', 'land', 'clean']),
 }
 ORDER = list(STAGES)
 
@@ -92,7 +92,7 @@ def main():
         if st == 'records': return [(S('g02e_fia_records.py'), {})]
         if st == 'history': return [(S('g02g_history_consistency.py'), {})]
         if st == 'stands_fp': return [(S('g02j_stand_footprints.py'), {})]
-        if st == 'vup': return [(S('gv_verify_upstream.py', cfg['verify']['n_upstream']), {})]
+        if st == 'vup': return [(S('gv_verify_upstream.py', cfg['verify']['n_upstream']), dict(GV_SKIP_U8='1'))]   # U8 (stand mapping) runs in verify
         if st == 'train': return [(S('g03b_train_gafl.py'), dict(tenv, SEED=str(s), MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt")) for s in cfg['train']['seeds']]
         if st == 'dynamics':
             return [(S('g06_dynamics_check.py'), dict(tenv, **{k: str(v) for k, v in cfg['dynamics']['env'].items()}, MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt",
@@ -107,7 +107,7 @@ def main():
         if st == 'fe':
             gj = os.path.join(WS, cfg['fe']['geojson'])
             return [(S('24_export_fe.py', os.path.join(ROOT, cfg['fe']['area']), gj, f'{SR}/finalize/stands.gpkg'), {}), (S('g07_fe_attach.py', gj, cfg['fe']['tag']), {})]
-        if st == 'verify': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, MODEL=model))]
+        if st == 'verify': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, MODEL=model)), (S('gv_verify_upstream.py', cfg['verify']['n_upstream']), {})]
     for st in (a.stages or ORDER):
         if st not in STAGES: sys.exit(f'unknown stage {st}')
         if st in adopt:
