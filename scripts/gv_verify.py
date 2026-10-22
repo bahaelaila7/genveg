@@ -209,7 +209,7 @@ for pid, g in Cs.groupby('pid'):
     cnt_err.append(abs(g.incl_w.sum() - fl.sum()) / fl.sum())
 check('T3g inclusion weights sum to the full forest-footprint count of the disk', max(cnt_err) < 1e-4, f'max rel err {max(cnt_err):.2e}')
 # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
-os.environ.update(DATA='gafl', EPOCHS='0', LOAD='0', NT='4'); _a = sys.argv; sys.argv = ['g03b']
+os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT='4'); _a = sys.argv; sys.argv = ['g03b']
 SRC = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
 exec(compile(SRC, 'g03b', 'exec'), ns_); sys.argv = _a; import torch
 tv = samp.vid.values[:200]
@@ -304,7 +304,7 @@ check('T7d visit_aef: all files named by FIA plot identity (coverage of the loca
 # ======================= T8 FIA-anchored remeasurement pairs (g03b.pair_cand) vs an independent recomputation from FIADB + the spec
 src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); os.environ['PAIR_ANCHOR'] = 'period'; os.environ['SEVERITY_ANCHOR'] = '0'
 ns_['cand_of'] = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}      # T8 tests the period rule on g02b's candidates
-exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
 PC = ns_['pair_cand']; EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
 for v1 in rng8.choice(list(PC), 300, replace=False):
     v2 = ns_['vpair'][v1]; pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
@@ -341,11 +341,11 @@ check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputati
 # default PAIR_ANCHOR=both): every stand-replacing pair (detectable FIA event, BA(v2) < 0.3 BA(v1)) whose consistent set CONTAINS a candidate with
 # stand-replacing evidence in the window uses only such candidates (non-vacuous: pairs without any are not counted)
 PC_rec = {k: set(v_[0].tolist()) for k, v_ in ns_['pair_cand'].items()}
-os.environ['LOAD'] = '1'; os.environ['SEVERITY_ANCHOR'] = '1'; exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+os.environ['LOAD'] = '1'; os.environ['SEVERITY_ANCHOR'] = '1'; exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
 off_ok = all(set(ns_['pair_cand'][k][0].tolist()) == PC_rec[k] for k in list(PC_rec)[:3000])
 os.environ['LOAD'] = '0'; os.environ['PAIR_ANCHOR'] = 'both'; ns_['C'] = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on=['cid', 'pid'], how='left').assign(cons=lambda x: x.cons.fillna(False).astype(bool))
 ns_['C']['prior0'] = ns_['C'].prior; ns_['cand_hist'] = {pid: (g.prior0.values, g.cons.values) for pid, g in ns_['C'].groupby('pid')}
-exec(compile(src8[src8.index('vpair = dict(zip(PR.v1.values'):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)
+exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
 PCs = ns_['pair_cand']; BAtk = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); okr = 0; nrep = 0
 for v1, v2 in list(ns_['vpair'].items()):
     if v1 not in PCs or BAtk.get(v1, 0) <= 1.0 or BAtk.get(v2, 0) / BAtk.get(v1, 1) >= 0.3: continue
