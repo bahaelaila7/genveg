@@ -1,0 +1,18 @@
+# Round 2 (2026-10-22) after tune_embed: raw AlphaEarth 2022+2025 SLIC (c 0.15) best on both windows (Baker 0.197, Waycross 0.194 vs base 0.173 / 0.169);
+# IWAE latent (12-d, 10 epochs, still improving) 0.189 / 0.184; merging in the new spaces hurt; lower compactness kept helping. Here: lower compactness,
+# a larger / longer-trained IWAE, and raw AlphaEarth + latent together. Merge stays on the stack.
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]
+  small_area_pct_max: 2.0
+variants:
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.15]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.08]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.05]
+  - [embed.enabled=true, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.08]
+  - [embed.enabled=true, embed.latent_dim=24, embed.epochs=20, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.15]
+  - [embed.enabled=true, embed.latent_dim=24, embed.epochs=20, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.08]
+  - [embed.enabled=true, embed.latent_dim=24, embed.epochs=20, "segmentation.slic_groups=[aef25_raw, aef22_raw, latent]", segmentation.slic_compactness=0.15]
+report_window: [12288, 14336, 16384, 18432]
+report_top: 3
