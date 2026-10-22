@@ -138,8 +138,9 @@ check('T3e disturbance fractions (3x3) at the event calendar year (LANDFIRE) and
 #     evidence; stand-replacing = harvest class or Hansen loss on >= half the footprint -> ×0.25. Stored prior must be ∝ w x incl_w.
 ix = {k: i for i, k in enumerate(CLS)}; HH = NC + 1
 # the STRICT data-derived rules (g09; 2026-10-22), written out independently of g02b.EVK
-SPEC = {('T', 10): (['harvest', 'thin', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'H'], (-1, 1), 4),
-        ('T', 30): (['harvest', 'chem', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'H'], (-2, 1), 4), ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
+SPEC = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'unknown', 'H'], (-1, 1), 4),     # cutting / site prep / regeneration
+        ('T', 30): (['harvest', 'chem', 'unknown', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'unknown', 'H'], (-2, 1), 4),           # accept LANDFIRE 'unknown' (2026-10-22)
+        ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
 for cd in range(10, 23): SPEC[('D', cd)] = (['insdis'], (-1, 1), 2)
 for cd in (30, 31): SPEC[('D', cd)] = (['fire'], (-1, 1), 2)
 SPEC[('D', 32)] = (['fire', 'H'], (-1, 1), 4)

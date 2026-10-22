@@ -30,8 +30,8 @@ VAR = {'old': {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 
                'T50': ([IX['thin'], IX['fire'], IX['chem'], IX['unknown']], (-1, 1), 3.0), 'Dfire': ([IX['fire'], IX['unknown']], (-1, 1), 3.0),
                'Dcrown': ([IX['fire'], IX['unknown'], H_], (-1, 1), 8.0), 'Dins': ([IX['insdis'], IX['unknown'], H_], (-1, 1), 4.0),
                'Dwx': ([IX['weather'], IX['unknown'], H_], (-1, 1), 4.0), 'Dhum': ([IX['harvest'], IX['thin'], IX['dev'], IX['unknown'], H_], (-1, 1), 8.0)},
-       'strict': dict(G2.EVK)}
-VAR['strict_unknown'] = {k: ((v[0] + [IX['unknown']]) if k in ('T10', 'T20', 'T30', 'T40') else v[0], v[1], v[2]) for k, v in VAR['strict'].items()}
+       'strict_unknown': dict(G2.EVK)}                                     # the current rules (g02b.EVK, 2026-10-22)
+VAR['strict'] = {k: ([c for c in v[0] if c != IX['unknown']] if k in ('T10', 'T20', 'T30', 'T40') else v[0], v[1], v[2]) for k, v in VAR['strict_unknown'].items()}
 GROUP = lambda kinds: 'regen' if kinds & {'T20', 'T30', 'T40'} else 'cut' if 'T10' in kinds else 'crown' if 'Dcrown' in kinds else 'weak' if kinds else 'none'
 # pairs
 pairs = []

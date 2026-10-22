@@ -669,3 +669,10 @@ under the strict rules: data/proto/run_strict.sh.
   Evidence is not stationary, which mainly affects matches before 2008.
 - Timing: LANDFIRE harvest vs Hansen loss, lag −1 / 0 / +1 = 90 / 377 / 119, consistent with the calendar-year handling.
 - Weather appears only in 2011 and 2023; Hansen is 0 in 2000 / 2025, as expected.
+
+## 2026-10-22 — rules + pipeline
+- **Matching rules.** FIA cutting / site preparation / regeneration records (T10–T40) now also accept LANDFIRE "unknown" as compatible evidence
+  (g02b.EVK; gv_verify SPEC mirrors it). Evidence: 61 % of Hansen-loss footprint-years carry "unknown" within ±1 yr, against 0.5 % "harvest"
+  (MIICA change detection). The g10 fast proxy found strict_unknown best: history − uniform AUC +0.030 [0.011, 0.050].
+- **Rebuild needed.** The `gafl` artifacts (table, models m_final_s*, stand map, FE layer) were built under the previous rules and the old stand map.
+  The consolidated pipeline (`docs/GENVEG_PIPELINE.md`) rebuilds everything from the table on, in a separate data dir.

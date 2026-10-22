@@ -85,10 +85,12 @@ H_ = NC + 1; IX = {k: i for i, k in enumerate(CLS)}
 # 0.17-0.30, cutting 0.57 with 34 % < 0.3, crown fire). Mild records (wind, insects, human, other treatments: median 0.84-1.13) never match Hansen
 # or 'unknown'. Likelihood ratio 4 = a detectable record (a hard constraint for the history-consistent sets / pairs, threshold lr >= 4; the old ×8
 # was far stronger than the observed lifts ≈ 2); 2 = weak (never a hard constraint).
-EVK = {'T10': ([IX['harvest'], IX['thin'], H_], (-1, 1), 4.0),                                                   # cutting
-       'T20': ([IX['harvest'], IX['chem'], IX['fire'], H_], (-1, 1), 4.0),                                        # site preparation
-       'T30': ([IX['harvest'], IX['chem'], H_], (-2, 1), 4.0),                                                    # artificial regeneration (after a harvest)
-       'T40': ([IX['harvest'], IX['fire'], H_], (-2, 1), 4.0),                                                    # natural regeneration
+# T10-T40 also accept LANDFIRE 'unknown' (2026-10-22, data: 61 % of Hansen-loss footprint-years carry 'unknown' within ±1 yr vs 0.5 % 'harvest'; the
+# MIICA change-detection class is how most harvests appear; g10: strict_unknown gives the best stand-replacing discrimination)
+EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),                                     # cutting
+       'T20': ([IX['harvest'], IX['chem'], IX['fire'], IX['unknown'], H_], (-1, 1), 4.0),                          # site preparation
+       'T30': ([IX['harvest'], IX['chem'], IX['unknown'], H_], (-2, 1), 4.0),                                      # artificial regeneration (after a harvest)
+       'T40': ([IX['harvest'], IX['fire'], IX['unknown'], H_], (-2, 1), 4.0),                                      # natural regeneration
        'T50': ([IX['thin'], IX['chem']], (-1, 1), 2.0),                                                           # other silvicultural treatment
        'Dfire': ([IX['fire']], (-1, 1), 2.0), 'Dcrown': ([IX['fire'], H_], (-1, 1), 4.0),                         # ground (or unspecified) / crown fire
        # ground fire is weak: prescribed burns recur every 2-3 yr, the fire class passes ~17 % of footprints, lift 1.85 -> never a hard constraint
