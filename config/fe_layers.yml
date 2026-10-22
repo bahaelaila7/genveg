@@ -6,7 +6,7 @@ raster_window: [15872, 16384, 17920, 18432]     # rasters: Baker superpixel exte
 raster_res_deg: 0.00028                         # ~30 m
 layers:
   # ---------------- stand delineation
-  - {id: stands_base, group: Stand delineation, kind: stands, run: gafl_pilot, label: "Stands — DEFAULT: SLIC on raw AlphaEarth 2022+2025, compactness 0.15, tile seams reconciled (16-px halo) (2026-10-22)"}
+  - {id: stands_base, group: Stand delineation, kind: stands, run: gafl_pilot, label: "Stands — DEFAULT: SLIC on raw AlphaEarth 2022+2025, compactness 0.15, seam-free phased tiling (2026-10-22)"}
   - {id: stands_slic_fixed, group: Stand delineation, kind: stands, run: tune_slic__1, label: "Stands — SLIC fixed scaling (tune_slic 1)"}
   - {id: stands_slic_aefonly, group: Stand delineation, kind: stands, run: tune_slic__2, label: "Stands — SLIC on AlphaEarth only (tune_slic 2)"}
   - {id: stands_slic_tmsmooth, group: Stand delineation, kind: stands, run: tune_slic__4, label: "Stands — SLIC with TreeMap smoothed 3x3 (tune_slic 4)"}
@@ -17,7 +17,7 @@ layers:
   - {id: levels_fine, group: Stand delineation — nested levels, kind: levels, run: gafl_pilot, layer: fine, label: "Fine units (~5 ha) nested inside the default stands"}
   - {id: levels_compartments, group: Stand delineation — nested levels, kind: levels, run: gafl_pilot, layer: compartments, label: "Compartments (~50 ha) of whole default stands"}
   - {id: land_status, group: Stand delineation, kind: raster, source: "run:gafl_pilot/clean/land_clean.tif", style: land, label: "Forest-land status (land_clean)"}
-  - {id: superpixels, group: Stand delineation, kind: raster, source: "run:gafl_pilot/sp/sp.tif", style: edges, label: "Superpixel edges (SLIC on raw AlphaEarth, default, seam halo)"}
+  - {id: superpixels, group: Stand delineation, kind: raster, source: "run:gafl_pilot/sp/sp.tif", style: edges, label: "Superpixel edges (SLIC on raw AlphaEarth, default, phased tiling)"}
   - {id: aef2025_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2025.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2025 — PCs 1-3 as RGB"}
   - {id: aef2022_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2022.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2022 — PCs 1-3 as RGB (2025 basis)"}
   # ---------------- held-out evaluation layers (not used by the segmentation)

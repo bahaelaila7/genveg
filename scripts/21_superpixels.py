@@ -49,10 +49,14 @@ def init():
     _fz = Featurizer(_fit); _src = open_sources()
     _bar = [rasterio.open(b) for b in BARRIERS]
 
-HALO = int(SEG['sp_seam_halo'])          # > 0: seam reconciliation (SLIC on the tile + HALO px; superpixels cut by a tile seam are re-joined, see stitch)
+HALO = int(SEG['sp_seam_halo'])          # > 0: seam reconciliation on SLIC of the tile + HALO px (mode `sp_seam_mode`)
+MODE = str(SEG.get('sp_seam_mode', 'phased'))  # phased: tiles in 4 checkerboard phases; a tile segments only pixels not yet assigned by earlier phases (its
+                                               # superpixels grow around theirs) and keeps every superpixel whose centroid is not in a later-phase tile, with
+                                               # all its pixels (also across the seam); stitch: tiles keep their cores, cut superpixels re-joined (stitch)
+if MODE not in ('phased', 'stitch'): raise ValueError(f"segmentation.sp_seam_mode must be 'phased' or 'stitch', not {MODE!r}")
 SIDES = ('E', 'W', 'S', 'N')
 def work(job):
-    ti, r, c, H, W = job
+    ti, r, c, H, W = job[:5]; fixed, later = (job[5], job[6]) if len(job) > 5 else (None, None)   # phased: already-assigned pixels / later-phase tiles
     th, tw = min(T, H - r), min(T, W - c)
     ra, ca = max(r - HALO, 0), max(c - HALO, 0); rb, cb = min(r + th + HALO, H), min(c + tw + HALO, W)
     cy0, cx0 = r - ra, c - ca                                                   # the tile core inside the (expanded) window
@@ -67,6 +71,7 @@ def work(job):
     lab = np.zeros(land.shape, np.int32); nxt = 1
     for st in (1, 2, 3, 4):
         m = fl & ~bar & (land == st)
+        if fixed is not None: m &= ~fixed
         npx = int(m.sum())
         if npx == 0: continue
         if npx < SP_PX * 2:
@@ -80,7 +85,7 @@ def work(job):
         lab = np.where(m, s, lab); nxt = int(lab.max()) + 1
         # SLIC with enforce_connectivity can leave mask pixels at 0 when tiny; label them as their own pieces
     from scipy import ndimage
-    miss = fl & ~bar & (lab == 0)
+    miss = fl & ~bar & (lab == 0) & (~fixed if fixed is not None else True)
     if miss.any():
         l, n = ndimage.label(miss); lab = np.where(miss, l + nxt - 1, lab); nxt += n
     # split any non-4-connected superpixel (SLIC connectivity is 8-ish) into 4-connected parts
@@ -94,6 +99,12 @@ def work(job):
         o = out[sl]; o[sub] = l[sub] + k; k += n
     lab = out
     strips = None
+    if HALO > 0 and MODE == 'phased':                           # keep every superpixel whose centroid is not in a later-phase tile (all its pixels)
+        k = int(lab.max()); rr, cc = np.nonzero(lab)
+        cnt = np.bincount(lab[rr, cc], minlength=k + 1); cy = np.bincount(lab[rr, cc], rr, k + 1) / np.maximum(cnt, 1); cx = np.bincount(lab[rr, cc], cc, k + 1) / np.maximum(cnt, 1)
+        iy = np.clip(np.rint(cy).astype(int), 0, lab.shape[0] - 1); ix = np.clip(np.rint(cx).astype(int), 0, lab.shape[1] - 1)
+        owned = ~later[iy, ix]; owned[0] = False
+        return ti, r, c, np.where(owned[lab], lab, 0), (ra, ca)
     if HALO > 0:                                                # keep the core; describe the halo for the seam stitching
         E = lab; core = E[cy0:cy0 + th, cx0:cx0 + tw]
         lab = np.zeros_like(core); k = 0                        # core pieces (a superpixel cut by the core edge may split)
@@ -119,6 +130,76 @@ def work(job):
     np.add.at(S, flat[keep] - 1, M.reshape(-1, M.shape[-1])[keep])
     stt = np.zeros(k, np.uint8); stt[flat[keep] - 1] = land.ravel()[keep]
     return ti, r, c, lab, (n, stt, S, strips)
+
+def stats_work(job):
+    """Second pass of the own mode: per-superpixel pixel count, status and feature sums (merge feature space) of one tile core of the final sp.tif."""
+    ti, r, c, H, W, sp_path = job
+    th, tw = min(T, H - r), min(T, W - c); win = Window(c, r, tw, th)
+    with rasterio.open(sp_path) as d: lab = d.read(1, window=win).astype(np.int64)
+    if not lab.any(): return None
+    land = _src['land'].read(1, window=win)
+    raw = _fz.raw(_src, win); X = _fz.features(raw)
+    M = feature_space(SEG['merge_groups'], X, raw) if not (SEG['merge_groups'] == SEG['slic_groups'] and SEG['treemap_smooth_px'] == 0) else slic_input(X, raw)
+    flat = lab.ravel(); keep = flat > 0; u, inv = np.unique(flat[keep], return_inverse=True)
+    n = np.bincount(inv, minlength=u.size); S = np.zeros((u.size, M.shape[-1]), np.float64); np.add.at(S, inv, M.reshape(-1, M.shape[-1])[keep])
+    lv = land.ravel()[keep]; st_min = np.full(u.size, 255, np.int64); st_max = np.zeros(u.size, np.int64)
+    np.minimum.at(st_min, inv, lv); np.maximum.at(st_max, inv, lv)
+    return u, n, S, st_min, st_max
+
+def run_phased(jobs, H, W, prof, sp_path, nproc):
+    """Checkerboard phases over the processed tiles (phase = (tile row parity, tile column parity)). In phase k every tile segments its expanded window
+    (tile + HALO) without the pixels assigned in phases < k and keeps the superpixels whose centroid is not in a tile of a later phase, with all their
+    pixels inside processed tiles (same-phase tiles are T apart, so their windows never overlap). Forest pixels left unassigned become their own
+    4-connected pieces per status. Every label is split into 4-connected pieces and renumbered in raster order; statistics from stats_work."""
+    from skimage.measure import label as cc_label
+    from scipy import ndimage
+    rcs = [(j[1], j[2]) for j in jobs]
+    R0 = min(r for r, c in rcs); C0 = min(c for r, c in rcs); R1 = max(min(r + T, H) for r, c in rcs); C1 = max(min(c + T, W) for r, c in rcs)
+    hh, ww = R1 - R0, C1 - C0
+    ph = lambda r, c: ((r // T) % 2) * 2 + (c // T) % 2
+    PH = np.full((hh, ww), -1, np.int8)                                     # phase of the tile at each pixel (-1 = not processed)
+    for r, c in rcs: PH[r - R0:min(r + T, H) - R0, c - C0:min(c + T, W) - C0] = ph(r, c)
+    G = np.zeros((hh, ww), np.int64); off = 0
+    def crop(A, ra, rb, ca, cb, fill):                                      # global window [ra:rb, ca:cb] of an extent array (outside the extent: fill)
+        out = np.full((rb - ra, cb - ca), fill, A.dtype); ya, yb, xa, xb = max(ra - R0, 0), min(rb - R0, hh), max(ca - C0, 0), min(cb - C0, ww)
+        if yb > ya and xb > xa: out[ya - (ra - R0):yb - (ra - R0), xa - (ca - C0):xb - (ca - C0)] = A[ya:yb, xa:xb]
+        return out
+    with Pool(nproc, initializer=init) as p:
+        for k in range(4):
+            jk = []
+            for j in jobs:
+                ti, r, c = j[0], j[1], j[2]
+                if ph(r, c) != k: continue
+                th, tw = min(T, H - r), min(T, W - c); ra, ca = max(r - HALO, 0), max(c - HALO, 0); rb, cb = min(r + th + HALO, H), min(c + tw + HALO, W)
+                P_ = crop(PH, ra, rb, ca, cb, -1)
+                fixed = (crop(G, ra, rb, ca, cb, 0) > 0) | (P_ < 0)               # assigned earlier, or outside the processed tiles
+                jk.append(j[:5] + (fixed, P_ > k))
+            for ti, r, c, lab, info in p.imap(work, jk):
+                if lab is None: continue
+                ra, ca = info; ys, xs = np.nonzero(lab); gy, gx = ys + ra - R0, xs + ca - C0
+                ok = (gy >= 0) & (gy < hh) & (gx >= 0) & (gx < ww); ys, xs, gy, gx = ys[ok], xs[ok], gy[ok], gx[ok]
+                ok = (PH[gy, gx] >= 0) & (G[gy, gx] == 0); ys, xs, gy, gx = ys[ok], xs[ok], gy[ok], gx[ok]
+                G[gy, gx] = lab[ys, xs] + off; off += int(lab.max())
+            print(f'phase {k + 1}/4: {len(jk)} tiles, superpixels so far {off}', flush=True)
+    win = Window(C0, R0, ww, hh)                                             # unassigned forest pixels: own pieces per status
+    land = _src_land.read(1, window=win); bar = np.zeros((hh, ww), bool)
+    for b in BARRIERS:
+        with rasterio.open(b) as d: bar |= d.read(1, window=win) > 0
+    gap = (G == 0) & (PH >= 0) & (land >= 1) & (land <= 4) & ~bar; ngap = int(gap.sum())
+    for st in (1, 2, 3, 4):
+        l, n_ = ndimage.label(gap & (land == st)); G = np.where(l > 0, l + off, G); off += n_
+    F = cc_label(G, background=0, connectivity=1).astype(np.int32)
+    with rasterio.open(sp_path, 'w', **prof) as d: d.write(F, 1, window=win)
+    K = int(F.max()); n = np.zeros(K, np.int64); S = None; smin = np.full(K, 255, np.int64); smax = np.zeros(K, np.int64)
+    with Pool(nproc, initializer=init) as p:
+        for res in p.imap(stats_work, [j[:5] + (sp_path,) for j in jobs]):
+            if res is None: continue
+            u, n_, S_, a_, b_ = res
+            if S is None: S = np.zeros((K, S_.shape[1]), np.float64)
+            n[u - 1] += n_; S[u - 1] += S_; smin[u - 1] = np.minimum(smin[u - 1], a_); smax[u - 1] = np.maximum(smax[u - 1], b_)
+    assert (n > 0).all() and (smin == smax).all(), 'phased superpixels must be non-empty and of one land status'
+    print(f'phased seams: {K} superpixels (halo {HALO} px; {ngap} unassigned forest px filled as own pieces)', flush=True)
+    return np.arange(1, K + 1), n, smin.astype(np.uint8), S.astype(np.float32)
 
 def stitch(TS, N, n, st, S, sp_path):
     """Seam reconciliation: superpixel a of tile A and b of the neighbouring tile B are one superpixel cut by the seam when A's SLIC run extends a
@@ -167,6 +248,11 @@ if __name__ == '__main__':
     prof = dict(prof, **PROFILE, dtype='int32', nodata=0)
     ids, ns, sts, Ss = [], [], [], []; off = 0; TS = {}
     os.makedirs(OUT, exist_ok=True)
+    if HALO > 0 and MODE == 'phased':
+        _src_land = rasterio.open(f"{IN('clean')}/land_clean.tif")
+        ID, NS, ST_, SS = run_phased(jobs, H, W, prof, f'{OUT}/sp.tif', int(os.environ.get('NPROC', 6)))
+        np.savez(f'{OUT}/sp_stats.npz', id=ID, n=NS, status=ST_, S=SS)
+        print('done', len(ID), time.time() - t0); sys.exit(0)
     with rasterio.open(f'{OUT}/sp.tif', 'w', **prof) as d, Pool(int(os.environ.get('NPROC', 6)), initializer=init) as p:
         for j, (ti, r, c, lab, st) in enumerate(p.imap(work, jobs)):
             if lab is None: continue

@@ -17,7 +17,8 @@ segmentation:
   status_is_hard: true        # forest / harvested / regenerating never share a stand (also in the MMU absorption of 22 / 23)
   superpixel_ha: 1.0          # SLIC superpixel size (building blocks; smaller than the MMU)
   sp_tile: 512                # superpixel tile size [px] (superpixels never cross tile edges; the RAG merge joins them)
-  sp_seam_halo: 16            # seam reconciliation (default 2026-10-22): SLIC on tile + 16-px halo; superpixels cut by a tile seam re-joined when both tiles agree (stitch). Baker: seam_excess 1.76 -> 1.20, share 0.1971 -> 0.1984; 0 = off
+  sp_seam_halo: 16            # seam reconciliation halo [px] (0 = off). Baker seam boundary excess: off 1.76x, stitch 1.20x, phased 1.01x
+  sp_seam_mode: phased        # phased: 4 checkerboard phases, later tiles segment only unassigned pixels (superpixels grow around the earlier ones across the seam); stitch: cores + re-join cut superpixels
   slic_compactness: 0.15      # tune_slic / tune_embed / tune_embed2 (2026-10-22): 0.15 best on both windows (0.3 unstable with raw AlphaEarth)
   slic_scale: tile            # tile = scikit-image's own min-max rescale per tile (its effective compactness then follows each tile's most extreme
                               # feature value, in practice the AEF-change outliers); fixed = compactness rescaled per tile so features / space weigh the
