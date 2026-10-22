@@ -1,0 +1,77 @@
+% ---------------------------------------------------------------- Biomass Succession
+\sectionblurb{The LANDIS-II core model: biomass cohorts, ANPP / B$_{\max}$ growth, age- and growth-related mortality, establishment.}
+\section{Biomass Succession}
+
+\begin{frame}{Biomass Succession in Pan: one simulated year}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.32cm]
+\node[dat=2.5cm] (fia) {FIA cohorts (species, age, AGB) at the first visit};
+\node[shared=2.4cm, right=of fia] (snap) {site biomass; cohorts sorted old $\rightarrow$ young};
+\node[shared=2.3cm, right=of snap] (age) {age $+1$; removal at LONGEVITY};
+\node[shared=2.9cm, right=of age] (gr) {growth: ANPP$_{\max}$ $\times$ competition index (share of site biomass) $\times$ shape $S$, space under $B_{\max}$};
+\node[shared=2.6cm, below=0.7cm of gr] (mo) {mortality: growth-related (crowding) $+$ age-related ($D$); PROB\_MORT (Sim B)};
+\node[shared=2.5cm, left=of mo] (sh) {shade class 0–5 from relative biomass (MIN\_REL\_BIOMASS)};
+\node[shared=2.9cm, left=of sh] (es) {establishment per species: seed source (MATURITY) $\times$ SUFFICIENT\_LIGHT(SHADE\_TOL, shade) $\times$ PROB\_ESTAB};
+\node[shared=2.4cm, left=of es] (new) {new cohort (age 1); harvest / disturbance};
+\draw[ar] (fia) -- (snap); \draw[ar] (snap) -- (age); \draw[ar] (age) -- (gr); \draw[ar] (gr) -- (mo); \draw[ar] (mo) -- (sh); \draw[ar] (sh) -- (es); \draw[ar] (es) -- (new);
+\draw[ar] (new.north) -- ++(0,0.25) -| node[pos=0.25, above, font=\tiny, text=pMuted]{next year} (snap.south);
+\end{tikzpicture}
+
+\vspace{0.6em}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\footnotesize
+\hl{Sim A} (growth / decay): FIA cohorts injected at each visit, establishment off, PROB\_MORT $=0$ — deterministic.
+\end{column}
+\begin{column}{0.5\textwidth}
+\footnotesize
+\hl{Sim B} (free run): establishment on, PROB\_MORT stochastic, replicate runs; no sync after the first visit.
+\end{column}
+\end{columns}
+\src{Pan \texttt{src/plugins/BiomassSuccession/plugin.jl} (\texttt{succession\_step!}, \texttt{reproduction\_check\_step!}); LANDIS-II Biomass Succession v7 guide; Scheller \& Mladenoff (2004)}
+\end{frame}
+
+\input{parts/vars_bs}
+
+\begin{frame}{Biomass Succession parameters}
+\footnotesize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{3.0cm}X>{\raggedright\arraybackslash}p{4.0cm}@{}}
+\toprule
+ & parameters & from \\
+\midrule
+fitted, Sim A & $S$ (growth shape), $B_{\max}$, ANPP ratio $B_{\max}$/ANPP$_{\max}$ $\in$ [20, 35] (eco $\times$ species group); $D$ (species) & coordinate calibration (deployed); CMA-ES / gdigel: 224 dims \\
+fitted, Sim B & PROB\_MORT (+ $B_{\max}$, ratio refined) & free-run calibration \\
+fixed from data & LONGEVITY: 150 / 275 / 400 yr (PLANTS classes); SHADE\_TOL 1–5 (FIA crown class); PROB\_ESTAB (canopy-cover window) & FIA + SONA / FEIS / PLANTS \\
+defaults & SUFFICIENT\_LIGHT (data-derived taper), MIN\_REL\_BIOMASS, MATURITY & LANDIS guide, data \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\footnotesize ecoregion cells: EPA L3 $\times$ site class; pines (PITA, PIEL) split by site-productivity cell (A–D).
+\end{column}
+\begin{column}{0.48\textwidth}
+\footnotesize thesis values for FL 8.5.3: preliminary part (parameter table).
+\end{column}
+\end{columns}
+\src{Pan \texttt{src/plugins/BiomassSuccession/params.jl}; \texttt{tools/calib\_levers.jl}; \texttt{docs/gafl\_calibration\_log.md} D1–D15; \texttt{docs/cmaes\_gdigel.md:13}}
+\end{frame}
+
+\begin{frame}{Calibration rounds: all-data fits of the four set-ups}
+\figw[width=\linewidth,height=0.68\textheight,keepaspectratio]{figures/new/fig_calib_rounds.png}
+\data{\texttt{results/\{gafl, pnet\_gafl, hbad\_gafl\}/final\_calib\_rounds.csv}, \texttt{results/gafl\_simB/final\_calib\_rounds\_3lever.csv}: groups passing and median $|$bias$|$ after each lever round, all GA+FL plots (in-sample). \tostflag}
+\end{frame}
+
+\begin{frame}{Biomass Succession (Sim A): held-out bias per species group}
+\figw[width=\linewidth,height=0.64\textheight,keepaspectratio]{figures/new/fig_heldout_bias_bs.png}
+\begin{center}\scriptsize held-out groups passing $\pm$5/10/20\,\%: \textbf{8 / 20 / 36} of 46 (mean of folds); median $|$bias$|$ 5.1\,\%; small catch-all groups (\_S\_NA, \_H\_NA) fail\end{center}
+\data{\texttt{results/gafl/cv\_heldout\_\{train,val,test\}\_groups.csv}; levers $S$, ratio, $B_{\max}$. \tostflag}
+\end{frame}
+
+\begin{frame}{Biomass Succession (Sim B, free run): held-out bias per species group}
+\figw[width=\linewidth,height=0.64\textheight,keepaspectratio]{figures/new/fig_heldout_bias_simb.png}
+\begin{center}\scriptsize held-out groups passing $\pm$5/10/20\,\%: \textbf{0 / 4 / 17} of 48; median $|$bias$|$ 7.9\,\% — a free stochastic run cannot predict which cohorts die\end{center}
+\data{\texttt{results/gafl\_simB/cvB\_*\_groups.csv}: plot-cluster bootstrap of $\log\Sigma\text{sim}/\Sigma\text{obs}$ per group; levers PROB\_MORT, $B_{\max}$, ratio. \tostflag}
+\end{frame}

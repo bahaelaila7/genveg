@@ -1,0 +1,104 @@
+% ---------------------------------------------------------------- preliminary (thesis)
+\sectionblurb{Thesis: Biomass Succession calibrated with multi-objective CMA-ES on the Southern Coastal Plain of Florida (EPA L3 8.5.3).}
+\section{Preliminary: the thesis}
+
+\begin{frame}{MO-CMA-ES with two simulation schemes (Sim A, Sim B)}
+\begin{columns}[T]
+\begin{column}{0.47\textwidth}
+\footnotesize
+\begin{tikzpicture}
+\node[dat=5.9cm] (d) at (0,0) {FIA cohort trajectories (species, age, AGB) per plot visit};
+\node[fb=2.75cm, anchor=north] (a) at (-1.55,-0.75) {\textbf{Sim A} — deterministic: cohorts injected when first observed; no reproduction; fits $S, D$, ANPP$_{\max}$, $B_{\max}$};
+\node[fb=2.75cm, anchor=north] (b) at (1.55,-0.75) {\textbf{Sim B} — stochastic: cohorts establish by seeding; replicate runs; adds PROB\_ESTAB, PROB\_MORT};
+\node[repl=5.9cm, anchor=north] (o) at (0,-2.85) {two objectives: AGB discrepancy $+$ Wasserstein-1 distance of the age-class biomass distribution};
+\node[shared=5.9cm, anchor=north] (m) at (0,-4.0) {($\mu{+}\mu$) MO-CMA-ES from Igel's (1+1)-CMA-ES: non-dominated rank, crowding; IPOP restarts};
+\node[dat=5.9cm, anchor=north] (s) at (0,-5.15) {select on the validation front; TOST on held-out test};
+\draw[ar] (d.south -| a.north) -- (a.north); \draw[ar] (d.south -| b.north) -- (b.north);
+\draw[ar] (a.south) -- (a.south |- o.north); \draw[ar] (b.south) -- (b.south |- o.north); \draw[ar] (o) -- (m); \draw[ar] (m) -- (s);
+\end{tikzpicture}
+\end{column}
+\begin{column}{0.51\textwidth}
+\centering\footnotesize validation Pareto fronts, FL 8.5.3 (candidate sweep)\\
+\figw[width=\linewidth,height=0.66\textheight,keepaspectratio]{figures/reused/fl853_sweep_fronts_val.png}
+\end{column}
+\end{columns}
+\data{FIA GA+FL curated cohorts, EPA L3 8.5.3 (Southern Coastal Plain, FL); run \texttt{fl853\_igelmo\_4cell\_shade\_n1000} (pines split into site-class cells A–D).}
+\end{frame}
+
+\begin{frame}{FL 8.5.3 held-out test: simulated vs observed AGB (1/2)}
+\begin{center}
+\figw[height=0.80\textheight,width=\linewidth,keepaspectratio]{figures/reused/fl853_scatter_top.png}
+\end{center}
+\data{candidate 6, held-out test split; cohort AGB (g/m$^2$) per (plot, visit, species group); overall $R^2$ = 0.826.}
+\end{frame}
+
+\begin{frame}{FL 8.5.3 held-out test: simulated vs observed AGB (2/2)}
+\begin{center}
+\figw[height=0.80\textheight,width=\linewidth,keepaspectratio]{figures/reused/fl853_scatter_bottom.png}
+\end{center}
+\data{as before; panels ordered by number of plots (in brackets), $n$ = test pairs.}
+\end{frame}
+
+\begin{frame}{FL 8.5.3 held-out test: forest-level comparison by age class}
+\begin{columns}[T]
+\begin{column}{0.62\textwidth}
+\figw[width=\linewidth,height=0.78\textheight,keepaspectratio]{figures/reused/fl853_cand6_forest_mape_agebin_test.png}
+\end{column}
+\begin{column}{0.36\textwidth}
+\small
+\begin{itemize}\setlength\itemsep{3pt}
+\item signed \% error of the mean biomass per species and 10–20-yr age class (red: under-predicted)
+\item young loblolly (PITA·D) and slash pine over-predicted; sand pine (\_S\_LST), cabbage palm (SAPA), bald cypress (TAAS) under-predicted
+\item most hardwood groups within $\pm$20\,\%
+\end{itemize}
+\end{column}
+\end{columns}
+\data{candidate 6, test split; $100\,(\overline{\text{obs}}-\overline{\text{sim}})/\overline{\text{obs}}$ per cell; grey = no data.}
+\end{frame}
+
+\begin{frame}{FL 8.5.3: fitted parameters (validation candidates, mean $\pm$ sd, $n{=}137$)}
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lcrccc}
+\toprule
+Species    & $D$            & Lng & $S$               & ANPP$_{\max}$ & $B_{\max}$       \\
+\midrule
+ACRU       & 18.5 $\pm$ 3.1 & 150 & 0.198 $\pm$ 0.181 & 450 $\pm$ 53   & 15635 $\pm$ 1846 \\
+LIST2      & 15.6 $\pm$ 4.0 & 400 & 0.064 $\pm$ 0.073 & 407 $\pm$ 62   & 14126 $\pm$ 2116 \\
+NYBI       & 17.1 $\pm$ 5.1 & 275 & 0.807 $\pm$ 0.127 & 632 $\pm$ 144  & 20082 $\pm$ 4343 \\
+PIEL AB    & 8.9 $\pm$ 4.2  & 275 & 0.196 $\pm$ 0.201 & 809 $\pm$ 30   & 27753 $\pm$ 425  \\
+PIEL C     & 8.9 $\pm$ 4.2  & 275 & 0.196 $\pm$ 0.201 & 662 $\pm$ 13   & 22924 $\pm$ 366  \\
+PIEL D     & 8.9 $\pm$ 4.2  & 275 & 0.196 $\pm$ 0.201 & 404 $\pm$ 12   & 13825 $\pm$ 183  \\
+PIPA2      & 19.3 $\pm$ 5.9 & 275 & 0.471 $\pm$ 0.381 & 468 $\pm$ 113  & 15086 $\pm$ 2536 \\
+PITA A     & 17.0 $\pm$ 7.0 & 275 & 0.096 $\pm$ 0.091 & 894 $\pm$ 20   & 30781 $\pm$ 186  \\
+PITA B     & 17.0 $\pm$ 7.0 & 275 & 0.096 $\pm$ 0.091 & 896 $\pm$ 44   & 30897 $\pm$ 1166 \\
+PITA C     & 17.0 $\pm$ 7.0 & 275 & 0.096 $\pm$ 0.091 & 748 $\pm$ 69   & 24807 $\pm$ 726  \\
+PITA D     & 17.0 $\pm$ 7.0 & 275 & 0.096 $\pm$ 0.091 & 504 $\pm$ 60   & 12950 $\pm$ 1231 \\
+\bottomrule
+\end{tabular}}
+\end{column}
+\begin{column}{0.5\textwidth}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lcrccc}
+\toprule
+Species        & $D$            & Lng & $S$               & ANPP$_{\max}$ & $B_{\max}$       \\
+\midrule
+QULA3          & 20.3 $\pm$ 2.4 & 150 & 0.208 $\pm$ 0.123 & 599 $\pm$ 37   & 19499 $\pm$ 1963 \\
+QUNI           & 19.2 $\pm$ 5.8 & 275 & 0.107 $\pm$ 0.144 & 520 $\pm$ 94   & 16279 $\pm$ 1650 \\
+QUVI           & 19.3 $\pm$ 4.6 & 400 & 0.587 $\pm$ 0.185 & 879 $\pm$ 190  & 27612 $\pm$ 6423 \\
+SAPA           & 17.5 $\pm$ 5.1 & 275 & 0.921 $\pm$ 0.057 & 980 $\pm$ 109  & 31330 $\pm$ 2630 \\
+TAAS           & 16.6 $\pm$ 5.4 & 400 & 0.905 $\pm$ 0.063 & 925 $\pm$ 165  & 28254 $\pm$ 3719 \\
+\_GRP\_3\_LST  & 20.1 $\pm$ 5.1 & 275 & 0.46 $\pm$ 0.115  & 514 $\pm$ 118  & 17578 $\pm$ 4159 \\
+\_GRP\_43\_HST & 18.3 $\pm$ 4.6 & 275 & 0.311 $\pm$ 0.272 & 477 $\pm$ 122  & 15913 $\pm$ 3869 \\
+\_H\_HST       & 17.4 $\pm$ 4.8 & 275 & 0.131 $\pm$ 0.173 & 439 $\pm$ 89   & 14742 $\pm$ 3087 \\
+\_H\_LST       & 17.6 $\pm$ 4.9 & 275 & 0.229 $\pm$ 0.209 & 430 $\pm$ 20   & 14780 $\pm$ 583  \\
+\_S\_HST       & 18.0 $\pm$ 5.5 & 275 & 0.764 $\pm$ 0.361 & 907 $\pm$ 399  & 22685 $\pm$ 7081 \\
+\_S\_LST       & 20.5 $\pm$ 4.6 & 275 & 0.875 $\pm$ 0.13  & 841 $\pm$ 176  & 25141 $\pm$ 2429 \\
+\bottomrule
+\end{tabular}}
+\end{column}
+\end{columns}
+\vspace{0.5em}
+\data{p101 validation candidates of the FL 8.5.3 run. $D$ mortality curve, $S$ growth curve, Lng longevity (yr); ANPP$_{\max}$ and $B_{\max}$ in g\,m$^{-2}$. PITA A–D / PIEL AB–D are site-productivity cells. Table from the thesis deck.}
+\end{frame}

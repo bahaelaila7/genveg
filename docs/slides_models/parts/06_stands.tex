@@ -1,0 +1,39 @@
+% ---------------------------------------------------------------- stand delineation
+\sectionblurb{Stands from satellite embeddings and land-status rasters: where the simulation units on the map come from.}
+\section{Stand delineation}
+
+\begin{frame}{Stand delineation: the pipeline}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.3cm]
+\node[dat=2.5cm] (in) {TreeMap, Hansen, LANDFIRE EVT, AlphaEarth 22/25, SOLUS, roads/water/parcels};
+\node[repl=2.3cm, right=of in] (land) {land status: forest, harvested, regenerating, unmapped};
+\node[repl=2.0cm, right=of land] (clean) {speckle cleaning ($<$2\,ha)};
+\node[repl=2.5cm, right=of clean] (sp) {SLIC superpixels ($\approx$1\,ha) on raw AlphaEarth 22$\oplus$25};
+\node[repl=2.6cm, below=0.7cm of sp] (mg) {region-adjacency Ward merge on a 34-d feature stack $\rightarrow$ median 15\,ha};
+\node[repl=2.4cm, left=of mg] (fin) {finalise: barriers, slivers, MMU 2\,ha};
+\node[repl=2.4cm, left=of fin] (lev) {nested levels: fine $\approx$5\,ha, compartments $\approx$50\,ha};
+\node[dat=2.5cm, left=of lev] (ver) {verify (invariants), held-out score, Forest Explorer layers};
+\draw[ar] (in) -- (land); \draw[ar] (land) -- (clean); \draw[ar] (clean) -- (sp); \draw[ar] (sp) -- (mg); \draw[ar] (mg) -- (fin); \draw[ar] (fin) -- (lev); \draw[ar] (lev) -- (ver);
+\end{tikzpicture}
+
+\vspace{0.6em}
+\footnotesize Superpixels and merges never cross barriers or land status. One config, content-hashed stage cache; \texttt{stands\_pipeline.py} for any region.
+\src{\texttt{standmap} \texttt{docs/STANDS\_PIPELINE.md}, \texttt{config/pilot.yml}; formulation: backup}
+\end{frame}
+
+\input{parts/vars_stands}
+
+\begin{frame}{Stands on the map (Baker Co., FL)}
+\figw[width=\linewidth,height=0.74\textheight,keepaspectratio]{figures/new/stands_map.png}
+\data{default run (\texttt{runs/gafl\_pilot}): \texttt{stands.tif}, land status; AlphaEarth 2025 PCs of this 4$\times$3\,km crop; 114 stands.}
+\end{frame}
+
+\begin{frame}{Tuning: which input makes better stands}
+\figw[width=\linewidth,height=0.70\textheight,keepaspectratio]{figures/new/stands_tuning.png}
+\data{sweeps \texttt{tune\_slic}, \texttt{tune\_embed(2)}, \texttt{tune\_hier\_a} (\texttt{results.csv}, \texttt{report\_window.csv}). Share = $(R^2_{\text{stands}}-R^2_{\text{blocks}})/(1-R^2_{\text{blocks}})$ on layers the segmentation does not use (canopy 2000, EVC cover, slope, TPI), vs equal-count square blocks; ranked on Baker, reported on Waycross GA.}
+\end{frame}
+
+\begin{frame}{Nested levels: fine units, stands, compartments}
+\figw[width=\linewidth,height=0.70\textheight,keepaspectratio]{figures/new/stands_levels.png}
+\data{same crop; levels stage of the default run: 98,814 fine units, 39,324 stands, 17,638 compartments (Baker window). Fine units explain the held-out layers best (share 0.23); compartments only as well as blocks.}
+\end{frame}

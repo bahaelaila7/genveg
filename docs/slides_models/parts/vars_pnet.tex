@@ -1,0 +1,23 @@
+\begin{frame}{PnET: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.3cm}X>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\toprule
+variable & definition / equation (Pan code) & from which input \\
+\midrule
+pools & foliage, wood+root (TotalBiomass), NSC per cohort; solved so that reported AGB $=$ FIA AGB & FIA cohort AGB, age \\
+$T_{\text{ave}}$, $T_{\text{day}}$ & $(T_{\min}+T_{\max})/2$;\quad $(T_{\max}+T_{\text{ave}})/2$ & PRISM monthly, by L4 \\
+VPD (kPa) & $e_s(T_{\text{day}})-e_s(T_{\min})$ (Magnus) & PRISM \\
+PAR & Bristow–Campbell transmissivity (from $T_{\max}-T_{\min}$) $\times$ FAO-56 extraterrestrial radiation $\times$ 0.45 $\times$ 4.57 / day length & PRISM, latitude \\
+fRad & $1-\exp(-\text{PAR}_{\text{layer}}\ln2/\text{HalfSat})$, PAR$_{\text{layer}}$ $=$ PAR $e^{-k\,\text{LAI}_{\text{above}}}$ & PAR, canopy LAI \\
+FC, WP, porosity & soil water at 33 and 1500 kPa, saturation (Saxton–Rawls) & SOLUS sand, clay, SOC \\
+fWater & Feddes response to the soil pressure head (H1–H4) of the current bucket water & soil, precipitation, transpiration \\
+Amax & AmaxA $+$ AmaxB$\cdot$FolN (CO$_2$ modifier) & FolN (fitted), CO$_2$ \\
+fAge & $\max(0,1-(a/L)^{\text{PsnAgeRed}})$ & age, LONGEVITY \\
+GPP, NetPsn & Amax $\cdot$ fRad $\cdot$ fWater $\cdot$ f$T(T_{\text{day}})$ $\cdot$ f$_{\text{VPD}}$ $\cdot$ fAge; NetPsn $=$ GPP $-$ foliar respiration $\rightarrow$ NSC & all of the above \\
+NSC fraction & NSC / (FActiveBiom $\cdot$ (wood + foliage) $\cdot$ C fraction); cohort dies at $\le$ 0.01 & state \\
+reported AGB & (wood$_{\text{AG}}$ $+$ foliage) $\times$ canopy-layer share & state \\
+\bottomrule
+\end{tabularx}
+\src{Pan \texttt{src/plugins/PnET/climate.jl} (VPD, PAR), \texttt{plugin.jl} (\texttt{sublayer!} \S5.5–5.8), \texttt{site\_attrs.jl} (soils); \texttt{docs/pnet\_spec.md} \S1–8}
+\end{frame}

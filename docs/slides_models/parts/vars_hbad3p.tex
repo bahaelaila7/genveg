@@ -1,0 +1,21 @@
+\begin{frame}{HBAD3P: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.3cm}X>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\toprule
+variable & definition / equation (code) & from which input \\
+\midrule
+site & one FIA subplot (4 per plot) & FIA PLOT / SUBP \\
+cohort & (species key, birth decade $\lfloor(\text{year}-\text{age})/10\rfloor$, $D$ class [5, 12.7, 25, 40] cm) $\times$ 5 vigour nodes $z$ (Gauss–Hermite) & \texttt{curated\_trees} (live, aged) \\
+$N$ (trees/ha) & $4\sum$ TPA\_UNADJ$\cdot$2.47105 $\times$ node weight $/\,a$;\quad $a=\max(f,0.25)$, $f$ = forested share of the subplot & TREE, SUBP\_COND $\times$ COND \\
+$D$, $H$, $A$, CR & TPA-weighted quadratic mean DIA$\cdot$2.54; mean HT$\cdot$0.3048 ($\ge$1.37); mean age; mean CR/100 & TREE (DIA, HT, CR), imputed age \\
+SDI, RD & $\sum N(D/25.4)^{1.605}$;\quad SDI/SDI$_{\max}$ & state \\
+overtopping $O$ & $\bigl(\sum_{H_j>H_i}\text{SDI}_j+\frac12\sum_{H_j=H_i}\text{SDI}_j+\frac12\text{SDI}_i\bigr)/\text{SDI}_{\max}$ & state \\
+water $W$, $W_n$ & growing-season AET/PET of a monthly bucket; $W_n$ = the plot's normal & PRISM precipitation, Thornthwaite PET (temperature), soil AWC \\
+$\Delta V$, $\Delta D$ & $\varepsilon_k(D/20)^b\times$ light$(O)\times$ crowding(RD) $\times\,W^{\omega}\times$ vigour$(z)\times$ crown(CR) $\times$ hydraulic$(H/H_{\max})-\rho D^2H$; $\Delta D=\Delta V/2DH$ & state, traits, $W$ \\
+hazard $h$ & $f_M[m_0/L+m_s e^{\sigma_{ST}(\text{ST}-3)}e^{-\beta g_m}(D/20)^{\zeta}]+e^{m_A(A/L-1)}$; drought: $f_M\propto e^{m_W(W_n-W)/0.1}$ & state, traits, $W$ \\
+recruits $R_k$ & $F_k\,\exp(-\lambda_0e^{\lambda_1(\text{ST}-3)}\text{RD})\times$(seed source ? 1 : $\varepsilon_0$) $\times f/a$ & state, shade tolerance \\
+\bottomrule
+\end{tabularx}
+\src{Pan \texttt{tree\_cohorts3p.jl}, \texttt{plugins/HBAD3P}; \texttt{landis\_hbad3} \texttt{docs/hbad3\_design.md} \S4, \texttt{climate\_join.py}}
+\end{frame}

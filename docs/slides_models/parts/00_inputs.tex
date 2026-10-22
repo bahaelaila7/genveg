@@ -1,0 +1,81 @@
+% ---------------------------------------------------------------- inputs
+\sectionblurb{Every data source, what it provides, and which model uses it.}
+\section{Inputs}
+
+\begin{frame}{Model inputs: what each source provides, and who uses it}
+\def\y{\textcolor{pGreen}{\large$\bullet$}}
+\scriptsize
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}>{\bfseries}p{2.5cm}p{5.7cm}*{5}{>{\centering\arraybackslash}p{0.82cm}}@{}}
+\toprule
+input & provides & BS & PnET & HBAD v1, v2 & HBAD3P & viewer \\
+\midrule
+FIA (FIADB) & remeasured plots: trees (DIA, HT, CR, status, TPA), conditions, treatment and disturbance codes & \y & \y & \y & \y & \y \\
+curated cohorts & per plot visit: (species, imputed age) cohorts with AGB; disturbance drop per cohort & \y & \y & \y & & \y \\
+FIA-derived traits & longevity (3 classes), shade tolerance (crown class), PROB\_ESTAB (canopy cover) & \y & \y & \y & \y & \\
+PRISM by EPA L4 & monthly Tmin, Tmax, precipitation; normals; baseline forecasts & & \y & & \y & \y \\
+CO$_2$ (NOAA, RCMIP) & historical and SSP-scenario atmospheric CO$_2$ & & \y & & & \y \\
+SOLUS soils & sand, clay, SOC, depth $\rightarrow$ porosity, field capacity, wilting point, AWC (Saxton–Rawls) & & \y & & \y & \y \\
+EPA ecoregions L3 / L4 & ecoregion cells for parameters; climate aggregation units & \y & \y & \y & \y & \y \\
+FIA volume equations & cubic-foot and board-foot volume from cohort QMD and height & & & & & \y \\
+\bottomrule
+\end{tabular}
+\end{frame}
+
+\begin{frame}{Mapping inputs: what each raster provides, and who uses it}
+\def\y{\textcolor{pGreen}{\large$\bullet$}}\def\h{\textcolor{pMuted}{$\circ$}}
+\footnotesize
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\bfseries}p{2.7cm}p{7.4cm}*{3}{>{\centering\arraybackslash}p{1.0cm}}@{}}
+\toprule
+input & provides & stands & gen.\ veg & viewer \\
+\midrule
+TreeMap 2022 & 30\,m FIA plot imputation: BA, height, QMD, cover, TPA, softwood share; plot id & \y & \h & \y \\
+Hansen GFC v1.12 & tree cover 2000, forest loss year 2001–2024 & \y & \y & \\
+LANDFIRE & EVT type and life form; disturbance class and severity 2000–2025; EVC cover, TPI (held-out scores) & \y & \y & \\
+AlphaEarth 2022, 2025 & 64-d annual satellite embeddings (10\,m, resampled to 30\,m) & \y & \y & \\
+SOLUS soils & soil PCs (stands), soil covariates of footprints (gen.\ veg) & \y & \y & \\
+TIGER, FL parcels & roads, water, parcel lines as stand barriers & \y & & \\
+FIA public coordinates & fuzzed plot locations ($\approx$1.6\,km) for candidate footprints & & \y & \y \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\scriptsize\y\ model input or calibration data\qquad \h\ comparison only (generative vegetation is TreeMap-independent)}
+\end{frame}
+
+\begin{frame}{FIA: remeasured trees become cohort trajectories}
+\begin{columns}[T]
+\begin{column}{0.62\textwidth}
+\figw[width=\linewidth,height=0.72\textheight,keepaspectratio]{figures/reused/old_growth.png}
+\end{column}
+\begin{column}{0.36\textwidth}
+\small
+\begin{itemize}\setlength\itemsep{2pt}
+\item species resolved, tree ages imputed, fates flagged (mortality, harvest, disturbance)
+\item cohort = (species, age) on a plot; AGB summed from its trees
+\item calibration data: GA+FL 8,985 plots, $\approx$46 species groups; Region 4 $\approx$30k plots
+\end{itemize}
+\end{column}
+\end{columns}
+\data{FIADB TREE / COND / PLOT remeasurements $\rightarrow$ \texttt{curated\_trees}, \texttt{curated\_cohorts\_landis\_stdorg}. Example: plot 40, Suwannee Co.\ FL (old-growth live oak with a young slash-pine plantation); figure from the thesis.}
+\end{frame}
+
+\begin{frame}{Site drivers: climate and soil (PnET, HBAD3P, viewer)}
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\centering\footnotesize mean temperature by EPA Level-4 ecoregion (PRISM)\\
+\figw[width=\linewidth,height=0.62\textheight,keepaspectratio]{figures/reused/map_prism_l4_tmean.pdf}
+\end{column}
+\begin{column}{0.5\textwidth}
+\centering\footnotesize field capacity from SOLUS (Saxton–Rawls)\\
+\figw[width=\linewidth,height=0.62\textheight,keepaspectratio]{figures/reused/map_soils_fieldcap.pdf}
+\end{column}
+\end{columns}
+\data{PRISM monthly 1981–2024 aggregated to EPA L4 polygons; SOLUS 0–30\,cm texture and SOC at the plot (public) coordinates; Region 4.}
+\end{frame}
+
+\begin{frame}{Remote-sensing layers (stand delineation, generative vegetation)}
+\figw[width=\linewidth,height=0.74\textheight,keepaspectratio]{figures/reused/map_standmap_inputs.png}
+\data{TreeMap 2022, Hansen GFC v1.12, LANDFIRE EVT 2022, AlphaEarth 2025, SOLUS, TIGER; all resampled to the TreeMap 30\,m grid (EPSG:5070).}
+\end{frame}

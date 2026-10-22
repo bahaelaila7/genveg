@@ -1,0 +1,32 @@
+% ---------------------------------------------------------------- generative vegetation
+\sectionblurb{Stand vegetation (cohorts) generated from rasters, learned from FIA plots whose true locations are unknown — independent of TreeMap.}
+\section{Generative vegetation}
+
+\begin{frame}{Generative vegetation: model and mapping}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.3cm]
+\node[dat=2.4cm] (fia) {FIA GA+FL: 8,712 plots, 34,300 visits; cohort tokens};
+\node[dat=2.4cm, below=0.25cm of fia] (cand) {fuzzed location $\rightarrow$ $\le$256 candidate footprints (AEF, disturbance, soils)};
+\node[repl=2.4cm, right=of fia] (enc) {set encoder $\rightarrow$ $z\in\mathbb{R}^{16}$};
+\node[repl=2.4cm, right=of cand] (pri) {location prior: FIA records $\leftrightarrow$ disturbance evidence};
+\node[repl=2.7cm, right=of enc] (flow) {yearly flow of $z$ + jumps at disturbances; visit pairs};
+\node[repl=2.7cm, right=of pri] (mil) {multiple-instance loss vs AlphaEarth 2022 / 2025 of candidates};
+\node[repl=2.5cm, right=of flow] (A) {A: landscape prior $p(z\,|\,$1.6\,km disk$)$};
+\node[repl=2.5cm, right=of mil] (B) {B: likelihood $p(\text{AEF}\,|\,z)$};
+\node[shared=2.7cm, below=0.6cm of B.south east, anchor=north east] (map) {per stand: $z\sim$ A, weight by B, flow to 2025, decode cohorts, calibrate};
+\node[dat=2.4cm, left=of map] (st) {stands (previous part)};
+\node[dat=2.6cm, left=of st] (fe) {Forest Explorer layer; 45 verification checks};
+\draw[ar] (fia) -- (enc); \draw[ar] (enc) -- (flow); \draw[ar] (cand) -- (pri); \draw[ar] (pri) -- (mil); \draw[ar] (flow) -- (mil);
+\draw[ar] (flow) -- (A); \draw[ar] (mil) -- (B); \draw[ar] (B) -- (map); \draw[ar] (A.east) -- ++(0.25,0) |- (map.east);
+\draw[ar] (st) -- (map); \draw[ar] (map.south) -- ++(0,-0.25) -| (fe.south);
+\end{tikzpicture}
+\src{\texttt{standmap} \texttt{scripts/g02*–g05*}, \texttt{docs/GENVEG\_PIPELINE.md}; formulation: backup}
+\end{frame}
+
+\input{parts/vars_genveg}
+
+\begin{frame}{Generative vegetation: held-out accuracy}
+\begin{center}\figw[width=\linewidth,height=0.62\textheight,keepaspectratio]{figures/new/fig_genveg_results.png}\end{center}
+{\scriptsize Modest: beats kNN on QMD and the null on BA; no better than the null on trees/ha. Dominant species 0.42 vs kNN 0.36 (majority class 0.22).\par}
+\data{\texttt{data/proto/gafl\_pipe/bayes\_eval.json}: held-out FIA visits in spatial blocks (3.2\,km buffer), predicted through the stand-mapping path with calibration factors from separate calibration plots.}
+\end{frame}

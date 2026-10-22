@@ -1,0 +1,45 @@
+% ---------------------------------------------------------------- comparison
+\sectionblurb{Same data, same groups, same splits: the engines compared on held-out plots — and the non-TOST recalibration.}
+\section{Calibration results compared}
+
+\begin{frame}{GA+FL: held-out equivalence of the three engines}
+\figw[width=\linewidth,height=0.68\textheight,keepaspectratio]{figures/new/fig_heldout_passes.png}
+\data{the three CV folds of each engine (\texttt{results/*/cv*\_groups.csv}); groups $\approx$46 (Sim A), 48 (Sim B). HBAD v1 is best held-out; PnET equals BS in-sample but generalises slightly worse. \tostflag}
+\end{frame}
+
+\begin{frame}{Per species group: where the engines differ}
+\figw[width=\linewidth,height=0.74\textheight,keepaspectratio]{figures/new/fig_bias_compare.png}
+\data{fold-mean held-out bias per group (same files); bands $\pm$10 / $\pm$20\,\%. Large groups agree within a few \%; the engines diverge on small groups: catch-alls (\_S\_NA, \_H\_NA) and bald cypress (TADI2, PnET).}
+\end{frame}
+
+\begin{frame}{Redo without TOST: multi-objective gdigel (accuracy + age structure)}
+\figw[width=\linewidth,height=0.58\textheight,keepaspectratio]{figures/new/fig_mo_pareto.png}
+\scriptsize
+\begin{itemize}\setlength\itemsep{0pt}
+\item objectives per group: $a_g$ = mean $|\log$ AGB error$|$, $w_g$ = Wasserstein age-structure distance; picks (min $A$, knee, min $W$, refined) scored on \emph{val} only
+\item \textbf{not yet better}: BS val 1/5/12 vs 8/23/38; HBAD 12/29/39 vs 16/37/41 (TOST-targeted). Sim A/B variants (6, BS): none passes all criteria
+\end{itemize}
+\data{\texttt{runs\_local/mogd\_\{bs,hbad\}\_legacyW/mo\_archive.csv}, \texttt{mogd\_*\_val.log}; references from the val CV folds; \texttt{docs/mo\_gdigel.md}, \texttt{docs/simAB\_options\_results.md}.}
+\end{frame}
+
+\begin{frame}{Equifinality: equally good parameter sets, different futures}
+\figw[width=\linewidth,height=0.68\textheight,keepaspectratio]{figures/reused/equifinality_fans.pdf}
+\data{gdigel solution ensembles (\texttt{results/explore\_\{biomass,pnet,hbad\}}), 100-yr projections from the same start; spread at year 60: BS CV $\le$1.7\,\%, HBAD 6.6\,\%, PnET $\approx$15\,\%.}
+\end{frame}
+
+\begin{frame}{Region 4: all three engines on $\approx$30k plots}
+\begin{columns}[T]
+\begin{column}{0.6\textwidth}
+\figw[width=\linewidth,height=0.72\textheight,keepaspectratio]{figures/reused/r4_passes.pdf}
+\end{column}
+\begin{column}{0.38\textwidth}
+\small
+\begin{itemize}\setlength\itemsep{2pt}
+\item 8 states, 14 EPA L3 ecoregions, 50 species groups
+\item same procedure, all plots: in-sample only
+\item the viewer's default parameter sets
+\end{itemize}
+\end{column}
+\end{columns}
+\data{\texttt{results/r4/\{bs,pnet,hbad\}\_calib\_log.csv}; \texttt{docs/campaign\_2026-10-14.md}. \tostflag}
+\end{frame}

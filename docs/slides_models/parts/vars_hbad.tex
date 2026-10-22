@@ -1,0 +1,21 @@
+\begin{frame}{HBAD v1: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.3cm}X>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\toprule
+variable & definition / equation (Pan code) & from which input \\
+\midrule
+TPH (trees/ha) & from cohort (age, AGB): $\exp(\text{quadratic in } \ln\text{AGB}, \ln\text{age})$, $\ge$ one macroplot tree & FIA cohort AGB, age; fitted translation \\
+QMD $D$ (cm) & mass per tree $m=\text{AGB}/\text{TPH}$ $\rightarrow$ $D=2.54\,e^{(\ln m-a)/b}$ (mass–QMD allometry) & FIA trees (allometry fit) \\
+height $H$ (m) & $1.3+h_a(1-e^{-h_bD})^{h_c}$ (Chapman–Richards) & FIA HT (prior fit) \\
+BA, SDI & $\frac{\pi}{4}(D/100)^2\,$TPH;\quad $\sum$ TPH $(D/25.4)^{1.605}$ (Reineke) & state \\
+RD & SDI / SDI$_{\max}$ (site value from species SDI$_{\max}$, BA-weighted) & SDI$_{\max}$ (fitted) \\
+BAL & BA of cohorts with larger $D$ & state \\
+$\Delta D$ & $G_{\text{MULT}}\exp(g_0+g_1\ln\frac D{20}+g_2\frac D{20}+g_3\ln\frac A{30}-g_k\frac{\text{BAL}}{10})$ & FIA remeasured trees (28 coeff./species) \\
+hazard $h$ & $M_{\text{MULT}}\exp(m(D,\text{RD},\text{BAL}))$;\quad TPH $\leftarrow$ TPH $e^{-h}$ & FIA remeasured trees \\
+AGB (reported) & TPH $\cdot\,m(D)$ (same allometry) & state \\
+shade class & from RD vs MIN\_REL\_RD (establishment block of Biomass Succession) & state \\
+\bottomrule
+\end{tabularx}
+\src{Pan \texttt{docs/hbad\_plugin.md} \S1–4, \texttt{src/plugins/HBAD/plugin.jl}, \texttt{tools/hbad\_translate\_lib.jl}}
+\end{frame}

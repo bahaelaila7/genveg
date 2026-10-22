@@ -1,0 +1,85 @@
+% ---------------------------------------------------------------- HBAD
+\sectionblurb{Height, Basal Area, Density: cohorts carry trees/ha, diameter and height — v1 empirical, v2 process, HBAD3P process and trait-bound.}
+\section{HBAD}
+
+\begin{frame}{HBAD v1 in Pan: one simulated year}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.32cm]
+\node[dat=2.4cm] (fia) {FIA cohorts: AGB $\rightarrow$ TPH, QMD (mass–QMD allometry)};
+\node[repl=2.4cm, right=of fia] (st) {site BA, SDI, RD = SDI/SDI$_{\max}$, BAL per cohort};
+\node[repl=2.9cm, right=of st] (dd) {$\Delta D$ = $G_{\text{MULT}}\cdot$FIA regression($D$, age) $\cdot e^{-k\,\text{BAL}}$};
+\node[repl=2.4cm, right=of dd] (h) {height: Chapman–Richards ratio};
+\node[repl=2.9cm, below=0.7cm of h] (m) {hazard = $M_{\text{MULT}}\cdot$FIA regression($D$, RD, BAL); TPH $\cdot e^{-h}$};
+\node[repl=2.4cm, left=of m] (r) {Reineke cap: SDI $\le$ SDI$_{\max}$, smallest cohorts first};
+\node[shared=2.4cm, left=of r] (l) {removal at LONGEVITY};
+\node[shared=2.9cm, left=of l] (e) {establishment: BS block, shade class from RD; 750 TPH at 1\,cm};
+\draw[ar] (fia) -- (st); \draw[ar] (st) -- (dd); \draw[ar] (dd) -- (h); \draw[ar] (h) -- (m); \draw[ar] (m) -- (r); \draw[ar] (r) -- (l); \draw[ar] (l) -- (e);
+\draw[ar] (e.north) -- ++(0,0.25) -| node[pos=0.25, above, font=\tiny, text=pMuted]{next year} (st.south);
+\end{tikzpicture}
+
+\vspace{0.4em}\flowlegend
+
+\vspace{0.4em}
+\footnotesize \hl{Fitted}: $G_{\text{MULT}}$, $M_{\text{MULT}}$ (eco $\times$ species), SDI$_{\max}$ (species). \hl{Fixed}: 28 FIA regression coefficients per species. No climate, CO$_2$ or soil drivers.
+\src{Pan \texttt{src/plugins/HBAD/plugin.jl}; \texttt{docs/hbad\_plugin.md} \S1–5; equations: backup}
+\end{frame}
+
+\input{parts/vars_hbad}
+
+\begin{frame}{HBAD v1 calibration: held-out bias per species group}
+\figw[width=\linewidth,height=0.64\textheight,keepaspectratio]{figures/new/fig_heldout_bias_hbad.png}
+\begin{center}\scriptsize held-out groups passing $\pm$5/10/20\,\%: \textbf{17 / 34 / 41} of 46 (mean of folds); median $|$bias$|$ 2.8\,\% — best of the three engines; growth–mortality split not identified ($M_{\text{MULT}}$ $\times$11 across equal fits)\end{center}
+\data{\texttt{results/hbad\_gafl/cvH\_*\_groups.csv}; levers $G_{\text{MULT}}$, $M_{\text{MULT}}$. \tostflag}
+\end{frame}
+
+\begin{frame}{HBAD v2: process cohorts with light competition by height}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.32cm]
+\node[dat=2.5cm] (fia) {FIA trees $\rightarrow$ cohorts: species $\times$ birth class $\times$ size class};
+\node[repl=2.6cm, right=of fia] (o) {overtopping $O$: SDI of taller cohorts; crowding RD};
+\node[repl=3.1cm, right=of o] (g) {$\Delta D$, $\Delta H$: power law in $D$, $H$ $\times$ light $e^{-gO}$ $\times$ crowding $\times$ vigour};
+\node[repl=2.6cm, right=of g] (m) {hazard: background + suppression + senescence};
+\node[repl=2.6cm, below=0.7cm of m] (c) {SDI cap};
+\node[repl=3.1cm, left=of c] (r) {recruitment: stand-table regression (species BA, SDI)};
+\node[dat=2.6cm, left=of r] (fit) {fit: binomial survival + Gaussian $\ln D$, $\ln H$ (remeasured trees)};
+\draw[ar] (fia) -- (o); \draw[ar] (o) -- (g); \draw[ar] (g) -- (m); \draw[ar] (m) -- (c); \draw[ar] (c) -- (r);
+\draw[ar] (r.north) -- ++(0,0.25) -| node[pos=0.25, above, font=\tiny, text=pMuted]{next year} (o.south);
+\draw[ad] (fit) -- (r);
+\end{tikzpicture}
+
+\vspace{0.6em}
+\footnotesize No biomass state: $N$ (trees/ha), $D$, $H$, age, vigour quantile. $\approx$14 parameters per species key, $\approx$175–210 in all. GA+FL val NLL $-272{,}655$.
+\src{\texttt{landis\_hbad2} \texttt{docs/hbad\_v2.md}, \texttt{src/plugins/HBAD2/HBAD2.jl}; equations: backup}
+\end{frame}
+
+\input{parts/vars_hbad2}
+
+\begin{frame}{HBAD3P: process and trait-bound growth, climate through water}
+\centering
+\begin{tikzpicture}[node distance=0.3cm and 0.3cm]
+\node[drv=2.6cm] (w) {water $W$ = AET/PET (PRISM precip., Thornthwaite PET, AWC); normal $W_n$};
+\node[repl=2.3cm, right=of w] (o) {overtopping $O$, RD, crown ratio CR};
+\node[repl=3.3cm, right=of o] (v) {stem volume $\Delta V$ = $\varepsilon_k\,(D/20)^b$ $\times$ light $\times$ crowding $\times$ $W^{\omega}$ $\times$ crown $\times$ hydraulic limit $-$ maintenance};
+\node[repl=2.4cm, right=of v] (dh) {$\Delta D=\Delta V/2DH$; $\Delta H$: trait $H$–$D$ curve + light};
+\node[repl=2.9cm, below=0.7cm of dh] (m) {hazard: carbon balance + drought anomaly $m_W(W_n{-}W)$ + senescence};
+\node[repl=2.2cm, left=of m] (t) {self-thinning: RD $\le$ 1};
+\node[repl=3.0cm, left=of t] (r) {recruitment $F_k$ $\times$ light window(ST) $\times$ seed source};
+\node[dat=2.6cm, left=of r] (tr) {fixed traits: $H_{\max}$, shade tolerance, longevity};
+\draw[ar] (o) -- (v); \draw[ar] (v) -- (dh); \draw[ar] (dh) -- (m); \draw[ar] (m) -- (t); \draw[ar] (t) -- (r);
+\draw[ar] (r.north) -- ++(0,0.25) -| node[pos=0.2, above, font=\tiny, text=pMuted]{next year} (o.south);
+\draw[ad] (w) -- (o); \draw[ad] (tr) -- (r);
+\end{tikzpicture}
+
+\vspace{0.5em}
+\footnotesize Fitted: growth efficiency $\varepsilon_k$ per key + globals (33 coordinates; v2: 175) by CMA-ES; fecundity $F_k$ and the light window in a separate recruitment fit. GA+FL val NLL $-273{,}469$ vs v2 $-272{,}655$ on the same data; the deployed pipeline fit (forested-area densities, 42 coordinates) $-272{,}208$ on its own data. In Pan: plugin \texttt{hbad3p} (bit-identical to the reference), Forest Explorer engine.
+\src{\texttt{landis\_hbad3} \texttt{docs/hbad3\_design.md} \S4, \texttt{results/hbad3/fit3p\_P3\_GAFL/log.txt}; Pan \texttt{src/plugins/HBAD3P}; equations: backup}
+\end{frame}
+
+\input{parts/vars_hbad3p}
+
+\begin{frame}{HBAD3P free runs on held-out plots}
+\figw[width=\linewidth,height=0.70\textheight,keepaspectratio]{figures/new/fig_hbad3p_freerun.png}
+\data{\texttt{results/hbad3/fit3p\_P3\_\{GAFL,APP\}/freerun\_val.csv}: 434 val plots per region, simulated from the first visit to the last (8–30 yr, median 20) without sync; bias = $\Sigma$sim/$\Sigma$obs $-$ 1. Stems $\ge$12.7\,cm too low ($-13$ / $-18$\,\%): in-growth still under-predicted.}
+\end{frame}
+
+\input{parts/_hbad_sidebyside}

@@ -1,0 +1,117 @@
+% ---------------------------------------------------------------- PnET-Succession
+\sectionblurb{Physiology: monthly photosynthesis from foliar N, light, water, temperature, VPD and CO$_2$ on the Biomass Succession cohort frame.}
+\section{PnET-Succession}
+
+\begin{frame}{PnET-Succession in Pan: one simulated year}
+\centering
+\begin{tikzpicture}[every node/.append style={minimum height=0.8cm}]
+% inputs
+\node[drv=3.6cm, anchor=west] (clim) at (0,0) {monthly climate (PRISM by L4): Tmin, Tmax, precip.; latitude $\rightarrow$ PAR, VPD};
+\node[drv=1.9cm, anchor=west] (co2) at (3.95,0) {CO$_2$ (NOAA; SSP)};
+\node[drv=3.6cm, anchor=west] (soil) at (6.2,0) {soil bucket (SOLUS, Saxton–Rawls): porosity, FC, WP, depth};
+\node[shared=3.6cm, anchor=west] (fia) at (10.15,0) {FIA cohorts (species, age, AGB) $\rightarrow$ pools};
+% year start
+\node[repl=3.6cm, anchor=west] (lay) at (0,-1.35) {canopy layers by lifetime max biomass; 5 sublayers per cohort};
+\node[drv=3.6cm, anchor=west] (snow) at (3.95,-1.35) {month $m$: snow, throughfall, precipitation events};
+\node[font=\tiny, text=pMuted, anchor=west, align=left] at (7.8,-1.35) {then per canopy layer, top $\rightarrow$ bottom;\\sublayers in random order:};
+% per sublayer chain
+\node[repl=1.85cm, anchor=west] (w) at (0,-2.75) {water in; maint.\ respiration};
+\node[repl=1.85cm, anchor=west] (ph) at (2.15,-2.75) {phenology, foliage};
+\node[repl=1.85cm, anchor=west] (fr) at (4.3,-2.75) {light fRad (PAR through layers)};
+\node[repl=1.85cm, anchor=west] (fw) at (6.45,-2.75) {water stress fWater};
+\node[repl=3.0cm, anchor=west] (gpp) at (8.6,-2.75) {GPP = Amax(FolN, CO$_2$) $\times$ f(rad, water, T, VPD, age)};
+\node[repl=1.95cm, anchor=west] (nsc) at (11.9,-2.75) {NetPsn $\rightarrow$ NSC; transpiration};
+% december
+\node[repl=3.0cm, anchor=west] (dec) at (0,-4.2) {December: turnover; NSC $\rightarrow$ wood, root, foliage; age $+1$};
+\node[repl=3.0cm, anchor=west] (mort) at (3.3,-4.2) {mortality: NSC fraction $\le$ 0.01; fAge from LONGEVITY};
+\node[shared=3.0cm, anchor=west] (agb) at (6.6,-4.2) {reported AGB = (wood$_{\text{AG}}$ + foliage) $\times$ canopy share};
+\node[shared=1.9cm, anchor=west] (hv) at (9.9,-4.2) {harvest, FIA sync, scoring};
+\node[off=1.5cm, anchor=west] (est) at (12.1,-4.2) {establishment};
+% arrows
+\draw[ar] (lay) -- (snow);
+\draw[ar] (snow.south) -- ++(0,-0.25) -| (w.north);
+\draw[ar] (w) -- (ph); \draw[ar] (ph) -- (fr); \draw[ar] (fr) -- (fw); \draw[ar] (fw) -- (gpp); \draw[ar] (gpp) -- (nsc);
+\draw[ar] (nsc.south) -- ++(0,-0.3) -| (dec.north);
+\node[font=\tiny, text=pMuted, anchor=south east] at (13.85,-3.55) {after 12 months};
+\draw[ar] (dec) -- (mort); \draw[ar] (mort) -- (agb); \draw[ar] (agb) -- (hv);
+\draw[ad] (clim) -- (lay); \draw[ad] (co2) -- (snow); \draw[ad] (soil.south) -- ++(0,-0.25) -| (fw.north);
+\draw[ad] (fia.south) -- ++(0,-0.25) -| (nsc.north);
+\end{tikzpicture}
+
+\vspace{0.3em}\flowlegend
+\src{Pan \texttt{src/plugins/PnET/plugin.jl} (\texttt{site\_year!}, \texttt{sublayer!}); \texttt{docs/pnet\_spec.md} \S1.4, \S7 (from the LANDIS-II PnET-Succession v6 code)}
+\end{frame}
+
+\input{parts/vars_pnet}
+
+\begin{frame}{PnET vs Biomass Succession in operation, and its parameters}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.53\textwidth}
+\scriptsize\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{@{}>{\bfseries}p{1.45cm}p{2.05cm}p{2.75cm}@{}}
+\toprule
+ & Biomass Succ. & PnET \\
+\midrule
+time step & annual & monthly (12 per year) \\
+growth & ANPP$_{\max}$ $\times$ competition $\times$ $S$ & GPP from FolN, light, water, T, VPD, CO$_2$ $-$ respiration \\
+competition & share of site biomass, $B_{\max}$ & light by canopy layer, one soil-water bucket \\
+mortality & age curve $D$; growth-related & carbon starvation, turnover \\
+establishment & PROB\_ESTAB $\times$ light & off in Pan \\
+cohort & (species, age, AGB) & + foliage, wood/root, NSC \\
+shared & \multicolumn{2}{p{4.9cm}}{cohort frame, LONGEVITY, FIA injection, harvest, loss} \\
+\bottomrule
+\end{tabular}
+\end{column}
+\begin{column}{0.46\textwidth}
+\hl{Fitted} (GA+FL, Sim A)
+\begin{itemize}\setlength\itemsep{0pt}
+\item \textbf{FolN} (foliar N \%, eco $\times$ species group) — the productivity lever: Amax $=$ AmaxA $+$ AmaxB$\cdot$FolN
+\item search space of the CMA-ES runs: + MaxFracFol, FrActWd, SLWmax, TOwood, PsnAgeRed (species), RD\_MULT (eco): 282 dims
+\end{itemize}
+\hl{Fixed}
+\begin{itemize}\setlength\itemsep{0pt}
+\item LONGEVITY (as BS); species $\rightarrow$ 4 plant functional types (22 physiology fields: AmaxA/B, HalfSat, $k$, PsnT, H1–H4, DVPD, TOfol, \dots)
+\item 21 generic constants; site: climate, CO$_2$, soils
+\end{itemize}
+\end{column}
+\end{columns}
+\src{Pan \texttt{src/plugins/PnET/params.jl}; \texttt{docs/pnet\_spec.md} \S2; \texttt{docs/cmaes\_gdigel.md:13}}
+\end{frame}
+
+\begin{frame}{Calibration procedure (Sim A; same for PnET, Biomass Succession, HBAD v1)}
+\centering
+\begin{tikzpicture}[node distance=0.35cm]
+\node[dat=2.6cm] (d) {GA+FL FIA plots (8,985), split train / val / test by plot};
+\node[fb=2.8cm, right=of d] (s) {\textbf{Sim A}: inject cohorts at the first visit, simulate to the next visit, sync to the observation};
+\node[fb=2.6cm, right=of s] (g) {per TOST group ($\approx$46: species; pines by site cell): mean log AGB bias};
+\node[repl=2.7cm, right=of g] (c) {coordinate calibration: per group, a lever grid; root of the group bias; rounds};
+\node[fb=3.0cm, below=0.6cm of c] (cv) {3-fold CV: fit on two splits, TOST $\pm$5/10/20\,\% on the third};
+\node[dat=2.8cm, left=of cv] (all) {deployed set: fit on all plots};
+\node[fb=4.4cm, left=of all] (lev) {levers: \textbf{PnET} FolN \quad \textbf{BS} $S$, ANPP ratio, $B_{\max}$ \quad \textbf{HBAD} $G_{\text{MULT}}$, $M_{\text{MULT}}$};
+\draw[ar] (d) -- (s); \draw[ar] (s) -- (g); \draw[ar] (g) -- (c); \draw[ar] (c) -- (cv); \draw[ar] (c.south west) -- (all.north east);
+\draw[ad] (lev) -- (all);
+\end{tikzpicture}
+
+\vspace{0.6em}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\footnotesize
+\begin{itemize}\setlength\itemsep{1pt}
+\item matched pairs = (plot, visit, group), real records only; disturbed cohorts excluded
+\item TOST: equivalence of the group's mean log bias within $\pm\delta$ ($\alpha$ 0.05)
+\end{itemize}
+\end{column}
+\begin{column}{0.5\textwidth}
+\footnotesize
+{\color{pRust}\textbf{Caveat}}: root-finding the group bias optimises the statistic TOST tests $\Rightarrow$ only held-out folds are informative. The non-TOST redo (multi-objective, next part) is in progress.
+\end{column}
+\end{columns}
+\src{Pan \texttt{tools/calib\_coord.jl}, \texttt{tools/tost\_common.jl}, \texttt{tools/gafl\_cv.sh}; \texttt{docs/gafl\_calibration\_log.md}, \texttt{docs/gafl\_pnet\_calibration.md}}
+\end{frame}
+
+\begin{frame}{PnET calibration: held-out bias per species group}
+\figw[width=\linewidth,height=0.64\textheight,keepaspectratio]{figures/new/fig_heldout_bias_pnet.png}
+\begin{center}\scriptsize held-out groups passing $\pm$5/10/20\,\%: \textbf{3 / 16 / 33} of 46 (mean of folds); median $|$bias$|$ 6.1\,\%; bald cypress (TADI2) cannot be fitted: its PFT, not FolN, limits it\end{center}
+\data{\texttt{results/pnet\_gafl/cvP\_*\_groups.csv}: each fold held out from a FolN calibration on the other two splits; 90\,\% CI. \tostflag}
+\end{frame}

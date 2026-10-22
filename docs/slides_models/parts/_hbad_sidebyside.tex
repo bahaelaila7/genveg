@@ -1,0 +1,20 @@
+% ----------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{The three HBAD generations side by side}
+\scriptsize
+\renewcommand{\arraystretch}{1.1}
+\begin{tabularx}{\textwidth}{>{\bfseries}l X X X}
+\toprule
+ & HBAD v1 & HBAD v2 & HBAD3P \\
+\midrule
+growth & FIA $\Delta D$ regression $\times G_{\text{mult}}$, BAL & power law in $D$, $H$ $\times$ light ($O$), crowding (RD), vigour & stem-volume balance: light, crowding, water $W^{\omega}$, crown, hydraulic limit \\
+height & Chapman–Richards ratio & own growth equation & trait $H$–$D$ curve + light rule \\
+mortality / thinning & regression hazard $\times M_{\text{mult}}$ (RD, BAL); Reineke cap & background + suppression + senescence; SDI cap & carbon-balance hazard + drought anomaly + senescence; RD $\le1$ \\
+recruitment & Biomass-Succession block & stand-table regression & fecundity $\times$ light window $\times$ seed source \\
+climate & none & none & $W$ (PRISM + AWC), drought anomaly \\
+parameters & $G,M$ per eco$\times$spp, SDI$_{\max}$ & $\approx$\,175–210 & $\approx$\,30–33 per region \\
+fit (GA+FL val NLL) & — & $-272{,}655$ & $-273{,}469$ \\
+\bottomrule
+\end{tabularx}
+\src{fit: Sim A likelihood on remeasured trees (binomial survival + Gaussian ln D, ln H), CMA-ES, same GA+FL data for v2 and HBAD3P. HBAD v1 is calibrated on cohort AGB instead (held-out TOST, previous part). HBAD3P free runs: previous slide.}
+\end{frame}
+

@@ -1,0 +1,19 @@
+\begin{frame}{Generative vegetation: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.4cm}X>{\raggedright\arraybackslash}p{3.7cm}@{}}
+\toprule
+variable & definition / equation (code) & from which input \\
+\midrule
+visit tokens & one per (species, age class): $\ln N$, $\ln$QMD, $H$, CR per forested area of the visit & FIA trees, conditions, imputed ages \\
+candidates $c$ & 90\,m footprints of forest land within $\approx$1.6\,km of the public coordinates, $\le$256 per plot (stratified, inclusion-weighted) & FIA public coordinates, land status \\
+footprint evidence & AlphaEarth 2022 / 2025; disturbance history 2000–2025 (class, severity, loss year); soils & AlphaEarth, LANDFIRE disturbance, Hansen, SOLUS \\
+location prior $\pi_c$ & product of likelihood ratios matching FIA treatment / disturbance codes to the footprint's evidence by type and year (LR 4 or 2; $\times$0.25 for unrecorded stand-replacing events) & FIA TRT / DSTRB codes \\
+latent $z\in\mathbb R^{16}$ & masked set encoder of the visit tokens & tokens \\
+dynamics & yearly flow $\frac{dz}{dt}=-(\frac1\tau+g)\odot z+g\odot A$; jump $z\leftarrow z+J(z,\text{event})$ at the candidate's disturbances & disturbance history \\
+MIL distance $d_c$ & $\lVert h_{22}(z_{2022})-\mathbf a^c_{22}\rVert^2+\lVert h_{25}(z_{2025})-\mathbf a^c_{25}\rVert^2$, loss $-\log\frac1K\sum_c e^{-d_c/T}$ & AlphaEarth of the candidates \\
+stand vegetation & landscape descriptor $X_L$ (1.6\,km disk / 1\,km node) $\rightarrow$ $z\sim p(z\,|\,X_L)$, weighted by $p(\text{AEF}\,|\,z)$ of the stand's footprints, flowed to 2025, decoded to cohorts; $\times$ calibration factors & stands, rasters, calibration plots \\
+\bottomrule
+\end{tabularx}
+\src{\texttt{standmap/scripts}: \texttt{g02b}, \texttt{g02e}, \texttt{g03b}, \texttt{g04}, \texttt{g05}}
+\end{frame}

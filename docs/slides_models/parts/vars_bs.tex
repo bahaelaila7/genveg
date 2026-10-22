@@ -1,0 +1,21 @@
+\begin{frame}{Biomass Succession: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.2cm}X>{\raggedright\arraybackslash}p{4.3cm}@{}}
+\toprule
+variable & definition / equation (Pan code) & from which input \\
+\midrule
+cohort, age $a$ & (subplot, species, birth date $=$ visit $-$ imputed age); age propagated in integer steps per subplot & FIA TREE, age anchors (TOTAGE, BHAGE, STDAGE) \\
+$B_i$ (g/m$^2$) & cohort AGB $=\sum_{\text{trees}}$ DRYBIO\_AG $\times$ TPA\_UNADJ $\times$ 453.592/4046.86 & FIA TREE \\
+eco cell & EPA L3 ecoregion $\times$ site-class tier (pines also by site cell A–D) & COND (SITECLCD), EPA L3 \\
+comp$_i$ & $\max(1,B_i^{0.95})\,/\,\sum_j\max(1,B_j^{0.95})$ & state \\
+$B_{\text{POT},i}$, $B_{\text{AP},i}$ & $B_{\max}-B_{\text{site}}+B_i$;\quad $B_{\text{AP}}=B_i/B_{\text{POT}}$ & state, $B_{\max}$ \\
+ANPP$_i$ & ANPP$_{\max}\,\text{comp}_i\;B_{\text{AP}}^{S}\,e^{1-B_{\text{AP}}^{S}}$, ANPP$_{\max}=B_{\max}/\text{ratio}$ & state, $S$, $B_{\max}$, ratio \\
+$M_{\text{growth}}$, $M_{\text{age}}$ & ANPP$_{\max}\,\text{comp}_i\,\frac{2B_{\text{AP}}}{1+B_{\text{AP}}}$;\quad $B_i\,e^{D(a/L-1)}$ ($L$ = LONGEVITY) & state, $D$, $L$ \\
+$\Delta B_i$ & ANPP$_i - M_{\text{growth}} - M_{\text{age}}$ (LANDIS v7 order); removal at $a\ge L$ & — \\
+shade class & number of MIN\_REL\_BIOMASS thresholds exceeded by $B_{\text{site}}/\max B_{\max}$ & state \\
+establishment & mature cohort present $\times$ SUFFICIENT\_LIGHT[shade, SHADE\_TOL] $\times$ PROB\_ESTAB & traits from FIA crown class, canopy cover \\
+\bottomrule
+\end{tabularx}
+\src{Pan \texttt{BiomassSuccession/plugin.jl} (\texttt{succession\_step!}); \texttt{FIA\_DATA\_PREP/cohort\_tracking.py}, \texttt{cohorts\_landis.py}}
+\end{frame}

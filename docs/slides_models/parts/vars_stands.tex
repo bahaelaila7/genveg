@@ -1,0 +1,19 @@
+\begin{frame}{Stand delineation: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.3cm}X>{\raggedright\arraybackslash}p{3.7cm}@{}}
+\toprule
+variable & definition / equation (code) & from which input \\
+\midrule
+land status & 1 forest (TreeMap pixel); 2 harvested (loss $\ge$2017 on cover$_{2000}\ge$25\,\%); 3 regenerating (older loss, disturbed / plantation EVT, or shrub/herb on former forest); 4 forest unmapped (EVT tree); 9 converted & TreeMap, Hansen loss year + cover 2000, LANDFIRE EVT \\
+AlphaEarth $\mathbf a$ & 64-d embedding, de-quantised $\operatorname{sign}(q)(q/127.5)^2$, 10\,m $\rightarrow$ 30\,m & AlphaEarth 2022, 2025 \\
+superpixel & SLIC on $\mathbf a_{22}\oplus\mathbf a_{25}$ (128-d), $n=n_{\text{px}}/11$ ($\approx$1\,ha), compactness 0.15, per status and tile & AlphaEarth \\
+feature $\mathbf y$ (34-d) & AEF 2025: 16 PCs (weight 1.0); AEF 2022 on the 2025 basis: 8 (0.4); change $1-\cos(\mathbf a_{25},\mathbf a_{22})$ (0.5); TreeMap: 6 z-scores (0.6); soils: 3 PCs (0.3) & AlphaEarth, TreeMap (ln BA, height, ln QMD, cover, ln TPA, softwood share), SOLUS \\
+merge cost $c_{ab}$ & Ward $\frac{n_an_b}{n_a+n_b}\lVert\boldsymbol\mu_a-\boldsymbol\mu_b\rVert^2\times s_{ab}$, $s_{ab}$ favours long shared boundaries; threshold to a 15\,ha median & superpixel means of $\mathbf y$ \\
+barriers & 1-px lines no superpixel or stand crosses & TIGER roads, water; FL parcels \\
+stand attributes & status, area, loss year, TreeMap means, main TreeMap plot, soils & all of the above \\
+score (share) & $(R^2_{\text{stands}}-R^2_{\text{blocks}})/(1-R^2_{\text{blocks}})$ on held-out layers & Hansen canopy 2000, LANDFIRE EVC, slope, TPI \\
+\bottomrule
+\end{tabularx}
+\src{\texttt{standmap} \texttt{scripts/10\_forest\_land.py}, \texttt{features.py}, \texttt{21\_superpixels.py}, \texttt{22\_merge.py}, \texttt{23\_finalize.py}, \texttt{stands\_metrics.py}; \texttt{config/pilot.yml}}
+\end{frame}

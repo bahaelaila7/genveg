@@ -1,0 +1,19 @@
+\begin{frame}{HBAD v2: variables and how they are computed}
+\scriptsize
+\renewcommand{\arraystretch}{1.07}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{2.3cm}X>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\toprule
+variable & definition / equation (code) & from which input \\
+\midrule
+cohort & species key $\times$ 10-yr birth class $\times$ size class, with vigour quantile $z$; $N$ trees/ha, $D$ QMD, $H$ mean height, $A$ age & remeasured FIA trees (undisturbed intervals) \\
+SDI, RD & $\sum N(D/25.4)^{1.605}$;\quad SDI/SDI$_{\max}$ & state \\
+overtopping $O$ & SDI of taller cohorts (half of equal-height ones and of itself) / SDI$_{\max}$ & state \\
+$\Delta D$ & $r_D(D/20)^{c_D}e^{-D/D_{\max}}\,e^{-g_{OD}O}\,e^{g_{RD}\text{RD}}\,e^{\sigma_vz}$ & fitted per key \\
+$\Delta H$ & $r_H(H/15)^{c_H}e^{-H/H_{\max}}\,e^{-g_{OH}O+g_{RH}\text{RD}}\,e^{\sigma_vz}$ & fitted per key \\
+hazard $h$ & background $e^{m_{bg}+m_D\ln\frac D{20}+m_{D2}\frac D{20}}$ + suppression (light deficit) + senescence $e^{m_A(A/L-1)}$ & fitted per key, LONGEVITY \\
+recruits $R$ & $185.2\exp(\rho_0+\rho_S\ln(1+\text{BA}_{sp,D\ge12.7})+\rho_L\text{SDI}/600)$ trees/ha/yr at 2.54\,cm, 3\,m & FIA saplings (stand-table regression) \\
+fit & binomial survival + Gaussian $\ln D$, $\ln H$ of survivors over each remeasurement interval & FIA TREE remeasurements \\
+\bottomrule
+\end{tabularx}
+\src{\texttt{landis\_hbad2} \texttt{docs/hbad\_v2.md}, \texttt{src/plugins/HBAD2/HBAD2.jl}}
+\end{frame}
