@@ -8,7 +8,7 @@ fe_pan apps/forest-explorer/public/proto.js). Layer kinds:
   freerun       HBAD3P free-run plots (freerun_val.csv of a fit) as points at the PUBLIC (fuzzed) FIA plot coordinates, relative errors per variable
 Sources: "run:<run>/<stage>/<file>" (stand run), "data:<path>" (standmap data/), plain paths relative to WORKSPACE. Missing sources: skipped + logged.
   .venv/bin/python -I scripts/fe_proto_layers.py [config/fe_layers.yml] [layer id ...]"""
-import os, sys, json, subprocess, numpy as np, pandas as pd, rasterio, yaml, duckdb
+import os, sys, json, subprocess, numpy as np, pandas as pd, rasterio, yaml, duckdb, geopandas as gpd
 from rasterio.windows import Window
 from rasterio.warp import reproject, Resampling, transform_bounds
 from rasterio.transform import from_bounds
@@ -159,7 +159,25 @@ def latent_layer(L):
     d['note'] = f"embedding {os.path.relpath(os.path.realpath(mp), ROOT)}"
     return d, None
 
-KINDS = dict(stands=stands_layer, geojson_file=geojson_layer, raster=raster_layer, freerun=freerun_layer, latent=latent_layer)
+def levels_layer(L):
+    """A nested level (levels.gpkg of a stand run: fine | compartments) clipped to the area, coverage-simplified (5 m), EPSG:4326."""
+    import shapely
+    g = os.path.join(ROOT, 'data', 'derived', 'runs', L['run'], 'levels', 'levels.gpkg')
+    if not os.path.exists(g): return None, f'missing {g}'
+    st = gpd.read_file(g, layer=L['layer']); area = gpd.read_file(os.path.join(ROOT, CFG['area'])).to_crs(st.crs); poly = area.union_all()
+    st = st[st.intersects(poly)].copy(); st['geometry'] = st.intersection(poly); st = st[~st.is_empty & st.geometry.geom_type.isin(['Polygon', 'MultiPolygon'])]
+    try: st['geometry'] = shapely.coverage_simplify(st.geometry.values, 5.0)
+    except Exception: st['geometry'] = st.simplify(5.0, preserve_topology=True)
+    st = st.to_crs(4326); st['area_ha'] = st.area_ha.round(2)
+    fn = f"{OUT}/{L['id']}.geojson"; open(fn, 'w').write(st.to_json(drop_id=True))
+    lv = json.load(open(os.path.join(ROOT, 'data', 'derived', 'runs', L['run'], 'levels', 'levels.json')))
+    key = 'fine' if L['layer'] == 'fine' else 'compartments'
+    props = [STAND_PROPS[0], dict(name='area_ha', label='area', unit='ha', range=[0, 20 if key == 'fine' else 200])] + \
+            ([dict(name='n_stands', label='stands in the compartment', unit='', range=[1, 15])] if key == 'compartments' else [])
+    return dict(type='fill', url=f"/proto/{L['id']}.geojson", props=props, color='area_ha',
+                note=f"{len(st)} units; held-out mean share {lv[key]['mean_share']} (stands {lv['stands']['mean_share']}); nested in the stands of {L['run']}"), None
+
+KINDS = dict(levels=levels_layer, stands=stands_layer, geojson_file=geojson_layer, raster=raster_layer, freerun=freerun_layer, latent=latent_layer)
 mf = f'{OUT}/manifest.json'; man = json.load(open(mf)) if os.path.exists(mf) else dict(layers=[])
 old = {l['id']: l for l in man['layers']}; layers = []
 for L in CFG['layers']:

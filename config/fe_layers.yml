@@ -14,6 +14,8 @@ layers:
   - {id: stands_aefraw_c015, group: Stand delineation, kind: stands, run: tune_embed__2, label: "Stands — SLIC on raw AlphaEarth 2022+2025, compactness 0.15 (best of tune_embed)"}
   - {id: stands_latent_c015, group: Stand delineation, kind: stands, run: tune_embed__6, label: "Stands — SLIC on the IWAE latent (12-d), compactness 0.15"}
   - {id: iwae_latent_rgb, group: Stand delineation, kind: latent, model: "run:tune_embed__6/embed/embed.pt", fit: "run:tune_embed__6/fit/feature_fit.npz", label: "IWAE 90 m neighbourhood embedding (12-d) — PCs 1-3 as RGB"}
+  - {id: levels_fine, group: Stand delineation — nested levels, kind: levels, run: gafl_pilot, layer: fine, label: "Fine units (~5 ha) nested inside the default stands"}
+  - {id: levels_compartments, group: Stand delineation — nested levels, kind: levels, run: gafl_pilot, layer: compartments, label: "Compartments (~50 ha) of whole default stands"}
   - {id: land_status, group: Stand delineation, kind: raster, source: "run:gafl_pilot/clean/land_clean.tif", style: land, label: "Forest-land status (land_clean)"}
   - {id: superpixels, group: Stand delineation, kind: raster, source: "run:gafl_pilot/sp/sp.tif", style: edges, label: "Superpixel edges (SLIC on raw AlphaEarth, default)"}
   - {id: aef2025_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2025.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2025 — PCs 1-3 as RGB"}
