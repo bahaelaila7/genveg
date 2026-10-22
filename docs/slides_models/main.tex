@@ -13,7 +13,7 @@
 \newcommand{\muted}[1]{{\color{pMuted}#1}}
 \newcommand{\src}[1]{\par\vfill{\tiny\color{pMuted}#1\par}}
 \setlength{\abovedisplayskip}{3pt}\setlength{\belowdisplayskip}{3pt}
-\title{Stand delineation \& HBAD models}
+\title{Stand delineation, HBAD \& generative vegetation}
 \subtitle{Formulation and inputs — equations as implemented}
 \author{BahaaEddin AlAila}
 \institute{University of Georgia}
@@ -78,7 +78,7 @@ y_{\text{chg}} &= \bigl(1-\cos(\mathbf a_{25},\mathbf a_{22})\bigr)\;0.5\,/\oper
 \footnotesize
 \begin{columns}[T]
 \begin{column}{0.48\textwidth}
-\hl{1. Superpixels} — SLIC per 2048-px tile and per status, on forest land minus barrier pixels: $n_{\text{seg}} = \lfloor n_{\text{px}}/11\rfloor$ (1\,ha), compactness 0.3, connectivity enforced; never cross barriers, statuses or tiles.
+\hl{1. Superpixels} — SLIC per 512-px tile and per status, on forest land minus barrier pixels: $n_{\text{seg}} = \lfloor n_{\text{px}}/11\rfloor$ (1\,ha), connectivity enforced; never cross barriers, statuses or tiles. \hl{Input: raw AlphaEarth 2022 $\oplus$ 2025}, compactness 0.15 (next slide); the merge uses the 34-d stack.
 
 \medskip
 \hl{2. Merge} on the region-adjacency graph (edges = shared boundary $L_{ab}$):
@@ -87,22 +87,60 @@ c_{ab} &= \underbrace{\frac{n_an_b}{n_a+n_b}\,\lVert\boldsymbol\mu_a-\boldsymbol
 s_{ab} &= 1+0.5\Bigl(1-\min\bigl(1,\tfrac{L_{ab}}{\min(P_a,P_b)}\bigr)\Bigr)
 \end{align*}
 ($s_{ab}$ favours long shared boundaries; $P$ = perimeter)
-admissible if same status and $n_a+n_b\le$ 200\,ha; every round, mutually-best pairs with $c_{ab}<\tau$ merge.
+same status, $n_a+n_b\le$ 200\,ha; each round mutually-best pairs with $c_{ab}<\tau$ merge.
 \end{column}
 \begin{column}{0.50\textwidth}
-\hl{3. Threshold $\tau$} — calibrated automatically: 14 geometric bisections in $[10^{-2},10^{4}]$ on 300 sample components so that the area-weighted median stand is 15\,ha.
+\hl{3. Threshold $\tau$} — bisected (14 steps in $[10^{-2},10^{4}]$, 300 sample components) to an area-weighted median stand of 15\,ha.
 
 \medskip
-\hl{4. Minimum mapping unit} — then regions $<$ 2\,ha merge into their best neighbour (cross-status edges penalised $\times10^{6}$).
+\hl{4. Minimum mapping unit} — then regions $<$ 22\,px (2\,ha) merge into their cheapest neighbour of the same status.
 
 \medskip
-\hl{5. Finalise} — barrier and sliver pixels join the nearest stand (same status first); fragments $<$ MMU merge by the longest shared boundary.
+\hl{5. Finalise} — barrier and sliver pixels are grown into 4-adjacent stands (same status first), so stands stay connected; fragments $<$ MMU join the same-status neighbour with the longest shared boundary, only toward larger ones (acyclic).
 
 \medskip
-\hl{Outputs} — \texttt{stands.tif}, polygons with status, area, loss year, TreeMap attribute means, main TreeMap plot (share, count), soil means.
+\hl{Outputs} — \texttt{stands.tif}, polygons: status, area, loss year, TreeMap means, main plot, soils.
 \end{column}
 \end{columns}
 \src{scripts 21\_superpixels.py, 22\_merge.py, rag\_merge.py, 23\_finalize.py}
+\end{frame}
+
+% ----------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Stand delineation — one tunable, verified pipeline and what tuning found}
+\scriptsize
+\begin{columns}[T]
+\begin{column}{0.44\textwidth}
+\hl{Pipeline} \texttt{stands\_pipeline.py}: land, clean, fit, (embed), superpixels, merge, finalise, verify, metrics; one config + \texttt{--set} overrides; content-hashed stage cache; 10 invariants checked per run.
+
+\medskip
+\hl{Score} on layers the segmentation does not use (canopy 2000, EVC cover, slope, TPI): the share of what \emph{equal-count square blocks} leave unexplained that the stands capture,
+\[
+\text{share}=\frac{R^2_{\text{stands}}-R^2_{\text{blocks}}}{1-R^2_{\text{blocks}}}
+\]
+ranked on Baker Co.\ FL, \hl{reported on a second window} (Waycross GA). Oracle (superpixels merged on the layer itself): the stands reach 62\,\% of its gain on canopy 2000.
+\end{column}
+\begin{column}{0.54\textwidth}
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+SLIC input, compactness & Baker & Waycr.\\
+\midrule
+\textbf{AlphaEarth 22+25 (128-d), 0.15} & \textbf{0.197} & \textbf{0.194}\\
+IWAE 90\,m latent (12-d), 0.08 & 0.194 & 0.191\\
+34-d stack, fixed scaling, 0.15 & 0.182 & 0.178\\
+34-d stack, 0.3 (old default) & 0.173 & 0.169\\
+\bottomrule
+\end{tabular}
+
+\medskip
+\begin{itemize}\setlength\itemsep{1pt}
+\item merging in the embedding spaces hurt; TreeMap smoothing, fixed scaling: no effect
+\item IWAE: conv.\ encoder of 3$\times$3 px, $\mathcal N(0,I)$ prior, heteroscedastic decoder — ties raw AlphaEarth with 10$\times$ fewer channels
+\item in progress: finer superpixels, SLIC as the 2nd level, nested stand levels
+\end{itemize}
+\end{column}
+\end{columns}
+\src{docs/STANDS\_PIPELINE.md; config/tune\_slic.yml, tune\_embed.yml, tune\_embed2.yml; scripts/stands\_metrics.py, embed\_iwae.py}
 \end{frame}
 
 % ----------------------------------------------------------------------------------------------------------------------------
@@ -153,7 +191,7 @@ R &= 185.2\,\exp\bigl(\rho_0+\rho_S\ln(1+\text{BA}_{sp,\,D\ge12.7})+\rho_L\,\tex
 \footnotesize
 Same cohort state as v2 + crown ratio CR; $O$, RD as in v2. Water: $W$ = growing-season AET/PET (monthly bucket: PRISM precipitation, Thornthwaite PET, plot AWC); $W_n$ = its plot normal.
 \begin{align*}
-\Delta V &= \varepsilon_k\,(D/20)^{b}\,20^{1.605}\;\underbrace{\bigl[f_0+(1-f_0)e^{-aO}\bigr]}_{\text{light}}\;e^{g_R\text{RD}}\;\underbrace{W^{\omega}}_{\text{water}}\;e^{\sigma_v z}\;\Bigl(\frac{\text{CR}}{0.4}\Bigr)^{\varphi}\\
+\Delta V &= \varepsilon_k\,(D/20)^{b}\cdot 122.98\;\underbrace{\bigl[f_0+(1-f_0)e^{-aO}\bigr]}_{\text{light}}\;e^{g_R\text{RD}}\;\underbrace{W^{\omega}}_{\text{water}}\;e^{\sigma_v z}\;\Bigl(\frac{\text{CR}}{0.4}\Bigr)^{\varphi}\\
 &\qquad\times\underbrace{\max\bigl(0,1-(H/1.1H_{\max})^{\theta}\bigr)}_{\text{hydraulic}}\;-\;\underbrace{\rho\,D^2H}_{\text{maintenance}}\\
 \Delta D &= \frac{\Delta V}{2DH}\\
 H^*(D) &= 1.37+(H_{\max}-1.37)\bigl(1-e^{-sD/(H_{\max}-1.37)}\bigr)^{c}\\
@@ -162,7 +200,8 @@ H^*(D) &= 1.37+(H_{\max}-1.37)\bigl(1-e^{-sD/(H_{\max}-1.37)}\bigr)^{c}\\
 \end{align*}
 \vspace{-4pt}
 \begin{itemize}\setlength\itemsep{1pt}
-\item Per species \hl{traits fixed} ($H_{\max}$, shade tolerance ST, longevity $L$); per key only the growth efficiency $\varepsilon_k$ and fecundity $F_k$ are fitted.
+\item Per species \hl{traits fixed} ($H_{\max}$, shade tolerance ST, longevity $L$); per key only the growth efficiency $\varepsilon_k$ and fecundity $F_k$ are fitted. 122.98 is a fixed unit constant of $\varepsilon$.
+\item Densities per ha of the \emph{forested} subplot; one pipeline \texttt{pipeline3p.sh <REGION>} with 37 checks.
 \end{itemize}
 \src{landis\_hbad3 docs/hbad3\_design.md \S4, src/plugins/HBAD3/HBAD3P.jl (step\_site!)}
 \end{frame}
@@ -175,7 +214,8 @@ g_m &= e^{-a_mO}\,e^{g_R\text{RD}}\,W^{\omega}\,e^{\sigma_vz}\,(\text{CR}/0.4)^{
 h &= f_M\Bigl[\frac{m_0}{L}+m_s\,e^{\sigma_{ST}(\text{ST}-3)}\,e^{-\beta g_m}\Bigl(\frac{D}{20}\Bigr)^{\zeta}\Bigr]+e^{m_A(A/L-1)}\\
 f_M &= e^{p_M[\text{planted}]}\;e^{\,m_W(W_n-W)/0.1}\qquad\text{(drought anomaly)}\\
 N &\leftarrow N\,e^{-h} \qquad\text{and, while RD}>1\text{: remove SDI}\propto\text{SDI}_i(1-v_i)\\
-R_k &= F_k\;\exp\bigl(-\lambda_0e^{\lambda_1(\text{ST}-3)}\,\text{RD}\bigr)\times[\text{seed source present}]
+R_k &= F_k\;\exp\bigl(-\lambda_0e^{\lambda_1(\text{ST}-3)}\,\text{RD}\bigr)\times(\text{seed source}\,?\,1:\varepsilon_0)\\
+&\qquad\text{fitted on sapling ingrowth}\times\text{probe-recruit survival to the next visit}
 \end{align*}
 \begin{columns}[T]
 \begin{column}{0.48\textwidth}
@@ -217,7 +257,101 @@ parameters & $G,M$ per eco$\times$spp, SDI$_{\max}$ & $\approx$\,175–210 & $\a
 fit (GA+FL val NLL) & — & $-272{,}655$ & $-273{,}469$ \\
 \bottomrule
 \end{tabularx}
-\src{fit: Sim A likelihood (binomial survival + Gaussian ln D, ln H), CMA-ES; HBAD3P free runs: BA / QMD / Lorey H bias within ±3.4\% in GA+FL, APP, WSP (docs/hbad3\_design.md \S8.1)}
+\src{fit: Sim A likelihood (binomial survival + Gaussian ln D, ln H), CMA-ES. HBAD3P free runs (val, pipeline 2026-10-22): BA +4.5 / +0.5\,\%, QMD +5.4 / +8.3\,\%, Lorey H +3.2 / +2.0\,\% (GA+FL / APP); stems $\ge$12.7\,cm $-13$ / $-19$\,\% (in-growth too low)}
+\end{frame}
+
+% ----------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Generative vegetation — FIA plots without their true locations}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\hl{Goal}: stand-level vegetation (cohorts: species, age, $N$, QMD, $H$, CR) mapped from rasters, \emph{independent of TreeMap}, learned from FIA.
+
+\medskip
+\hl{Training table} (GA+FL, 8{,}712 plots, 34{,}300 visits since 2000): cohort tokens per visit (species $\times$ age class: $\ln N$, $\ln$QMD, $H$, CR) per forested area; consecutive visits = pairs.
+
+\medskip
+\hl{The location is latent}: public coordinates are fuzzed within $\approx$1.6\,km. Candidates: 90\,m footprints of forest land in the disk, $\le$256 per plot (stratified, inclusion-weighted), with AlphaEarth 2022 / 2025, disturbance history 2000–2025 (LANDFIRE class, severity; Hansen loss), soils.
+\end{column}
+\begin{column}{0.50\textwidth}
+\hl{Location prior from FIA's own records}: TRT / DSTRB codes matched \emph{by type} to the footprint's evidence in the event year:
+\begin{itemize}\setlength\itemsep{0pt}
+\item cutting / site prep.\ / regeneration $\leftrightarrow$ harvest, thinning, chemical, fire, \emph{unknown}, Hansen loss: LR 4
+\item crown fire: 4; ground fire, insects, weather, human: 2
+\item records of one event (within 2\,yr) count once
+\item no code over a remeasurement $\Rightarrow$ stand-replacing evidence in that period $\times0.25$
+\end{itemize}
+\hl{History consistency}: footprints compatible with \emph{all} detectable records, in time order (unsatisfiable ones skipped).
+
+\medskip
+\muted{Location information per plot is tiny ($\approx$0.003 nats): the records anchor the \emph{dynamics}, not the place.}
+\end{column}
+\end{columns}
+\src{g02b\_build\_gafl.py (EVK), g02e\_fia\_records.py, g02g\_history\_consistency.py; location tests g02f, g08}
+\end{frame}
+
+% ----------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Generative vegetation — temporal JEPA with disturbance jumps}
+\footnotesize
+\begin{align*}
+z_v &= E(\text{tokens}_v)\in\mathbb R^{16} &&\text{masked set encoder, SIGReg toward }\mathcal N(0,I)\\
+\tfrac{dz}{dt} &= -\bigl(\tfrac1\tau+g\bigr)\odot z+g\odot A,\quad g=\sigma(W[z,s]+b) &&\text{liquid time-constant flow (yearly), site }s\\
+z &\leftarrow z+J\bigl([z,\ \text{class},\ \text{severity},\ \text{Hansen}]\bigr) &&\text{jump at a candidate's disturbance years}\\
+\mathcal L_{\text{MIL}} &= -\log\tfrac1K\textstyle\sum_{c=1}^{K}e^{-d_c/T},\quad c\sim\text{prior (iid)} &&d_c=\lVert h_{22}(z_{2022})-a^c_{22}\rVert^2+\lVert h_{25}(z_{2025})-a^c_{25}\rVert^2,\ K{=}48
+\end{align*}
+\vspace{-6pt}
+\scriptsize
+\begin{columns}[T]
+\begin{column}{0.5\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item \hl{pairs}: $z(v_1)$ flowed along FIA-consistent candidate histories to $v_2$ $\approx z(v_2)$ and $v_2$'s cohorts: the records anchor the jumps
+\item \hl{decoder}: cohort slots (presence + $\ln N$, $\ln$QMD, $H$, CR); summary loss TPH / BA / QMD + Bray–Curtis
+\end{itemize}
+\end{column}
+\begin{column}{0.48\textwidth}
+\begin{itemize}\setlength\itemsep{1pt}
+\item \hl{A}: landscape prior $p(z\mid X_L,\text{year})$, mixture-density net (8 Gaussians) on the whole 1.6\,km disk — robust to the fuzzing
+\item \hl{B}: likelihood $p(\text{AEF}\mid z,\text{history})$, fine-tuned on well-localised plots
+\end{itemize}
+\end{column}
+\end{columns}
+\src{scripts g03b\_train\_gafl.py (E, flow, jumps, heads, MIL, pairs, decoder), g04\_bayes\_downscale.py (A, B, calibration)}
+\end{frame}
+
+% ----------------------------------------------------------------------------------------------------------------------------
+\begin{frame}{Generative vegetation — mapping stands, verification, results}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\hl{Mapping} (per stand of the delineation): $X_L$ of the nearest 1\,km landscape node (same descriptor as the plots' disks) $\rightarrow$ $z\sim$ A at 2021 $\rightarrow$ optionally weighted by B on the stand's footprints $\rightarrow$ flow to 2025 through the footprints' disturbance histories $\rightarrow$ decode; calibration factors from held-out calibration plots (15\,\% of training blocks).
+
+\medskip
+\hl{Pipeline} \texttt{genveg\_pipeline.py}: table $\rightarrow$ records $\rightarrow$ history $\rightarrow$ stand footprints $\rightarrow$ train (2 seeds) $\rightarrow$ dynamics test $\rightarrow$ downscale $\rightarrow$ map $\rightarrow$ Forest Explorer $\rightarrow$ verify: \hl{45 independent checks} (SQL / direct raster reads / re-implemented specification) pass.
+\end{column}
+\begin{column}{0.52\textwidth}
+\hl{Held-out visits 2022–2025, mapping path} (median $|\log\text{error}|$; spatial blocks, 3.2\,km buffer)
+
+\smallskip
+\renewcommand{\arraystretch}{1.05}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & TPH & BA & QMD\\
+\midrule
+generative (calibrated) & 0.611 & \textbf{0.412} & \textbf{0.308}\\
+kNN on landscape features & 0.664 & 0.414 & 0.359\\
+null (median) & \textbf{0.609} & 0.453 & 0.327\\
+\bottomrule
+\end{tabular}
+
+\medskip
+\begin{itemize}\setlength\itemsep{1pt}
+\item modest: beats kNN on QMD, null on BA; no better than null on TPH
+\item dominant-species accuracy 0.42 vs kNN 0.36 (majority 0.22)
+\item open: the direct predictor's BA level varies with the training seed (log bias $-0.27\ldots-0.62$; calibration absorbs it)
+\end{itemize}
+\end{column}
+\end{columns}
+\src{scripts g05\_map\_stands.py, gv\_verify.py; docs/GENVEG\_PIPELINE.md, GENERATIVE\_VEG\_PLAN.md}
 \end{frame}
 
 \end{document}
