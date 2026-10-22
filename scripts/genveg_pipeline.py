@@ -21,7 +21,7 @@ import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stands_stages import apply_overrides
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
-LIB = ['common.py', 'features.py', 'stands_cfg.py', 'stand_runs.py']
+LIB = ['common.py', 'features.py', 'stand_runs.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
 STAGES = {   # stage: scripts (code hash), config sections, upstream stages, stand-run stages it depends on
     'table':        dict(code=['g02b_build_gafl.py'], cfg=['table', 'data'], up=[], stands=['clean']),
     'localisation': dict(code=['g02d_localisation.py'], cfg=[], up=['table'], stands=[]),

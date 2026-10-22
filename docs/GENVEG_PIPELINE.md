@@ -35,7 +35,7 @@ pipeline (`docs/STANDS_PIPELINE.md`), named by `stands_run`.
 
 **State.** `data/proto/<data>/pipeline_state.json` stores, per stage, a hash of:
 - its config sections;
-- the code of its scripts and the shared modules (`common`, `features`, `stands_cfg`, `stand_runs`);
+- the code of its scripts and the shared modules (`common`, `features`, `stand_runs`);
 - the upstream stage hashes;
 - the stand run's stage hashes: `clean` for the table, `finalize` for stand footprints, map, FE and verify.
 
