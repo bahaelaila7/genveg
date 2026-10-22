@@ -48,12 +48,29 @@
 \small
 \begin{itemize}\setlength\itemsep{3pt}
 \item signed \% error of the mean biomass per species and 10–20-yr age class (red: under-predicted)
-\item young loblolly (PITA·D) and slash pine over-predicted; sand pine (\_S\_LST), cabbage palm (SAPA), bald cypress (TAAS) under-predicted
+\item young loblolly (PITA·D) and slash pine over-predicted; other low-tolerance softwoods (\_S\_LST), cabbage palm (SAPA), pond cypress (TAAS) under-predicted
 \item most hardwood groups within $\pm$20\,\%
 \end{itemize}
 \end{column}
 \end{columns}
 \data{candidate 6, test split; $100\,(\overline{\text{obs}}-\overline{\text{sim}})/\overline{\text{obs}}$ per cell; grey = no data.}
+\end{frame}
+
+\begin{frame}{FL 8.5.3 held-out test: equivalence (TOST, $\pm$10\,\%)}
+\begin{columns}[T]
+\begin{column}{0.62\textwidth}
+\figw[width=\linewidth,height=0.78\textheight,keepaspectratio]{figures/reused/fl853_cand6_tost_10pct_test.png}
+\end{column}
+\begin{column}{0.36\textwidth}
+\small
+\begin{itemize}\setlength\itemsep{3pt}
+\item 3 of 22 groups equivalent at $\pm$10\,\%: water oak (QUNI), live oak (QUVI), longleaf pine (PIPA2)
+\item at $\pm$15\,\% also laurel oak (QULA3) and loblolly class A (PITA·A)
+\item the productive pines fail through their persistent biomass spread: slash pine (PIEL) over-, other low-tolerance softwoods (\_S\_LST) and cabbage palm (SAPA) under-predicted
+\end{itemize}
+\end{column}
+\end{columns}
+\data{candidate 6, held-out test split; per group mean $\log(1{+}\text{sim})-\log(1{+}\text{obs})$ with 90\,\% CI, $\alpha$ 0.05; $n$ = pairs, p = plots. Thesis figure \emph{fig:fl853\_cand6\_tost}.}
 \end{frame}
 
 \begin{frame}{Why pines miss: one species, very different growth curves}
