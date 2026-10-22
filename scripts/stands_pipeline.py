@@ -1,10 +1,11 @@
 """Stand-delineation pipeline driver — every stage in order, one configuration (docs/STANDS_PIPELINE.md).
   .venv/bin/python -I scripts/stands_pipeline.py [--config config/pilot.yml] [--set key=value ...] [--window r0 c0 r1 c1] [--name NAME]
                                                  [--force stage,...] [stage ...]
-Stages (default all, in order): land clean fit sp merge finalize verify metrics
+Stages (default all, in order): land clean fit embed sp merge finalize verify metrics
   land      10_forest_land.py   forest land + status (forest / harvested / regenerating / forest_unmapped) and loss year      [full extent]
   clean     11_land_clean.py    status speckle < MMU removed                                                                  [full extent]
   fit       20_fit_features.py  feature transforms (AEF PCA, TreeMap / soil scaling) on sampled forest-land pixels           [full extent]
+  embed     20b_embed.py        IWAE neighbourhood embedding (90 m) for SLIC / merge (embed.enabled; else a marker)            [full extent]
   sp        21_superpixels.py   SLIC superpixels per tile and status, inside forest land minus barriers                       [window tiles]
   merge     22_merge.py         region-adjacency graph + Ward / mutual-best merging into stands (auto threshold)
   finalize  23_finalize.py      stands raster (barrier / sliver pixels assigned), MMU generalisation, polygons + attributes   [window]

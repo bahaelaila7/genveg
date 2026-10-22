@@ -1,0 +1,20 @@
+# Feature representation for the segmentation (user, 2026-10-22): the hand-weighted 34-channel stack vs raw AlphaEarth 2022 + 2025 (128-d, unit norm) vs
+# a learned 90 m neighbourhood embedding (IWAE latent, stage embed). For SLIC alone, and for SLIC + the Ward merge. Compactness re-swept per
+# representation (its meaning depends on the feature scale). Ranked by mean_share; top 3 re-run on the report window.
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]
+  small_area_pct_max: 2.0
+variants:
+  - [segmentation.slic_scale=fixed, segmentation.slic_compactness=0.15]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.15]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.3]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.6]
+  - ["segmentation.slic_groups=[aef25_raw, aef22_raw]", "segmentation.merge_groups=[aef25_raw, aef22_raw]", segmentation.slic_compactness=0.3]
+  - [embed.enabled=true, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.15]
+  - [embed.enabled=true, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.3]
+  - [embed.enabled=true, "segmentation.slic_groups=[latent]", segmentation.slic_compactness=0.6]
+  - [embed.enabled=true, "segmentation.slic_groups=[latent]", "segmentation.merge_groups=[latent]", segmentation.slic_compactness=0.3]
+report_window: [12288, 14336, 16384, 18432]
+report_top: 3

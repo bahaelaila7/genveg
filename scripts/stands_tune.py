@@ -31,7 +31,7 @@ OUTD = os.path.join(SC.ROOT, 'data', 'derived', 'tune', NAME); os.makedirs(OUTD,
 cons = spec.get('constraints', {}); rows = []
 for i, sets in enumerate(V):
     t0 = time.time(); print(f'[{i}/{len(V)-1}] {sets or "(base)"}', flush=True)
-    full = ['land', 'clean', 'fit'] + [s for s in stages if s not in ('land', 'clean', 'fit')]   # every stage, every variant (cached when unaffected)
+    full = ['land', 'clean', 'fit', 'embed'] + [s for s in stages if s not in ('land', 'clean', 'fit', 'embed')]   # every stage, every variant (cached when unaffected)
     RD, summ = run(base, sets, spec.get('window'), f'{NAME}__{i}', full, quiet=True)
     m = json.load(open(f'{RD}/metrics.json')); vf = summ['stages'].get('verify', 0)
     r = dict(variant=i, sets='; '.join(sets) or '(base)', verify_fails=vf, stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
@@ -50,7 +50,7 @@ if spec.get('report_window'):
     top = [0] + [int(v) for v in df[df.ok_size & (df.verify_fails == 0)].variant if int(v) != 0][:spec.get('report_top', 3)]
     rep = []
     for i in top:
-        RD, summ = run(base, V[i], spec['report_window'], f'{NAME}__report{i}', ['land', 'clean', 'fit'] + [s for s in stages if s not in ('land', 'clean', 'fit')], quiet=True)
+        RD, summ = run(base, V[i], spec['report_window'], f'{NAME}__report{i}', ['land', 'clean', 'fit', 'embed'] + [s for s in stages if s not in ('land', 'clean', 'fit', 'embed')], quiet=True)
         m = json.load(open(f'{RD}/metrics.json'))
         rep.append(dict(variant=i, sets='; '.join(V[i]) or '(base)', verify_fails=summ['stages'].get('verify', 0), stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
                         small_area_pct=round(100 * m['small_area_share'], 2), mean_share=round(m['mean_share'], 4), mean_gain=round(m['mean_gain'], 4),

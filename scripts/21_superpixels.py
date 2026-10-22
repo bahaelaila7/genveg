@@ -11,29 +11,41 @@ sys.path.insert(0, os.path.dirname(__file__))
 from features import *
 from common import PROFILE
 from stands_cfg import OUT, IN, WINDOW
+import embed_iwae as EI
+_emb = None
 T = int(CFG['segmentation']['sp_tile'])     # superpixel tile size (superpixels never cross tile edges, the RAG merge joins them)
 SEG = CFG['segmentation']; SP_PX = max(4, int(round(SEG.get('superpixel_ha', 1.0) * 1e4 / 900)))
 from stands_cfg import barrier_files
 BARRIERS = barrier_files(CFG)                    # configured barriers; a missing raster is an error, not a silent skip
 _fz = None
 from scipy.ndimage import uniform_filter
-def slic_input(X, raw):
-    """The SLIC input: the configured feature groups of X (column blocks in features() order), TreeMap optionally smoothed (masked mean)."""
+def feature_space(groups, X, raw, smooth=0):
+    """A feature space from column groups: the scaled stack of features() (aef, aef_old, aef_change, treemap, soil; TreeMap optionally smoothed by a
+    masked n x n mean), the raw AlphaEarth embeddings (aef25_raw, aef22_raw: unit-norm, nodata -> 0) or the IWAE latent (latent: posterior mean)."""
     dims = [('aef', _fit['aef_comp'].shape[0]), ('aef_old', 8), ('aef_change', 1), ('treemap', len(TM_ATTRS)), ('soil', _fit['soil_comp'].shape[0])]
     assert sum(k for _, k in dims) == X.shape[-1], 'feature block layout changed'
     parts, off = {}, 0
     for g, k in dims: parts[g] = X[..., off:off + k]; off += k
-    n = SEG['treemap_smooth_px']
-    if n > 0:
-        v = np.isfinite(raw['tma']).all(-1).astype(np.float32); den = uniform_filter(v, n, mode='constant')
-        parts['treemap'] = np.stack([uniform_filter(parts['treemap'][..., j] * v, n, mode='constant') / np.maximum(den, 1e-6) for j in range(parts['treemap'].shape[-1])], -1) * v[..., None]
-    bad = set(SEG['slic_groups']) - set(parts)
-    if bad: raise KeyError(f'slic_groups: unknown groups {bad}')
-    return np.concatenate([parts[g] for g in SEG['slic_groups']], -1).astype(np.float32)
+    if smooth > 0 and 'treemap' in groups:
+        v = np.isfinite(raw['tma']).all(-1).astype(np.float32); den = uniform_filter(v, smooth, mode='constant')
+        parts['treemap'] = np.stack([uniform_filter(parts['treemap'][..., j] * v, smooth, mode='constant') / np.maximum(den, 1e-6) for j in range(parts['treemap'].shape[-1])], -1) * v[..., None]
+    if 'aef25_raw' in groups: parts['aef25_raw'] = np.nan_to_num(raw['a25'])
+    if 'aef22_raw' in groups: parts['aef22_raw'] = np.nan_to_num(raw['a22'])
+    if 'latent' in groups:
+        if _emb is None: raise RuntimeError('latent requested but the embed stage is disabled (embed.enabled: false)')
+        parts['latent'] = EI.encode_tile(_emb, raw, _fit)
+    bad = set(groups) - set(parts)
+    if bad: raise KeyError(f'unknown feature groups {bad}')
+    return np.concatenate([parts[g] for g in groups], -1).astype(np.float32)
+def slic_input(X, raw): return feature_space(SEG['slic_groups'], X, raw, SEG['treemap_smooth_px'])
 
 def init():
     global _fz, _src, _fit, _bar
+    global _emb
     _fit = dict(np.load(f"{IN('fit')}/feature_fit.npz"))
+    _emb = None
+    if 'latent' in SEG['slic_groups'] + SEG['merge_groups']:
+        import torch; torch.set_num_threads(1); _emb = EI.load(f"{IN('embed')}/embed.pt")[0]
     _fz = Featurizer(_fit); _src = open_sources()
     _bar = [rasterio.open(b) for b in BARRIERS]
 
@@ -46,6 +58,7 @@ def work(job):
     bar = np.zeros(land.shape, bool)
     for b in _bar: bar |= b.read(1, window=win) > 0
     raw = _fz.raw(_src, win); X = _fz.features(raw); Y = slic_input(X, raw)
+    M = Y if SEG['merge_groups'] == SEG['slic_groups'] and SEG['treemap_smooth_px'] == 0 else feature_space(SEG['merge_groups'], X, raw)   # merge feature space
     lab = np.zeros(land.shape, np.int32); nxt = 1
     for st in (1, 2, 3, 4):
         m = fl & ~bar & (land == st)
@@ -77,8 +90,8 @@ def work(job):
     lab = out
     n = np.bincount(lab.ravel(), minlength=k + 1)[1:]
     flat = lab.ravel(); keep = flat > 0
-    S = np.zeros((k, X.shape[-1]), np.float64)
-    np.add.at(S, flat[keep] - 1, X.reshape(-1, X.shape[-1])[keep])
+    S = np.zeros((k, M.shape[-1]), np.float64)                 # feature sums in the MERGE feature space (merge_groups)
+    np.add.at(S, flat[keep] - 1, M.reshape(-1, M.shape[-1])[keep])
     stt = np.zeros(k, np.uint8); stt[flat[keep] - 1] = land.ravel()[keep]
     return ti, r, c, lab, (n, stt, S)
 
