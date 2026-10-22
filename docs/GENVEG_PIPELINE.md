@@ -55,3 +55,25 @@ the old matching rules re-weighted by `g02i_reprior.py`, which is not a pipeline
 
 - `vup` and `verify` are stages; their exit status must be 0.
 - The stand run itself is verified by `scripts/stands_verify.py` (stage `verify` of the stand pipeline).
+
+## First end-to-end run (2026-10-22, `--set data=gafl_pipe`)
+
+- Stages ran from the table on, with the strict_unknown rules and the fixed stand map. table, localisation, records, history, train and dynamics were
+  adopted after the shared-library hashing fix; their scripts and config were unchanged.
+- **Bugs the run exposed (fixed):**
+  - g04: the `trp_` assignment was swallowed by an inline comment.
+  - gv_verify: the T8 anchor text had changed, and T4 had DATA hard-coded to gafl.
+  - g02j: 2,103 sliver stands got no footprint; they now get one at their central pixel.
+- **verify: 45 / 45 PASS.**
+- **Mapping path, held-out visits 2022–2025, median |log error|:**
+
+  | | trees/ha | BA | QMD |
+  |---|---|---|---|
+  | rebuild | 0.611 | 0.412 | 0.308 |
+  | previous model | 0.607 | 0.424 | 0.299 |
+  | kNN | 0.664 | 0.414 | 0.359 |
+  | null | 0.609 | 0.453 | 0.327 |
+
+  The rules change is neutral. The model is only modestly informative: better than kNN on QMD, better than null on BA, no better than null on trees/ha.
+- **The direct predictor's BA level depends on the training seed.** g03b held-out BA error is 0.52 / 0.65 (old seeds) and 0.71 / 0.54 (new seeds), from a log bias
+  of −0.27 to −0.62. g04's calibration absorbs this on the mapping path, but the training instability should be fixed at the source.

@@ -10,6 +10,7 @@ layers:
   - {id: stands_slic_fixed, group: Stand delineation, kind: stands, run: tune_slic__1, label: "Stands — SLIC fixed scaling (tune_slic 1)"}
   - {id: stands_slic_aefonly, group: Stand delineation, kind: stands, run: tune_slic__2, label: "Stands — SLIC on AlphaEarth only (tune_slic 2)"}
   - {id: stands_slic_tmsmooth, group: Stand delineation, kind: stands, run: tune_slic__4, label: "Stands — SLIC with TreeMap smoothed 3x3 (tune_slic 4)"}
+  - {id: stands_slic_c015, group: Stand delineation, kind: stands, run: tune_slic__6, label: "Stands — SLIC fixed scaling, compactness 0.15 (best of tune_slic)"}
   - {id: land_status, group: Stand delineation, kind: raster, source: "run:gafl_pilot/clean/land_clean.tif", style: land, label: "Forest-land status (land_clean)"}
   - {id: superpixels, group: Stand delineation, kind: raster, source: "run:gafl_pilot/sp/sp.tif", style: edges, label: "Superpixel edges (SLIC, base)"}
   - {id: aef2025_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2025.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2025 — PCs 1-3 as RGB"}
@@ -19,7 +20,7 @@ layers:
   - {id: evc_tree_cover, group: Held-out evaluation layers, kind: raster, source: "data:derived/tree_cover.tif", style: ramp, range: [0, 100], unit: "%", label: "LANDFIRE EVC 2022 tree cover"}
   - {id: tpi300, group: Held-out evaluation layers, kind: raster, source: "data:terrain/tpi300.tif", style: diverging, range: [-3, 3], unit: "m", label: "LANDFIRE topographic position (300 m)"}
   # ---------------- generative vegetation
-  - {id: genveg_pipe, group: Generative vegetation, kind: geojson_file, path: data/proto/gafl_pipe/baker_fl.geojson, label: "Generative vegetation on the new stands (pipeline rebuild)"}
+  - {id: genveg_pipe, group: Generative vegetation, kind: geojson_file, path: data/proto/gafl_pipe/baker_fl.geojson, label: "Generative vegetation on the new stands (pipeline rebuild 2026-10-22, 45/45 checks)"}
   # ---------------- HBAD3P free runs (plots at the PUBLIC, fuzzed FIA coordinates)
   - {id: hbad3p_freerun_gafl, group: HBAD3P free runs, kind: freerun, fit: landis_hbad3/results/hbad3/fit3p_P3_GAFL, label: "HBAD3P free run, GA+FL val plots (P3_GAFL)"}
   - {id: hbad3p_freerun_app, group: HBAD3P free runs, kind: freerun, fit: landis_hbad3/results/hbad3/fit3p_P3_APP, label: "HBAD3P free run, Appalachian val plots (P3_APP)"}
