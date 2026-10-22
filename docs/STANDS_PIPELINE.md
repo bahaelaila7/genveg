@@ -18,9 +18,11 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
 | `land` | `10_forest_land.py` | full | `forest_land.*` | `land.tif` status classes 0/1 forest/2 harvested/3 regenerating/4 forest_unmapped/9 converted, `loss_year.tif`, `land_summary.json` |
 | `clean` | `11_land_clean.py` | full | `segmentation.mmu_ha`, `clean.*` | `land_clean.tif`: status patches < MMU take the class of the nearest larger patch |
 | `fit` | `20_fit_features.py` | full | `segmentation.aef_pcs`, `fit.*` | `feature_fit.npz`: AEF-2025 PCA basis, scales, TreeMap / soil standardisation |
+| `embed` | `20b_embed.py` | full | `embed.*` (off by default: `embed.enabled: false`) | `embed.pt`: IWAE encoder of 3×3-px AlphaEarth/TreeMap/soil patches (12-d latent), used only when a feature group is `latent` |
 | `sp` | `21_superpixels.py` | window tiles | weights, `superpixel_ha`, `slic_compactness`, `barriers`, `sp_tile`, `sp_seam_halo` | `sp.tif`, `sp_stats.npz`: SLIC per tile × status, never across barriers / statuses; tile seams removed (phased tiling); ids in tile order (deterministic) |
 | `merge` | `22_merge.py` | window | `merge_threshold` (auto: calibrated to `target_median_ha`), `max_ha`, `mmu_ha`, `shape_weight`, `status_is_hard` | `sp2stand.npy`, `stand_feat.npz` |
 | `finalize` | `23_finalize.py` | window | `mmu_ha`, `status_is_hard`, `finalize.*` | `stands.tif`, `stands.gpkg` (polygons + attributes), `generalisation.json` |
+| `levels` | `25_levels.py` | window | `levels.*` | `fine.tif/gpkg` (units of ≈ `fine_median_ha` nested in each stand, MMU `fine_mmu_ha`), `compartments.tif/gpkg` (whole stands merged to ≈ `coarse_median_ha`, ≤ `coarse_max_ha`) |
 | `verify` | `stands_verify.py` | window | `verify.*` | run dir `verify.txt` (PASS/FAIL; non-zero exit on FAIL) |
 | `metrics` | `stands_metrics.py` | window | `metrics.heldout` | run dir `metrics.json` |
 
