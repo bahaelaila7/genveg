@@ -80,8 +80,8 @@ check('V8', bad == 0, f'TreeMap stand means (BALIVE, QMD) recomputed from pixels
 # V9 merge threshold calibration
 sf = np.load(f"{IN('merge')}/stand_feat.npz"); thr = float(sf['threshold'])
 a = np.sort(size * PXHA); wmed = a[np.searchsorted(np.cumsum(a), a.sum() / 2)]
-auto = SEG['merge_threshold'] == 'auto'; tgt = SEG['target_median_ha']
-check('V9', (not auto) or abs(wmed / tgt - 1) < 0.35, f'merge threshold {thr:.4g} ({"auto" if auto else "fixed"}); final area-weighted median {wmed:.1f} ha (target {tgt} ha before generalisation)')
+auto = SEG['merge_threshold'] == 'auto' and SEG.get('merge_method', 'ward') == 'ward'; tgt = SEG['target_median_ha']   # graph_slic: no threshold
+check('V9', (not auto) or abs(wmed / tgt - 1) < 0.35, f'merge {SEG.get("merge_method", "ward")}: threshold {thr:.4g} ({"auto" if auto else "fixed / n.a."}); final area-weighted median {wmed:.1f} ha (target {tgt} ha before generalisation)')
 # V10 unit test of the merge
 r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, 'scripts', 'test_rag_merge.py')], capture_output=True, text=True)
 check('V10', r.returncode == 0 and r.stdout.strip().endswith('OK'), 'rag_merge unit tests')

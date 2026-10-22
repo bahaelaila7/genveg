@@ -28,6 +28,7 @@ segmentation:
                               # groups: aef aef_old aef_change treemap soil (the scaled stack), aef25_raw aef22_raw (raw AlphaEarth embeddings, unit norm),
                               # latent (the embed stage's IWAE posterior mean)
   treemap_smooth_px: 0        # > 0: masked mean of the TreeMap channels over n x n px for SLIC only (TreeMap imputes a plot per pixel: salt-and-pepper)
+  merge_method: ward          # ward (mutual-best Ward merges, threshold below) | graph_slic (hierarchical SLIC level 2 on the superpixel graph: section graph_slic)
   merge_threshold: auto       # Ward threshold; auto = calibrate to target_median_ha
   target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
   shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
@@ -46,6 +47,10 @@ embed:                        # stage embed (20b_embed.py): IWAE of 3 x 3 px (90
   batch: 512
   lr: 0.001
   seed: 1
+graph_slic:                   # merge_method graph_slic (scripts/graph_slic.py)
+  ha: 8.0                     # seed grid cell [ha] (~ mean stand size before MMU absorption)
+  compactness: 1.0            # m: weight of the centroid distance / G against the feature distance / total feature sd
+  iters: 10
 clean:
   max_dist_px: 15             # a sub-MMU status patch takes the class of the nearest larger forest-land patch within this distance
 fit:

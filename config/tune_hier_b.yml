@@ -1,0 +1,16 @@
+# Hierarchical segmentation B (user, 2026-10-22): SLIC as level 2 on the superpixel graph (merge_method graph_slic) instead of the Ward merge.
+# First run (graph_slic.ha 8): stands half the default size (area-weighted median 6.5 vs 13.5 ha), share 0.142 (not comparable). Seed size bracketing the
+# default's stand size, and the feature / space balance m.
+base: config/pilot.yml
+stages: [sp, merge, finalize, verify, metrics]
+constraints:
+  wmedian_ha: [8, 30]
+  small_area_pct_max: 2.0
+variants:
+  - [segmentation.merge_method=graph_slic, graph_slic.ha=16]
+  - [segmentation.merge_method=graph_slic, graph_slic.ha=24]
+  - [segmentation.merge_method=graph_slic, graph_slic.ha=32]
+  - [segmentation.merge_method=graph_slic, graph_slic.ha=24, graph_slic.compactness=0.5]
+  - [segmentation.merge_method=graph_slic, graph_slic.ha=24, graph_slic.compactness=2.0]
+report_window: [12288, 14336, 16384, 18432]
+report_top: 3
