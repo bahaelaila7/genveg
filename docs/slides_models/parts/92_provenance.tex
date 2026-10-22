@@ -1,0 +1,22 @@
+% Provenance of the HBAD equations: established forms (with the usual reference) vs this project's choices and FIA fits.
+% References are given from memory and must be checked before the deck is presented.
+\def\provhead{\toprule component & form & established form (usual reference) & ours / fitted to FIA \\ \midrule}
+\def\provnote{\src{Established = a published, widely used form; "ours" = a design choice of this project; "FIA" = coefficients estimated from GA+FL FIA remeasurements. References given from memory: check before presenting.}}
+
+\begin{frame}{Backup: HBAD v1 — where the equations come from}
+\tiny\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{1.9cm}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.6cm}@{}}
+\provhead
+stand density & SDI $=\sum$TPH$(D/25.4)^{1.605}$, RD = SDI/SDI$_{\max}$ & Reineke (1933) & SDI$_{\max}$ per species (calibrated) \\
+self-thinning & remove trees until SDI $\le$ SDI$_{\max}$ & Reineke boundary & smallest cohorts first \\
+diameter growth & $\ln\Delta D$ linear in $\ln D$, $D$, $\ln A$, BAL & log-linear increment with BAL competition, FVS / Prognosis (Wykoff 1990) & covariate set, centring D/20, A/30, BAL/10, cap 3\,cm/yr; coefficients FIA \\
+height & $h_a(1-e^{-h_bD})^{h_c}$; $H'=1.3+(H-1.3)\frac{\text{CR}(D')}{\text{CR}(D)}$ & Chapman–Richards (Richards 1959; Chapman 1961) & ratio rule; coefficients FIA \\
+mortality & hazard $h=e^{X\beta}$, survival $e^{-h}$; $X$: $\ln D$, $D$, RD$_c$, BAL, RD$_c\ln D$ & binomial GLM, complementary log-log link, $\log\Delta t$ offset & covariates, caps RD$_c\le$1.5, $h\le$0.5; coefficients FIA \\
+multipliers & $G_{\text{MULT}}$, $M_{\text{MULT}}$ (eco $\times$ species) & — & Pan calibration levers \\
+biomass & $\ln m=a+b\ln(D/2.54)$, AGB = TPH$\cdot m$ & log-log allometry (form of Jenkins et al.\ 2003) & coefficients FIA \\
+cohort translation & TPH from (AGB, age): quadratic in $\ln$AGB, $\ln$age & — & form ours; coefficients FIA \\
+establishment & PROB\_ESTAB $\times$ light class $\times$ seed source & LANDIS-II Biomass Succession (Scheller \& Mladenoff 2004) & shade class from RD \\
+\bottomrule
+\end{tabularx}
+\provnote
+\end{frame}

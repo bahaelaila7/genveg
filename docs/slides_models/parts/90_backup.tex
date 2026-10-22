@@ -19,6 +19,9 @@ h &= M_{\text{mult}}\exp\!\bigl(m_0+m_1\ln\tfrac D{20}+m_2\tfrac D{20}+m_3\text{
 \src{landis\_fe docs/hbad\_plugin.md, src/plugins/HBAD/plugin.jl}
 \end{frame}
 
+\input{parts/92_provenance}
+
+
 % ----------------------------------------------------------------------------------------------------------------------------
 \begin{frame}{Backup: HBAD v2 — biomass-free process cohorts with light competition by height}
 \footnotesize
@@ -41,6 +44,9 @@ R &= 185.2\,\exp\bigl(\rho_0+\rho_S\ln(1+\text{BA}_{sp,\,D\ge12.7})+\rho_L\,\tex
 \end{itemize}
 \src{landis\_hbad2 docs/hbad\_v2.md, src/plugins/HBAD2/HBAD2.jl}
 \end{frame}
+
+\input{parts/93_provenance_v2}
+
 
 % ----------------------------------------------------------------------------------------------------------------------------
 \begin{frame}{Backup: HBAD3P — process and trait-bound growth (stem-volume balance)}
@@ -79,7 +85,7 @@ R_k &= F_k\;\exp\bigl(-\lambda_0e^{\lambda_1(\text{ST}-3)}\,\text{RD}\bigr)\time
 \begin{itemize}\setlength\itemsep{1pt}
 \item growth: $W^{\omega}$ (water limitation)
 \item mortality: drought anomaly $m_W(W_n-W)$
-\item CO$_2$, temperature: scenario assumptions from the literature (not identifiable from FIA)
+\item CO$_2$, temperature: not in the model (FIA cannot identify them; planned as literature-fixed scenario factors)
 \end{itemize}
 \end{column}
 \begin{column}{0.50\textwidth}
@@ -95,6 +101,9 @@ R_k &= F_k\;\exp\bigl(-\lambda_0e^{\lambda_1(\text{ST}-3)}\,\text{RD}\bigr)\time
 \end{columns}
 \src{src/plugins/HBAD3/HBAD3P.jl; docs/hbad3\_design.md \S4, \S7}
 \end{frame}
+
+\input{parts/94_provenance_v3}
+
 
 % ----------------------------------------------------------------------------------------------------------------------------
 \begin{frame}{Backup: Stand delineation (GA + FL) — inputs and land status}

@@ -1,0 +1,16 @@
+\begin{frame}{Backup: HBAD v2 — where the equations come from}
+\tiny\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{1.9cm}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{3.6cm}@{}}
+\provhead
+cohort state & $N$, $D$, $H$, age, vigour $z$; key $\times$ birth decade $\times$ size class & size-structured cohort models & classes; 5 Gauss–Hermite vigour nodes \\
+overtopping $O$ & SDI of taller cohorts / SDI$_{\max}$ & asymmetric competition by taller trees: BAL (Wykoff 1990); height-structured light (Purves et al.\ 2008) & SDI units; ranking by cohort mean height \\
+growth & $r(D/20)^{c}e^{-D/D_{\max}}\,e^{-g_OO}e^{g_R\text{RD}}e^{\sigma_vz}$ (same form for $\Delta H$) & potential $\times$ modifiers (FVS, 3-PG); power–exponential increment shape (cf.\ Zeide 1993) & separate light / crowding terms for $D$ and $H$ (FIA finding: crowding shifts growth to height); 14 parameters per key, FIA \\
+light modifier & $e^{-g_OO}$ & exponential attenuation (Beer–Lambert; Monsi \& Saeki 1953) & SDI as leaf-area proxy \\
+mortality & background $e^{m_{bg}+m_D\ln\frac D{20}+m_{D2}\frac D{20}}$ + suppression + $e^{m_A(A/L-1)}$ & senescence: LANDIS-II age mortality (Scheller \& Mladenoff 2004); U-shaped size term & suppression term; coefficients FIA \\
+self-thinning & SDI cap & Reineke (1933) & — \\
+recruitment & $185.2\exp(\rho_0+\rho_S\ln(1+\text{BA}_{sp})+\rho_L\text{SDI}/600)$ & 185.2 = FIA microplot expansion (trees/ha per sapling) & regression form; coefficients FIA \\
+estimation & binomial survival + Gaussian $\ln D$, $\ln H$ per interval & maximum likelihood; CMA-ES (Hansen \& Ostermeier 2001) & FIA remeasurement intervals \\
+\bottomrule
+\end{tabularx}
+\provnote
+\end{frame}
