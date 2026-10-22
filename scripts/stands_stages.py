@@ -23,10 +23,13 @@ STAGES = {
                      inputs=AEF + SOIL + TM + ['{barriers}']),
     'merge':    dict(script='22_merge.py', mods=['features.py', 'rag_merge.py', 'graph_slic.py', 'stands_cfg.py'], keys=['segmentation.merge_method', 'graph_slic', 'segmentation.merge_threshold', 'segmentation.target_median_ha',
                      'segmentation.max_ha', 'segmentation.mmu_ha', 'segmentation.shape_weight', 'segmentation.status_is_hard', 'merge'], up=['sp'], windowed=False, inputs=[]),
+    'levels':   dict(script='25_levels.py', mods=['common.py', 'rag_merge.py', 'stands_cfg.py'], keys=['levels', 'segmentation.shape_weight', 'segmentation.barriers',
+                     'metrics'], up=['finalize', 'sp', 'clean'], windowed=True, inputs=['{barriers}']),
     'finalize': dict(script='23_finalize.py', mods=['common.py', 'features.py', 'stands_cfg.py'], keys=['segmentation.mmu_ha', 'segmentation.status_is_hard',
                      'segmentation.barriers', 'finalize'], up=['merge', 'sp', 'clean', 'land'], windowed=True, inputs=TM + SOIL + ['{barriers}']),
 }
-ORDER = list(STAGES)
+ORDER = ['land', 'clean', 'fit', 'embed', 'sp', 'merge', 'finalize', 'levels']
+assert set(ORDER) == set(STAGES)
 
 def parse_value(s):
     return yaml.safe_load(s)

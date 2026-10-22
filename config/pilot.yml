@@ -61,6 +61,13 @@ finalize:
   hole_dist_px: 3             # barrier / sliver pixels join the nearest stand of the same status within this distance (else any stand)
   mmu_max_passes: 20          # MMU generalisation passes (stops when nothing merges)
   mmu_across_barriers: true   # a fragment < MMU boxed in by barrier lines may join a stand across the line
+levels:                       # stage levels (25_levels.py): nested fine units / stands / compartments
+  fine_median_ha: 5.0         # area-weighted median of the fine units (inside stands)
+  fine_mmu_ha: 0.5
+  coarse_median_ha: 50.0      # area-weighted median of the compartments (merged stands)
+  coarse_max_ha: 1000.0
+  coarse_status_hard: false   # compartments may mix forest / harvested / regenerating stands
+  coarse_across_barriers: false   # compartments do not cross road / water / parcel lines
 verify:
   attr_sample: 200            # stands whose attributes are recomputed from pixels
 metrics:

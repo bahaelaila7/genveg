@@ -1,7 +1,7 @@
 """Stand-delineation pipeline driver — every stage in order, one configuration (docs/STANDS_PIPELINE.md).
   .venv/bin/python -I scripts/stands_pipeline.py [--config config/pilot.yml] [--set key=value ...] [--window r0 c0 r1 c1] [--name NAME]
                                                  [--force stage,...] [stage ...]
-Stages (default all, in order): land clean fit embed sp merge finalize verify metrics
+Stages (default all, in order): land clean fit embed sp merge finalize levels verify metrics
   land      10_forest_land.py   forest land + status (forest / harvested / regenerating / forest_unmapped) and loss year      [full extent]
   clean     11_land_clean.py    status speckle < MMU removed                                                                  [full extent]
   fit       20_fit_features.py  feature transforms (AEF PCA, TreeMap / soil scaling) on sampled forest-land pixels           [full extent]
@@ -9,6 +9,7 @@ Stages (default all, in order): land clean fit embed sp merge finalize verify me
   sp        21_superpixels.py   SLIC superpixels per tile and status, inside forest land minus barriers                       [window tiles]
   merge     22_merge.py         region-adjacency graph + Ward / mutual-best merging into stands (auto threshold)
   finalize  23_finalize.py      stands raster (barrier / sliver pixels assigned), MMU generalisation, polygons + attributes   [window]
+  levels    25_levels.py        nested levels: fine units inside stands, compartments of stands (+ held-out share per level) [window]
   verify    stands_verify.py    invariants of the result (run dir verify.txt; exit code = number of FAILs)
   metrics   stands_metrics.py   size + held-out-layer homogeneity vs equal-count square blocks (run dir metrics.json)
 Stage outputs live in content-hashed cache dirs data/derived/cache/<stage>-<hash> (hash = the stage's config keys, window, code, upstream hashes):
