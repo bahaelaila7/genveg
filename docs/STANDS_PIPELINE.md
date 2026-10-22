@@ -154,3 +154,24 @@ verify FAIL counts. Variant 0 is the base configuration.
 - A higher AlphaEarth-change weight and smaller superpixels hurt.
 - 15 ha beats 10 and 25 ha, with the gain normalised to equal-count blocks.
 - Duplicate variants (a random draw equal to the base) are now skipped.
+
+## Feature representation for SLIC (2026-10-22; `tune_slic`, `tune_embed`, `tune_embed2`)
+
+Proposed by the user: Euclidean SLIC on the 34-channel hand-weighted stack suffers from dimensionality and mixed scales. Segment a learned embedding
+instead — a generative 90 m neighbourhood model (IWAE), or raw AlphaEarth for both years. Score: mean share of the equal-count blocks'
+unexplained held-out variance; Waycross is the report window and was not used for ranking.
+
+| SLIC input (merge on the stack) | compactness | Baker | Waycross |
+|---|---|---|---|
+| **raw AlphaEarth 2022 + 2025 (128-d) — new default** | 0.15 | **0.197** | **0.194** |
+| IWAE latent 12-d (300k patches, 10 epochs) | 0.08 | 0.194 | 0.191 |
+| raw AlphaEarth | 0.08 | 0.194 | 0.189 |
+| IWAE latent 24-d (20 epochs; AlphaEarth reconstruction R² 0.94) | 0.08 | 0.190 | — |
+| raw AlphaEarth + 24-d latent | 0.15 | 0.189 | — |
+| 34-channel stack, fixed scaling | 0.15 | 0.182 | 0.178 |
+| 34-channel stack (previous default) | 0.3 | 0.173 | 0.169 |
+
+- Merging in the new spaces hurt (raw AlphaEarth 0.188, latent 0.171): the Ward merge stays on the stack.
+- On the stack, SLIC variants changed nothing: fixed scaling, TreeMap smoothing, AlphaEarth-only groups.
+- The IWAE matches raw AlphaEarth within noise with 10× fewer channels. AlphaEarth is itself a learned embedding, which likely explains why it is hard
+  to beat. A larger, better-reconstructing IWAE did not segment better.

@@ -17,12 +17,13 @@ segmentation:
   status_is_hard: true        # forest / harvested / regenerating never share a stand (also in the MMU absorption of 22 / 23)
   superpixel_ha: 1.0          # SLIC superpixel size (building blocks; smaller than the MMU)
   sp_tile: 512                # superpixel tile size [px] (superpixels never cross tile edges; the RAG merge joins them)
-  slic_compactness: 0.3
+  slic_compactness: 0.15      # tune_slic / tune_embed / tune_embed2 (2026-10-22): 0.15 best on both windows (0.3 unstable with raw AlphaEarth)
   slic_scale: tile            # tile = scikit-image's own min-max rescale per tile (its effective compactness then follows each tile's most extreme
                               # feature value, in practice the AEF-change outliers); fixed = compactness rescaled per tile so features / space weigh the
                               # same everywhere: as if every tile spanned slic_range
   slic_range: 5.0             # reference feature range for slic_scale: fixed (the measured tile ranges are 3.8-5.5)
-  slic_groups: [aef, aef_old, aef_change, treemap, soil]   # feature groups SLIC sees (the merge always uses all of them)
+  slic_groups: [aef25_raw, aef22_raw]   # feature groups SLIC sees. Raw AlphaEarth 2022 + 2025 (user suggestion, 2026-10-22): mean share Baker 0.197 /
+                              # Waycross 0.194 vs the 34-channel stack 0.173 / 0.169; IWAE 12-d latent (c 0.08) 0.194 / 0.191; see docs/STANDS_PIPELINE.md
   merge_groups: [aef, aef_old, aef_change, treemap, soil]  # feature space of the Ward merge (and stand_feat); groups as slic_groups
                               # groups: aef aef_old aef_change treemap soil (the scaled stack), aef25_raw aef22_raw (raw AlphaEarth embeddings, unit norm),
                               # latent (the embed stage's IWAE posterior mean)
