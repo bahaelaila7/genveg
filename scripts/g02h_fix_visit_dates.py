@@ -5,7 +5,7 @@ import os, sys, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT
-fn = f'{ROOT}/data/proto/gafl/visits.parquet'; V = pd.read_parquet(fn)
+fn = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}/visits.parquet"; V = pd.read_parquet(fn)
 if 'md' in V.columns: print('visits.parquet already carries the visit date; nothing to do'); sys.exit(0)
 yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)
 md = pd.to_datetime(yi.astype(str) + '-01-01') + pd.to_timedelta(doy - 1, unit='D')

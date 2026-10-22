@@ -11,7 +11,7 @@ import os, sys, math, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT
-D = f'{ROOT}/data/proto/gafl'; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; OFF = list(range(-4, 5))
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; OFF = list(range(-4, 5))
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r'); V = pd.read_parquet(f'{D}/visits.parquet')
 E = pd.read_parquet(f'{D}/fia_events.parquet')
 # raw FIA codes per (plot, year) for the per-code breakdown (from FIADB via the shared functions)

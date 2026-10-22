@@ -6,20 +6,22 @@ import sys, os, json, math, zipfile, re, numpy as np, pandas as pd, rasterio, ya
 from rasterio.windows import Window
 from rasterio.transform import Affine
 from pyproj import Transformer
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f'{ROOT}/data/proto/gafl'
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"
 NP = int(sys.argv[1]) if len(sys.argv) > 1 else 200; rng = np.random.default_rng(7); RES = []
 def check(name, ok, detail=''):
     RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
 G = json.load(open(f'{ROOT}/data/grid/grid.json')); TR = Affine(*G['transform']); CRS = G['crs']; W, H = G['width'], G['height']
-CFG = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))
+CFG = yaml.safe_load(open(f"{stands_run()['dir']}/config_resolved.yml"))   # the rules the stand run was built with
 def dq(a): v = a.astype(np.float32); o = np.sign(v) * (v / 127.5) ** 2; o[a == -128] = np.nan; return o
 # ======================= U1 every derived raster on the grid of grid.json
-fs = {'land_clean': 'derived/land_clean.tif', 'land': 'derived/land.tif', 'stands': 'derived/stands.tif', 'aef_2022': 'aef/aef_2022.tif', 'aef_2025': 'aef/aef_2025.tif',
+SRN = stands_run()                                       # the stand-delineation run (STANDS_RUN) the generative-vegetation stages use
+fs = {'land_clean': SRN['land_clean'], 'land': SRN['land'], 'stands': SRN['tif'], 'aef_2022': 'aef/aef_2022.tif', 'aef_2025': 'aef/aef_2025.tif',
       'lossyear': 'hansen/lossyear.tif', 'treecover2000': 'hansen/treecover2000.tif', 'evt2022': 'landfire/evt2022.tif', 'tm_id': 'treemap/tm_id.tif',
       **{f'dist_{y}': f'landfire/dist/dist_{y}.tif' for y in (2000, 2012, 2024, 2025)}, **{k: f'soils/{k}.tif' for k in ('clay030', 'sand030', 'soc030', 'awc030', 'ph030', 'restrdepth')}}
-bad = [k for k, p in fs.items() if (lambda s: not (s.transform.almost_equals(TR) and s.width == W and s.height == H and str(s.crs) == str(rasterio.crs.CRS.from_user_input(CRS))))(rasterio.open(f'{ROOT}/data/{p}'))]
+bad = [k for k, p in fs.items() if (lambda s: not (s.transform.almost_equals(TR) and s.width == W and s.height == H and str(s.crs) == str(rasterio.crs.CRS.from_user_input(CRS))))(rasterio.open(p if os.path.isabs(p) else f'{ROOT}/data/{p}'))]
 check('U1 all derived rasters share the grid of grid.json (transform, size, CRS)', not bad, f'{len(fs)} rasters; off-grid: {bad}')
-land = rasterio.open(f'{ROOT}/data/derived/land_clean.tif')
+land = rasterio.open(SRN['land_clean'])
 # random forest-land pixels (sampled in blocks to keep reads cheap)
 pts = []
 while len(pts) < NP:
@@ -31,7 +33,7 @@ pts = np.array(pts); XY = np.array([TR * (c + 0.5, r + 0.5) for r, c in pts]); L
 fl = CFG['forest_land']; evt = pd.read_csv(f'{ROOT}/data/landfire/evt_classes.csv').rename(columns={'value': 'VALUE'}); evt = evt[evt.VALUE >= 0].set_index('VALUE')
 excl = evt.EVT_LF.isin(fl['exclude_evt_lf']) | evt.EVT_PHYS.astype(str).str.startswith(tuple(fl['exclude_evt_phys_prefix']))
 dist_ = evt.EVT_NAME.astype(str).str.contains('|'.join(fl['disturbed_evt_name'])); tree_ = evt.EVT_LF == 'Tree'; sh_ = evt.EVT_LF.isin(['Shrub', 'Herb'])
-src = {k: rasterio.open(f'{ROOT}/data/{p}') for k, p in dict(land='derived/land.tif', tm='treemap/tm_id.tif', evt='landfire/evt2022.tif', loss='hansen/lossyear.tif',
+src = {k: rasterio.open(p if os.path.isabs(p) else f'{ROOT}/data/{p}') for k, p in dict(land=SRN['land'], tm='treemap/tm_id.tif', evt='landfire/evt2022.tif', loss='hansen/lossyear.tif',
                                                           tc='hansen/treecover2000.tif', aoi='grid/aoi_mask.tif', dm='hansen/datamask.tif').items()}
 conf = {}; pts6 = [(int(rng.integers(0, H)), int(rng.integers(0, W))) for _ in range(4000)]
 for r, c in pts6:
@@ -54,7 +56,7 @@ check('U6 forest-land classes (land.tif) = the written rules re-derived from Tre
 # ======================= U7 stands raster vs the stand polygons (gpkg): pixel centre inside its stand's polygon; polygon area ≈ pixel area
 import geopandas as gpd
 from shapely.geometry import Point
-st = gpd.read_file(f'{ROOT}/out/stands_gafl_pilot.gpkg', layer='stands').set_index('stand_id'); sr = rasterio.open(f'{ROOT}/data/derived/stands.tif'); ins, n7 = 0, 0
+st = gpd.read_file(SRN['gpkg'], layer='stands').set_index('stand_id'); sr = rasterio.open(SRN['tif']); ins, n7 = 0, 0
 for _ in range(300):
     sid = int(rng.choice(st.index.values)); geom = st.loc[sid].geometry; x, y = geom.representative_point().coords[0]; r, c = sr.index(x, y)
     v = int(sr.read(1, window=Window(c, r, 1, 1))[0, 0]); n7 += 1; ins += int(v == sid)

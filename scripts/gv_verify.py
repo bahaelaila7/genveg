@@ -5,7 +5,8 @@ instead of curated_trees for events) and compares. Output: PASS / FAIL lines + n
 import sys, os, json, math, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f'{ROOT}/data/proto/gafl'; NS = int(sys.argv[1]) if len(sys.argv) > 1 else 300
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NS = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 rng = np.random.default_rng(42); RES = []
 def check(name, ok, detail=''):
     RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
@@ -77,7 +78,7 @@ fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
 pl = fc.execute("select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12,13) group by all").df()
 m = P.merge(pl, on=key, suffixes=('', '_f'))
 check('T2a plot lat/lon = FIADB PLOT mean', np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f), f'n {len(m)}')
-land = rasterio.open(f'{ROOT}/data/derived/land_clean.tif'); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
+land = rasterio.open(stands_run()['land_clean']); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
 check('T2b projected x/y (EPSG:5070) recomputed', np.allclose(x, m.x, atol=1e-3) and np.allclose(y, m.y, atol=1e-3))
 okst = ((m.st == 12) & (m.lat < 31.1) | (m.st == 13) & (m.lat > 30.3)).mean()
 check('T2c plots lie in their state (latitude band check)', okst > 0.99, f'{okst:.4f}')
@@ -276,7 +277,7 @@ check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk 
       fw < 0.05, f'{len(dW)} subsampled plots: dims with significant bias — weighted {fw:.3f}, unweighted {fu:.3f}; mean |Δ| weighted {np.abs(dW).mean():.4f}')
 # ======================= T6 stand mapping inputs
 S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy', mmap_mode='r'); ssub = S.sample(200, random_state=5); Xs = np.asarray(SF[ssub.index.values], dtype=np.float32)
-sraster = rasterio.open(f'{ROOT}/data/derived/stands.tif')
+sraster = rasterio.open(stands_run()['tif'])
 sid_chk = np.array([sraster.read(1, window=Window(c, r, 1, 1))[0, 0] for r, c in zip(ssub.row, ssub.col)])
 check('T6a stand footprints lie in their stand (stands.tif)', (sid_chk == ssub.stand_id.values).all())
 e25s = np.stack([np.nan_to_num(np.nanmean(dq(a25.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1)) for r, c in zip(ssub.row, ssub.col)])
@@ -411,7 +412,7 @@ if os.path.exists(f'{D}/cand_hist.parquet'):
     check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (detectable clusters + undisturbed periods, time order, unsatisfiable skipped)',
           bad10 == 0, f'{Cs.pid.nunique()} plots, mismatching plots {bad10}, empty sets {ne10}')
 # ======================= T11 Forest Explorer export (g07): GEN_* = stand map x unit conversions
-FEJ = os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson')
+FEJ = os.environ.get('FE_GEOJSON', os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson'))   # genveg_pipeline: config fe.geojson
 if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     SV = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id'); fe = json.load(open(FEJ))['features']; e11 = []; n11 = 0
     for f in fe:

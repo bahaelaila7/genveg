@@ -19,7 +19,7 @@ from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT, vat_table
-D = f'{ROOT}/data/proto/gafl'; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; IX = G2.IX; H_ = G2.H_; RP = int(1600 // 30) + 2
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; IX = G2.IX; H_ = G2.H_; RP = int(1600 // 30) + 2
 TERR = [k for k in ('elevation', 'slope', 'northness', 'eastness', 'tpi300', 'tpi2k') if os.path.exists(f'{ROOT}/data/terrain/{k}.tif')]
 HAS_EVC = os.path.exists(f'{ROOT}/data/derived/tree_cover.tif')        # LANDFIRE EVC 2022 tree cover (09_lf_topo.py)
 EVTG = ['Conifer', 'Hardwood', 'Conifer-Hardwood', 'Riparian', 'Shrubland', 'Grassland']

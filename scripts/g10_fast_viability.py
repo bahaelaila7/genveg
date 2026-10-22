@@ -16,7 +16,7 @@ import os, sys, json, math, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2, g02g_history_consistency as GG
 from features import ROOT
-D = f'{ROOT}/data/proto/gafl'; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; IX = G2.IX; H_ = G2.H_
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; IX = G2.IX; H_ = G2.H_
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r'); V = pd.read_parquet(f'{D}/visits.parquet').set_index('vid')
 P = pd.read_parquet(f'{D}/plots.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet')
 E = pd.read_parquet(f'{D}/fia_events.parquet'); N = pd.read_parquet(f'{D}/fia_negs.parquet')

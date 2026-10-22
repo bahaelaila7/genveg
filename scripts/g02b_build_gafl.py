@@ -20,7 +20,8 @@ from pyproj import Transformer
 from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
 from features import ROOT, WS, SOILS, dequant
-R = 1600.0; NCAND = int(os.environ.get('NCAND', 256)); OUT = f'{ROOT}/data/proto/gafl'; os.makedirs(OUT, exist_ok=True)
+from stand_runs import stands_run
+R = 1600.0; NCAND = int(os.environ.get('NCAND', 256)); OUT = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; os.makedirs(OUT, exist_ok=True)
 YEARS = list(range(2000, 2026))
 CLS = {'harvest': ['Clearcut', 'Harvest'], 'thin': ['Thinning', 'Mastication', 'Other Mechanical', 'Mechanical Remove', 'Mechanical Add', 'Mechanical Unknown'],
        'fire': ['Wildfire', 'Fire', 'Prescribed Fire', 'Wildland Fire Use', 'Wildland Fire', 'Unknown/Possibly Fire'],
@@ -43,7 +44,7 @@ def init():
         # file year — NOT DIST_YEAR: the 2008 table labels 135 of 215 codes 2009, but their pixels carry Hansen loss in 2008 (25.5 %), not 2009 (1.8 %)
         ey = int(r.CALENDAR_YR) if pd.notna(getattr(r, 'CALENDAR_YR', np.nan)) else int(r.year)
         lut[(int(r.year), int(r.VALUE))] = (c_, SEV.get(str(r.SEVERITY).strip(), 1.0), ey)
-    _S.update(lut=lut, land=rasterio.open(f'{ROOT}/data/derived/land_clean.tif'), d={y: rasterio.open(f'{ROOT}/data/landfire/dist/dist_{y}.tif') for y in YEARS},
+    _S.update(lut=lut, land=rasterio.open(stands_run()['land_clean']), d={y: rasterio.open(f'{ROOT}/data/landfire/dist/dist_{y}.tif') for y in YEARS},
               h=rasterio.open(f'{ROOT}/data/hansen/lossyear.tif'), a22=rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'), a25=rasterio.open(f'{ROOT}/data/aef/aef_2025.tif'),
               soil={k: rasterio.open(f'{ROOT}/data/soils/{k}.tif') for k in SOILS})
 def feats(r0, c0, h, w):
@@ -236,7 +237,7 @@ if __name__ == '__main__':
     pairs = vis.sort_values(['pid', 'year']).groupby('pid').apply(lambda x: pd.DataFrame({'v1': x.vid.values[:-1], 'v2': x.vid.values[1:]}), include_groups=False).reset_index(level=0)
     print(f'GA+FL: plots {vis.pid.nunique()} visits {len(vis)} tokens {len(TK)} pairs {len(pairs)} keys {KEYS}', flush=True)
     pl = fc.execute("select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12, 13) group by all").df()
-    P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(f'{ROOT}/data/derived/land_clean.tif')
+    P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(stands_run()['land_clean'])
     tf = Transformer.from_crs(4326, land.crs, always_xy=True); P['x'], P['y'] = tf.transform(P.lon.values, P.lat.values); P = P[P.lat.notna()]
     evs, negs, blocked = fia_records(FE, FV, P, key)
     print(f"plots with typed FIA events {len(evs)} (events {sum(map(len, evs.values()))}); negative-evidence periods {sum(map(len, negs.values()))}", flush=True)
@@ -253,17 +254,6 @@ if __name__ == '__main__':
     for j_, nm in enumerate(['conc', 'n_hi', 'mass_hi', 'n_fp']): P[nm] = P.pid.map({k: v[j_] for k, v in concs.items()})
     vis.to_parquet(f'{OUT}/visits.parquet'); TK.to_parquet(f'{OUT}/tokens.parquet'); pairs.to_parquet(f'{OUT}/pairs.parquet'); P.to_parquet(f'{OUT}/plots.parquet')
     C.to_parquet(f'{OUT}/cands.parquet'); np.save(f'{OUT}/cand_feat.npy', np.concatenate(CF))
-    # Baker stands (mapping set): up to 4 footprints per stand, features from THIS feats()
-    init(); import geopandas as gpd
-    cty = gpd.read_file(f'{ROOT}/data/derived/baker_county.gpkg').to_crs(_S['land'].crs).geometry.iloc[0]
-    st = gpd.read_file(f'{ROOT}/out/stands_gafl_pilot.gpkg', layer='stands'); st = st[st.intersects(cty)]
-    sr_ = rasterio.open(f'{ROOT}/data/derived/stands.tif'); x0, y0, x1, y1 = st.total_bounds; r0, c0 = sr_.index(x0, y1); r1, c1 = sr_.index(x1, y0)
-    SR = sr_.read(1, window=Window(c0, r0, c1 - c0 + 1, r1 - r0 + 1)); rr, cc, F = feats(r0, c0, r1 - r0 + 1, c1 - c0 + 1)
-    sid = SR[rr, cc]; kp = np.isin(sid, st.stand_id.values); rr, cc, F, sid = rr[kp], cc[kp], F[kp], sid[kp]
-    rg = np.random.default_rng(0); sel = np.array([i for _, ix in pd.Series(np.arange(len(sid))).groupby(sid) for i in rg.choice(ix.values, min(4, len(ix)), replace=False)])
-    for f in ('stands.parquet', 'stand_feat.npy'):
-        if os.path.islink(f'{OUT}/{f}'): os.unlink(f'{OUT}/{f}')
-    pd.DataFrame({'stand_id': sid[sel], 'row': rr[sel] + r0, 'col': cc[sel] + c0}).to_parquet(f'{OUT}/stands.parquet'); np.save(f'{OUT}/stand_feat.npy', F[sel].astype(np.float16))
-    print('stand footprints', len(sel), 'stands', len(set(sid[sel])))
+    # stand footprints of the mapping set: scripts/g02j_stand_footprints.py (pipeline stage stands_fp; depends on the stand run, not on this table)
     json.dump(dict(keys=KEYS, years=YEARS, classes=list(CLS), soils=SOILS, nf=NF, radius_m=R, ncand=NCAND), open(f'{OUT}/meta.json', 'w'))
     print(f'done: candidates {len(C)} plots {C.pid.nunique()}; localisation concentration quantiles {np.quantile([v[0] for v in concs.values()], [.1, .5, .9]).round(3)}')

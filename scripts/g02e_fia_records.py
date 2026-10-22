@@ -8,7 +8,7 @@ import os, sys, numpy as np, pandas as pd, duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT, WS
-D = f'{ROOT}/data/proto/gafl'; key = ['st', 'u', 'c', 'p']
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; key = ['st', 'u', 'c', 'p']
 fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
 P = pd.read_parquet(f'{D}/plots.parquet'); V = pd.read_parquet(f'{D}/visits.parquet')
 FV = G2.fiadb_visits(fc); FE = G2.fiadb_events(fc)

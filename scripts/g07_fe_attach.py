@@ -6,7 +6,7 @@ import os, sys, json, shutil, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from features import ROOT
 fn = sys.argv[1]; tag = sys.argv[2] if len(sys.argv) > 2 else 'v3'
-D = f'{ROOT}/data/proto/gafl'; S = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; S = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
 if not os.path.exists(fn + '.bak_v2'): shutil.copy2(fn, fn + '.bak_v2')
 g = json.load(open(fn)); n = 0
 for f in g['features']:
