@@ -22,12 +22,13 @@ def resolve(config, sets, window):
     win = tuple(window) if window else (tuple(cfg['window']) if cfg.get('window') else None)
     return cfg, win, SC.stage_hashes(cfg, win)
 
-def run_dir(cfg, sets, hashes, name=None):
-    return os.path.join(SC.ROOT, 'data', 'derived', 'runs', name or (cfg['name'] if not sets else f"{cfg['name']}_{hashes['finalize']}"))
+def run_dir(cfg, sets, hashes, win, name=None):
+    default = not sets and (list(win) if win else None) == cfg.get('window')     # the configuration as written (incl. its window)
+    return os.path.join(SC.ROOT, 'data', 'derived', 'runs', name or (cfg['name'] if default else f"{cfg['name']}_{hashes['finalize']}"))
 
 def run(config=SC.DEFAULT_CONFIG, sets=(), window=None, name=None, stages=None, force=(), py=sys.executable, quiet=False):
     cfg, win, H = resolve(config, list(sets), window)
-    RD = run_dir(cfg, sets, H, name); os.makedirs(RD, exist_ok=True)
+    RD = run_dir(cfg, sets, H, win, name); os.makedirs(RD, exist_ok=True)
     yaml.safe_dump(dict(cfg, window=list(win) if win else None), open(f'{RD}/config_resolved.yml', 'w'), sort_keys=False, allow_unicode=True)
     dirs = {st: SC.stage_dir(st, H[st]) for st in SC.ORDER}
     stages = stages or SC.ORDER + ['verify', 'metrics']
@@ -56,6 +57,8 @@ def run(config=SC.DEFAULT_CONFIG, sets=(), window=None, name=None, stages=None, 
             os.symlink(os.path.relpath(dirs[st], RD), ln)
         elif st in ('verify', 'metrics'):
             script = 'stands_verify.py' if st == 'verify' else 'stands_metrics.py'
+            for f in (f'{RD}/{st}.txt', f'{RD}/metrics.json' if st == 'metrics' else None):
+                if f and os.path.exists(f): os.remove(f)                          # never leave a previous run's result in place
             ctx = dict(cfg=f'{RD}/config_resolved.yml', out=RD, **{'in': dirs}, window=list(win) if win else None)
             r = subprocess.run([py, '-I', os.path.join(SC.SCRIPTS, script)], env=dict(os.environ, STANDS_STAGE_JSON=json.dumps(ctx)), cwd=SC.ROOT,
                                capture_output=True, text=True)
@@ -63,6 +66,8 @@ def run(config=SC.DEFAULT_CONFIG, sets=(), window=None, name=None, stages=None, 
             say(f'== {st}: ' + (r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-500:]))
             summ['stages'][st] = r.returncode
             if st == 'verify' and r.returncode != 0 and not quiet: print(r.stdout)
+            if st == 'metrics' and (r.returncode != 0 or not os.path.exists(f'{RD}/metrics.json')):
+                json.dump(summ, open(f'{RD}/summary.json', 'w'), indent=1, default=str); raise SystemExit(f'!! metrics FAILED:\n{r.stdout[-2000:]}{r.stderr[-2000:]}')
         else:
             raise SystemExit(f'unknown stage {st}')
     json.dump(summ, open(f'{RD}/summary.json', 'w'), indent=1, default=str)

@@ -13,14 +13,15 @@ from common import PROFILE
 from stands_cfg import OUT, IN, WINDOW
 T = int(CFG['segmentation']['sp_tile'])     # superpixel tile size (superpixels never cross tile edges, the RAG merge joins them)
 SEG = CFG['segmentation']; SP_PX = max(4, int(round(SEG.get('superpixel_ha', 1.0) * 1e4 / 900)))
-BARRIERS = [f'{ROOT}/data/barriers/{b}.tif' for b in SEG.get('barriers', ['roads', 'water', 'parcels'])]
+from stands_cfg import barrier_files
+BARRIERS = barrier_files(CFG)                    # configured barriers; a missing raster is an error, not a silent skip
 _fz = None
 
 def init():
     global _fz, _src, _fit, _bar
     _fit = dict(np.load(f"{IN('fit')}/feature_fit.npz"))
     _fz = Featurizer(_fit); _src = open_sources()
-    _bar = [rasterio.open(b) for b in BARRIERS if os.path.exists(b)]
+    _bar = [rasterio.open(b) for b in BARRIERS]
 
 def work(job):
     ti, r, c, H, W = job

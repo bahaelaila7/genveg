@@ -7,6 +7,10 @@ constraints:
 grid:
   segmentation.target_median_ha: [10, 15, 25]
   segmentation.shape_weight: [0.0, 0.5, 1.5]
-  segmentation.weights.treemap: [0.3, 0.6, 1.2]
+  segmentation.superpixel_ha: [0.5, 1.0]
   segmentation.weights.aef_change: [0.5, 1.5]
 random: {n: 12, seed: 1}
+# TreeMap's weight is NOT tuned here: its imputation used LANDFIRE EVC / EVT and topography as predictors, so the held-out EVC / terrain layers are not
+# independent of it (tuning it against them would be circular).
+report_window: [12288, 14336, 16384, 18432]   # Waycross GA pilot: base + top variants re-evaluated here (the ranking is selected on Baker)
+report_top: 3

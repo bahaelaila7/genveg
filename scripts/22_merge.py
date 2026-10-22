@@ -41,7 +41,8 @@ print(f'nodes {N} edges {u.size} ({time.time()-t0:.0f}s)', flush=True)
 G = coo_matrix((np.ones(ea.size), (ea, eb)), shape=(N, N))
 ncomp, comp = connected_components(G, directed=False)
 print('components', ncomp, flush=True)
-max_n = SEG['max_ha'] / PXHA; min_n = SEG['mmu_ha'] / PXHA
+from stands_cfg import mmu_px
+max_n = SEG['max_ha'] / PXHA; min_n = mmu_px(CFG)            # regions < min_n px are absorbed (the MMU of every stage)
 def run(nodes_mask, thr):
     idx = np.flatnonzero(nodes_mask); loc = np.full(N, -1); loc[idx] = np.arange(idx.size)
     em = nodes_mask[ea] & nodes_mask[eb]
@@ -55,15 +56,17 @@ if thr == 'auto':
     rng = np.random.default_rng(0)
     csize = np.bincount(comp, weights=n)
     big = np.flatnonzero(csize * PXHA > 4 * SEG['target_median_ha'])
-    pick = rng.choice(big, min(big.size, 300), replace=False)
+    if big.size == 0: big = np.arange(ncomp); print('  calib: no component > 4 x target; sampling all components', flush=True)
+    pick = rng.choice(big, min(big.size, CFG['merge']['calib_components']), replace=False)
     sm = np.isin(comp, pick)
     lo, hi = 1e-2, 1e4; target = SEG['target_median_ha']
-    for it in range(14):
+    for it in range(CFG['merge']['calib_iters']):
         mid = np.sqrt(lo * hi); idx, lab = run(sm, mid); med = wmedian_ha(idx, lab)
         print(f'  calib thr {mid:.4g} -> area-weighted median {med:.1f} ha', flush=True)
         if med < target: lo = mid
         else: hi = mid
     thr = np.sqrt(lo * hi)
+    if lo <= 1e-2 * 1.0001 or hi >= 1e4 / 1.0001: raise SystemExit(f'auto threshold did not bracket the target median (ended at the bound {thr:.3g}): widen the range or change target_median_ha')
 print('merge threshold', thr, flush=True)
 # --- C: merge in batches of whole components ---
 order = np.argsort(comp, kind='stable'); csz = np.bincount(comp)

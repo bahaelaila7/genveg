@@ -12,9 +12,10 @@ rng.shuffle(tiles); got = 0
 for r, c in tiles:
     win = Window(c, r, min(1024, W - c), min(1024, H - r))
     land = src['land'].read(1, window=win)
-    if (land > 0).mean() < 0.2: continue
-    rr = fz.raw(src, win); m = land > 0
-    sel = rng.choice(np.flatnonzero(m.ravel()), FIT['px_per_tile'], replace=False)
+    m = (land >= 1) & (land <= 4)                                   # forest land (classes 1-4; 9 = converted is not)
+    if m.mean() < 0.2: continue
+    rr = fz.raw(src, win); fl_ = np.flatnonzero(m.ravel())
+    sel = rng.choice(fl_, min(FIT['px_per_tile'], fl_.size), replace=False)
     for k in samples: samples[k].append(rr[k].reshape(-1, rr[k].shape[-1])[sel])
     got += 1
     if got >= FIT['tiles']: break

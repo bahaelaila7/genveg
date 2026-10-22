@@ -22,8 +22,9 @@ t0 = time.time(); PXHA = 900 / 1e4
 sp2 = np.load(f"{IN('merge')}/sp2stand.npy")
 spr = rasterio.open(f"{IN('sp')}/sp.tif"); land = rasterio.open(f"{IN('clean')}/land_clean.tif")
 H, W = spr.shape
+from stands_cfg import sp_extent, mmu_px, barrier_files
 if WINDOW or len(sys.argv) > 4:
-    r0, c0, r1, c1 = WINDOW or tuple(map(int, sys.argv[1:5]))
+    r0, c0, r1, c1 = sp_extent(CFG, WINDOW or tuple(map(int, sys.argv[1:5])))   # the superpixel extent: stands are never cut by the window
 else:
     rows = []; cols = []
     for r in range(0, H, 2048):
@@ -77,14 +78,16 @@ dst.close()
 #     merged into the neighbour with the longest shared boundary (config: same land status only when status_is_hard, else same status preferred;
 #     across barrier lines only when finalize.mmu_across_barriers). A fragment merges only into a LARGER neighbour (or an equal one with a higher id), so
 #     merges are acyclic; chains a -> b -> c are resolved to their end. Status of a stand = majority land status of its pixels. In-memory (pilot windows).
-MMU_PX = int(round(CFG['segmentation']['mmu_ha'] / PXHA)); HARD = CFG['segmentation']['status_is_hard']; FIN = CFG['finalize']
-BARRIERS = [f'{ROOT}/data/barriers/{b}.tif' for b in CFG['segmentation']['barriers'] if os.path.exists(f'{ROOT}/data/barriers/{b}.tif')]
+MMU_PX = mmu_px(CFG); HARD = CFG['segmentation']['status_is_hard']; FIN = CFG['finalize']
+BARRIERS = barrier_files(CFG)
 def majority_status(A, L):
     k = int(A.max()) + 1; cnt = np.zeros((k, 5), np.int64)
     np.add.at(cnt, (A.ravel(), np.clip(L.ravel(), 0, 4)), 1); cnt[:, 0] = 0
     return cnt.argmax(1), cnt.sum(1)
-GEN = dict(passes=0, merged=0, left_small=0)
-if (r1 - r0) * (c1 - c0) <= 120_000_000:
+GEN = dict(passes=0, merged=0, left_small=0, skipped=False)
+if (r1 - r0) * (c1 - c0) > 120_000_000:
+    GEN['skipped'] = True; print('!! MMU generalisation SKIPPED: extent > 120 Mpx (in-memory step); verify V5 fails', flush=True)
+else:
     with rasterio.open(f'{OUT}/stands.tif', 'r+') as ds:
         win = Window(c0, r0, c1 - c0, r1 - r0); A = ds.read(1, window=win).astype(np.int64); L = land.read(1, window=win)
         bar = np.zeros(A.shape, bool)
@@ -158,11 +161,11 @@ out['status'] = C.idxmax(axis=1).astype(int); out['area_ha'] = P.n * PXHA
 for a in [*TM_ATTRS, *SOILS]: out[a] = P[a] / P[a + '_c'].replace(0, np.nan)
 out['tm_frac'] = P.ntm / P.n
 tp = pd.concat(tm_pairs).groupby(['sid', 'tm']).px.sum().reset_index()
-tot = tp.groupby('sid').px.sum(); top = tp.sort_values('px', ascending=False).drop_duplicates('sid').set_index('sid')
+tot = tp.groupby('sid').px.sum(); top = tp.sort_values(['px', 'tm'], ascending=[False, True], kind='stable').drop_duplicates('sid').set_index('sid')
 out['tm_main'] = top.tm; out['tm_share'] = top.px / tot; out['tm_n'] = tp.groupby('sid').size()
 if loss_pairs:
-    lp = pd.concat(loss_pairs).groupby(['sid', 'ly']).px.sum().reset_index().sort_values('px', ascending=False).drop_duplicates('sid').set_index('sid')
-    out['loss_year'] = (lp.ly.astype(int) + 2000).where(lp.ly > 0)
+    lp = pd.concat(loss_pairs).groupby(['sid', 'ly']).px.sum().reset_index().sort_values(['px', 'ly'], ascending=[False, True], kind='stable').drop_duplicates('sid').set_index('sid')
+    out['loss_year'] = (lp.ly.astype(int) + 2000).where(lp.ly > 0).where(out.status == 2)          # harvested stands only (mode of their loss years)
 from shapely.ops import unary_union
 gs = gpd.GeoSeries([unary_union(geoms[s]) if len(geoms[s]) > 1 else geoms[s][0] for s in out.index], index=out.index, crs=srs.crs)
 gdf = gpd.GeoDataFrame(out, geometry=gs)

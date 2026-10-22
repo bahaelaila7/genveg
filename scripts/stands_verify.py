@@ -4,18 +4,19 @@ import os, sys, json, subprocess, numpy as np, pandas as pd, rasterio, geopandas
 from rasterio.windows import Window
 from scipy import ndimage
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from stands_cfg import CFG, IN, WINDOW, ROOT
+from stands_cfg import CFG, IN, WINDOW, ROOT, sp_extent, mmu_px, barrier_files
 from features import TM_ATTRS, vat_table
 NF = [0]
 def check(cid, ok, msg): print(f"{'PASS' if ok else 'FAIL'} {cid:4s} {msg}", flush=True); NF[0] += (not ok)
-PXHA = 0.09; SEG = CFG['segmentation']; MMU_PX = int(round(SEG['mmu_ha'] / PXHA)); MAX_PX = SEG['max_ha'] / PXHA
+PXHA = 0.09; SEG = CFG['segmentation']; MMU_PX = mmu_px(CFG); MAX_PX = SEG['max_ha'] / PXHA
 F = IN('finalize'); srs = rasterio.open(f'{F}/stands.tif'); H, W = srs.shape
-r0, c0, r1, c1 = WINDOW or (0, 0, H, W); win = Window(c0, r0, c1 - c0, r1 - r0)
+r0, c0, r1, c1 = sp_extent(CFG, WINDOW); win = Window(c0, r0, c1 - c0, r1 - r0)   # the superpixel extent (finalize's)
 A = srs.read(1, window=win).astype(np.int64)
 L = rasterio.open(f"{IN('clean')}/land_clean.tif").read(1, window=win)
 SP = rasterio.open(f"{IN('sp')}/sp.tif").read(1, window=win).astype(np.int64)
 fl = (L >= 1) & (L <= 4)
-print(f'window rows {r0}:{r1} cols {c0}:{c1}; forest-land px {fl.sum()}; stands {len(np.unique(A[A > 0]))}')
+edge_ids = set(np.unique(np.concatenate([A[0], A[-1], A[:, 0], A[:, -1]])).tolist()) - {0}      # stands cut by the data extent
+print(f'extent rows {r0}:{r1} cols {c0}:{c1}; forest-land px {fl.sum()}; stands {len(np.unique(A[A > 0]))} ({len(edge_ids)} touch the extent border: excluded from stand-level checks)')
 # V1 coverage
 check('V1', bool((A[fl] > 0).all()) and bool((A[~fl] == 0).all()), f'every forest-land pixel in a stand ({(A[fl] == 0).sum()} missing), none outside forest land ({(A[~fl] > 0).sum()})')
 # V2 connectivity
@@ -38,18 +39,22 @@ check('V3', (not SEG['status_is_hard']) or mfrac < 0.005, f'status purity (statu
 m = SP > 0; pairs = np.unique(np.stack([SP[m], A[m]], 1), axis=0); split = np.unique(pairs[:, 0], return_counts=True)[1] > 1
 check('V4', not split.any(), f'every superpixel inside exactly one stand ({split.sum()} split of {len(split)})')
 # V5 MMU after generalisation: no small stand with an admissible (same-status if hard) neighbour
-small = set(ids[size < MMU_PX].tolist()); adm = 0
+small = set(ids[size < MMU_PX].tolist()) - edge_ids; adm = 0
+bar = np.zeros(A.shape, bool)
+if not CFG['finalize']['mmu_across_barriers']:
+    for b in barrier_files(CFG):
+        with rasterio.open(b) as bs: bar |= bs.read(1, window=win) > 0
 if small:
     pr = []
-    for a, b in ((A[:, :-1], A[:, 1:]), (A[:-1], A[1:])):
-        mm = (a != b) & (a > 0) & (b > 0); pr.append(np.stack([a[mm], b[mm]], 1)); pr.append(np.stack([b[mm], a[mm]], 1))
+    for a, b, ba, bb in ((A[:, :-1], A[:, 1:], bar[:, :-1], bar[:, 1:]), (A[:-1], A[1:], bar[:-1], bar[1:])):
+        mm = (a != b) & (a > 0) & (b > 0) & ~ba & ~bb; pr.append(np.stack([a[mm], b[mm]], 1)); pr.append(np.stack([b[mm], a[mm]], 1))
     P = np.unique(np.concatenate(pr), axis=0); P = P[np.isin(P[:, 0], list(small))]
     if SEG['status_is_hard']: P = P[maj[P[:, 0]] == maj[P[:, 1]]]
     adm = len(np.unique(P[:, 0])) if len(P) else 0
 gen = json.load(open(f'{F}/generalisation.json'))
 across = CFG['finalize']['mmu_across_barriers']
-check('V5', (adm == 0) if across else True, f'stands < MMU ({SEG["mmu_ha"]} ha): {len(small)} ({100*size[size < MMU_PX].sum()/size.sum():.2f} % of the area); with an admissible neighbour {adm} '
-      f'(generalisation passes {gen["passes"]}, merged {gen["merged"]}; across barriers={across})')
+check('V5', adm == 0 and not gen.get('skipped', False), f'interior stands < MMU ({SEG["mmu_ha"]} ha): {len(small)} ({100*size[size < MMU_PX].sum()/size.sum():.2f} % of the area); with an admissible neighbour {adm} '
+      f'(generalisation passes {gen["passes"]}, merged {gen["merged"]}, skipped {gen.get("skipped", False)}; across barriers={across})')
 # V6 max size
 big = size > MAX_PX * 1.05
 check('V6', big.sum() <= max(1, 0.001 * K), f'stands > max_ha ({SEG["max_ha"]} ha, +5 % for reassigned barrier pixels): {big.sum()} (largest {size.max()*PXHA:.0f} ha)')

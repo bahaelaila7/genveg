@@ -25,7 +25,7 @@ OUTD = os.path.join(SC.ROOT, 'data', 'derived', 'tune', NAME); os.makedirs(OUTD,
 cons = spec.get('constraints', {}); rows = []
 for i, sets in enumerate(V):
     t0 = time.time(); print(f'[{i}/{len(V)-1}] {sets or "(base)"}', flush=True)
-    full = (['land', 'clean', 'fit'] if i == 0 else []) + stages
+    full = ['land', 'clean', 'fit'] + [s for s in stages if s not in ('land', 'clean', 'fit')]   # every stage, every variant (cached when unaffected)
     RD, summ = run(base, sets, spec.get('window'), f'{NAME}__{i}', full, quiet=True)
     m = json.load(open(f'{RD}/metrics.json')); vf = summ['stages'].get('verify', 0)
     r = dict(variant=i, sets='; '.join(sets) or '(base)', verify_fails=vf, stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
@@ -36,5 +36,21 @@ for i, sets in enumerate(V):
     rows.append(r); print(f'    {r} ({time.time()-t0:.0f}s)', flush=True)
     df = pd.DataFrame(rows).sort_values(['ok_size', 'mean_gain'], ascending=[False, False])
     df.to_csv(f'{OUTD}/results.csv', index=False)
-    open(f'{OUTD}/results.md', 'w').write(f'# Stand-delineation tuning {NAME} (base {os.path.relpath(base, SC.ROOT)})\n\n' + df.to_markdown(index=False) + '\n')
+    md = '| ' + ' | '.join(df.columns) + ' |\n|' + '---|' * len(df.columns) + '\n' + ''.join('| ' + ' | '.join(str(v) for v in r) + ' |\n' for r in df.itertuples(index=False))
+    open(f'{OUTD}/results.md', 'w').write(f'# Stand-delineation tuning {NAME} (base {os.path.relpath(base, SC.ROOT)})\n\n' + md)
+# selection bias: the ranking above is selected ON the tuning window. Re-evaluate the base + the top variants on a separate report window (spec
+# report_window) and report those numbers as the unbiased estimate of the chosen configuration's quality.
+if spec.get('report_window'):
+    top = [0] + [int(v) for v in df[df.ok_size & (df.verify_fails == 0)].variant if int(v) != 0][:spec.get('report_top', 3)]
+    rep = []
+    for i in top:
+        RD, summ = run(base, V[i], spec['report_window'], f'{NAME}__report{i}', ['land', 'clean', 'fit'] + [s for s in stages if s not in ('land', 'clean', 'fit')], quiet=True)
+        m = json.load(open(f'{RD}/metrics.json'))
+        rep.append(dict(variant=i, sets='; '.join(V[i]) or '(base)', verify_fails=summ['stages'].get('verify', 0), stands=m['stands'], wmedian_ha=round(m['wmedian_ha'], 1),
+                        small_area_pct=round(100 * m['small_area_share'], 2), mean_gain=round(m['mean_gain'], 4),
+                        **{'gain:' + os.path.basename(k).split('.')[0]: v['gain'] for k, v in m['heldout'].items() if isinstance(v, dict)}))
+        print(f'  report window: {rep[-1]}', flush=True)
+    R = pd.DataFrame(rep); R.to_csv(f'{OUTD}/report_window.csv', index=False)
+    md = '| ' + ' | '.join(R.columns) + ' |\n|' + '---|' * len(R.columns) + '\n' + ''.join('| ' + ' | '.join(str(v) for v in r) + ' |\n' for r in R.itertuples(index=False))
+    open(f'{OUTD}/results.md', 'a').write(f'\n## Report window {spec["report_window"]} (not used for the ranking)\n\n' + md)
 print(open(f'{OUTD}/results.md').read())

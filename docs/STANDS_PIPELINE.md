@@ -25,11 +25,21 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
 | `metrics` | `stands_metrics.py` | window | `metrics.heldout` | run dir `metrics.json` |
 
 **Cache.**
-- Every stage writes to `data/derived/cache/<stage>-<hash>`. The hash covers the stage's config keys, the window (for windowed stages), the code of the
-  stage script plus `common.py` / `features.py` / `rag_merge.py`, and the upstream hashes.
-- Changing a merge parameter therefore re-runs only `merge` and `finalize`; editing `features.py` re-runs from `fit`.
+- Every stage writes to `data/derived/cache/<stage>-<hash>`. The hash covers:
+  - the stage's config keys;
+  - the window (for windowed stages);
+  - the code of the stage script and of the local modules **it** imports (`STAGES[...]['mods']` in `stands_cfg.py`);
+  - a fingerprint (size + mtime) of its raw input files, including the configured barrier rasters;
+  - the upstream hashes.
+- Changing a merge parameter therefore re-runs only `merge` and `finalize`; editing `features.py` re-runs from `fit`. Library versions are not hashed.
+- A configured barrier raster that does not exist is an error, not a silent skip.
 - A stage writes to `<dir>.partial` and is renamed on success, with a `DONE` marker.
 - `data/derived/runs/<name>/` links a run's stage dirs and holds `config_resolved.yml`, `summary.json`, `verify.txt` and `metrics.json`.
+- The default name is the config name only for the configuration as written, including its window. With `--set` or another `--window` it is
+  `<name>_<finalize hash>`.
+- Old verify / metrics results are deleted before each run, and a failed metrics stage is an error.
+- **Extent.** `sp` covers every tile overlapping the window. finalize, verify and metrics work on that tile-aligned **superpixel extent**, so stands
+  are never cut by the window. Stands touching the extent's border are cut by the data extent; they are excluded from stand-level checks and metrics.
 
 ## Method (as implemented)
 
@@ -68,7 +78,7 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
 | V2 | stands are single 4-connected pieces (< 0.5 % of the area in disconnected stands) |
 | V3 | status purity when `status_is_hard` (< 0.5 % of pixels outside their stand's majority status, i.e. reassigned barrier pixels) |
 | V4 | no superpixel split between stands |
-| V5 | after generalisation no stand below the MMU has an admissible neighbour |
+| V5 | after generalisation no interior stand below the MMU has an admissible neighbour: same status if hard; barrier pixels excluded when crossing is off. Fails if generalisation was skipped (extent > 120 Mpx) |
 | V6 | stands > `max_ha` (+5 % for barrier pixels) ≤ 0.1 % |
 | V7 | gpkg ↔ raster: same ids; area_ha = pixels × 0.09; polygon area = area_ha; status = majority |
 | V8 | TreeMap stand means recomputed from pixels for a sample of stands |
@@ -82,8 +92,19 @@ The objective uses only layers that the segmentation does **not** see (`metrics.
 - LANDFIRE terrain: elevation, slope, TPI-300;
 - LANDFIRE EVC tree cover.
 
-For each layer, R² = 1 − within-stand SS / total SS over forest-land pixels. It is compared with an **equal-count square-block partition** (blocks ×
-status), so the gain measures how much more independent structure the stands capture than arbitrary units of the same number and size.
+For each layer, R² = 1 − within-stand SS / total SS over the forest-land pixels of interior stands. It is compared with an **equal-count square-block
+partition** (blocks × status). The block side is searched until the number of block × status units equals the number of stands. The gain is how much
+more of a layer's spatial structure the stands capture than arbitrary units of the same number. The MMU is one pixel count everywhere:
+round(mmu_ha / 0.09) = 22 px.
+
+**Independence caveats.** No layer is fully independent:
+- TreeMap's imputation used LANDFIRE EVC / EVT and topography as predictors. EVC and terrain gains are therefore inflated by the TreeMap feature group,
+  and tuning `weights.treemap` against them would be circular; the shipped spec does not tune it.
+- Hansen treecover2000 decides part of the status classes (former forest ≥ 25 %, shrub/herb ≥ 50 %). The block baseline is split by status too, so
+  only the within-status variation of treecover2000 is informative.
+
+**Selection.** A sweep ranks variants on the tuning window, so the winner's gain there is optimistic. With `report_window`, the base and the top
+`report_top` variants are re-run on a second window (Waycross GA). Those numbers, not the ranking ones, are the estimate to report.
 
 A tuning spec (e.g. `config/tune_baker.yml`) is a grid, random combinations or explicit variants of `--set` overrides, plus size constraints: accepted
 area-weighted median and maximum area share below the MMU. Results are ranked by mean gain in `data/derived/tune/<spec>/results.{csv,md}`, with
@@ -98,7 +119,21 @@ verify FAIL counts. Variant 0 is the base configuration.
 - The fragment status was the status of its first pixel; it is now the majority.
 - Barrier and sliver pixels were assigned to the NEAREST stand pixel (EDT). That made 1,110 stands disconnected, with 3,919 px in detached pieces on the Baker
   window; region growing from 4-adjacent stands gives 0 (V2).
-- **Status of the Baker pilot (base configuration, verify all PASS):** 24,529 stands; area-weighted median 13.3 ha; 4,212 stands < MMU (0.58 % of the
-  area) are isolated, with no same-status neighbour. Held-out R² gain over equal-count blocks: Hansen 2000 canopy +0.053, EVC tree cover +0.029,
-  TPI-300 +0.009; elevation / slope about 0 (flat county).
-- All paths and thresholds come from the configuration: the tile size, the speckle distance, the hole distance and the feature-fit sample were hard-coded.
+- Second review (2026-10-22), all confirmed and fixed:
+  - Stands cut by the window were generalised and measured as complete; finalize / verify / metrics now use the superpixel extent and interior stands.
+  - The "equal-count" blocks were 1.53× more numerous than the stands; the block side is now searched.
+  - Three MMU variants were in use (2.0 ha, 22 px, 22.2 px); there is now one pixel count.
+  - The feature fit sampled converted (class 9) pixels and could crash on small edge tiles.
+  - `--window` without `--name` overwrote the base run; a failed metrics stage left stale results.
+  - V5 was vacuous when barrier crossing was off.
+  - Shared-module hashing over-invalidated the land / clean stages, and raw inputs were not fingerprinted.
+  - Missing barrier rasters were skipped silently.
+  - The tuner skipped land / clean / fit for later variants.
+  - Forest-free tiles dropped class 9 in land_clean.
+  - Calibration edge cases now raise errors. Generalisation skipped on large extents is recorded and fails V5.
+  - Ties are stable; loss_year is set only on harvested stands.
+- **Status of the Baker pilot** (base configuration, superpixel extent rows 15872–17920 × cols 16384–18432; verify all PASS):
+  - 39,639 stands, of which 748 are edge stands; area-weighted median 13.6 ha.
+  - 7,631 interior stands < MMU (0.65 % of the area) are isolated, with no same-status neighbour.
+  - Held-out R² gain over equal-count blocks: Hansen 2000 canopy +0.110, TPI-300 +0.123, EVC tree cover +0.055, slope +0.030, elevation ≈ 0.
+    Mind the independence caveats above.

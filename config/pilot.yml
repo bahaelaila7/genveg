@@ -11,7 +11,6 @@ forest_land:
   disturbed_evt_name: ["Recently Logged", "Recently Burned", "Recently Disturbed", "Plantation", "Ruderal Forest", "Ruderal Flooded"]
 segmentation:
   mmu_ha: 2.0                 # minimum mapping unit
-  target_ha: [5, 50]          # typical stand size range
   max_ha: 200                 # segments larger than this are split
   aef_pcs: 16                 # AlphaEarth PCs used in the feature vector
   weights: {aef: 1.0, aef_old: 0.4, aef_change: 0.5, treemap: 0.6, soil: 0.3}   # feature-group weights (each group scaled to total variance weight²)
@@ -23,6 +22,9 @@ segmentation:
   target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
   shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
   barriers: [roads, water, parcels]
+merge:
+  calib_components: 300       # auto threshold: graph components sampled for the bisection (those > 4 x target_median_ha; all if none)
+  calib_iters: 14
 clean:
   max_dist_px: 15             # a sub-MMU status patch takes the class of the nearest larger forest-land patch within this distance
 fit:

@@ -8,8 +8,10 @@ from scipy import ndimage
 from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__)); from common import ROOT, PROFILE
 from stands_cfg import CFG, OUT, IN
+from stands_cfg import mmu_px
 cfg = CFG['segmentation']; DMAX = CFG['clean']['max_dist_px']
-MMU = int(round(cfg['mmu_ha'] * 1e4 / 900)); T, HALO = 2048, 128
+MMU = mmu_px(CFG); T, HALO = 2048, 128
+assert DMAX < HALO and MMU < HALO * HALO, 'clean.max_dist_px / MMU must fit in the tile halo'
 SRC = f"{IN('land')}/land.tif"
 
 def work(rc):
@@ -19,7 +21,8 @@ def work(rc):
         r0, c0 = max(r - HALO, 0), max(c - HALO, 0); r1, c1 = min(r + T + HALO, H), min(c + T + HALO, W)
         land = s.read(1, window=Window(c0, r0, c1 - c0, r1 - r0))
     fl = (land >= 1) & (land <= 4)
-    if not fl.any(): return r, c, None
+    h, w = min(T, H - r), min(T, W - c)
+    if not fl.any(): return r, c, land[r - r0:r - r0 + h, c - c0:c - c0 + w]      # nothing to clean: written as is (keeps class 9)
     small = np.zeros(land.shape, bool)
     for cls in (1, 2, 3, 4):
         lab, n = ndimage.label(land == cls)
@@ -32,7 +35,6 @@ def work(rc):
         d, (iy, ix) = ndimage.distance_transform_edt(~target, return_indices=True)
         re = small & (d <= DMAX)
         out[re] = land[iy[re], ix[re]]
-    h, w = min(T, H - r), min(T, W - c)
     return r, c, out[r - r0:r - r0 + h, c - c0:c - c0 + w]
 
 if __name__ == '__main__':
