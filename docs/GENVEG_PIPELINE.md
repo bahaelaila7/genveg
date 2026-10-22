@@ -37,7 +37,8 @@ pipeline (`docs/STANDS_PIPELINE.md`), named by `stands_run`.
 - its config sections;
 - the code of its scripts and the shared modules (`common`, `features`, `stand_runs`);
 - the upstream stage hashes;
-- the stand run's stage hashes: `clean` for the table, `finalize` for stand footprints, map, FE and verify.
+- pixel-content fingerprints of the stand-run rasters it reads: `land_clean` for the table, `stands.tif` for stand footprints, map, FE and verify
+  (a stand-pipeline re-run with identical outputs does not invalidate genveg).
 
 A current stage is skipped; a stage whose upstream is not current is refused. `--adopt` records existing outputs as current without running them. Use it
 only for artifacts known to come from the same code and configuration. The `gafl` table, for example, is NOT reproducible by `table`: it is g02b under

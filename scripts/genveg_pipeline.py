@@ -14,7 +14,8 @@ Stages (default all, in order):
   fe            24_export_fe.py + g07_fe_attach.py   Forest Explorer stands layer of the stand run + GEN_* attributes (the host serves it)
   verify        gv_verify.py             independent recomputation of every stage                                   [check: exit 0 required]
 Outputs are the scripts' own files under data/proto/<data>/. The driver keeps data/proto/<data>/pipeline_state.json: per stage the hash of its config
-section, the code of its scripts and local modules, the upstream stage hashes and the stand run's stage hashes. A stage whose hash is unchanged is
+section, the code of its scripts and local modules, the upstream stage hashes and pixel-content fingerprints of the stand-run rasters it reads
+(land_clean / land / stands), so a re-run of the stand pipeline with identical outputs does not invalidate genveg. A stage whose hash is unchanged is
 skipped; --force re-runs it; --adopt records existing outputs as current WITHOUT running (only for artifacts known to come from this code + config).
 Logs: data/proto/<data>/pipeline_logs/<stage>.log."""
 import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
@@ -38,6 +39,20 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
 }
 ORDER = list(STAGES)
 
+STAND_FILES = dict(clean='clean/land_clean.tif', land='land/land.tif', finalize='finalize/stands.tif')
+def pixel_hash(path):
+    """Content fingerprint of a raster: its decoded pixels + shape / dtype / transform (byte hashes differ between identical rasters written with
+    different tiling / compression). Cached next to the file by (size, mtime)."""
+    import rasterio
+    from rasterio.windows import Window
+    real = os.path.realpath(path); st = os.stat(real); cf = real + '.pixhash.json'
+    if os.path.exists(cf):
+        c = json.load(open(cf))
+        if c.get('size') == st.st_size and c.get('mtime') == st.st_mtime_ns: return c['hash']
+    h = hashlib.sha256(); s = rasterio.open(real); H, W = s.shape; h.update(str((s.shape, s.dtypes, s.transform)).encode())
+    for r in range(0, H, 4096): h.update(s.read(1, window=Window(0, r, W, min(4096, H - r))).tobytes())
+    out = h.hexdigest()[:16]; json.dump(dict(size=st.st_size, mtime=st.st_mtime_ns, hash=out), open(cf, 'w')); return out
+
 def code_hash(files):
     h = hashlib.sha256()
     for f in files + LIB: h.update(f.encode()); h.update(open(os.path.join(SCR, f), 'rb').read())
@@ -52,7 +67,7 @@ def main():
     D = os.path.join(ROOT, 'data', 'proto', cfg['data']); LOGD = os.path.join(D, 'pipeline_logs'); os.makedirs(LOGD, exist_ok=True)
     SR = os.path.join(ROOT, 'data', 'derived', 'runs', cfg['stands_run'])
     if not os.path.exists(f'{SR}/summary.json'): sys.exit(f'stand run {SR} missing: run scripts/stands_pipeline.py --name {cfg["stands_run"]} first')
-    srh = json.load(open(f'{SR}/summary.json'))['hashes']
+    srh = {k: pixel_hash(os.path.join(SR, f)) for k, f in STAND_FILES.items()}          # CONTENT of the stand run's outputs genveg reads
     stf = f'{D}/pipeline_state.json'; state = json.load(open(stf)) if os.path.exists(stf) else {}
     H = {}
     for st in ORDER:
