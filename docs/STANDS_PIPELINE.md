@@ -65,8 +65,8 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
    assigned, so its superpixels grow around theirs, and keeps every superpixel whose centroid is not in a later-phase tile, with all its pixels (also
    across the seam). Leftover forest pixels become their own pieces per status; labels are split into 4-connected pieces; statistics come from a
    second pass over the final raster. Baker: stand boundaries on the 512-px seams 1.76x (no reconciliation) -> 1.20x (`stitch`: cores + re-join
-   cut superpixels) -> **1.01x** (`phased`) the boundary rate elsewhere (`metrics.json` `seam_excess`); held-out share 0.1971 -> 0.1984 -> 0.2041;
-   verify passes. Tried and dropped: centroid ownership of two independent segmentations of the overlap (the split still lands on the seam, 1.6x on
+   cut superpixels) -> **1.01x** (`phased`) the boundary rate elsewhere (`metrics.json` `seam_excess`); held-out share (interpolated baseline,
+   below) 0.1871 -> 0.1871 -> 0.1892 on Baker, 0.1818 -> 0.1817 (phased) on Waycross: seam-free at no cost; verify passes. Tried and dropped: centroid ownership of two independent segmentations of the overlap (the split still lands on the seam, 1.6x on
    superpixels); one 2048-px tile (SLIC would need ≈ 263 GiB).
 5. **Merging.** Region-adjacency graph over superpixels; barriers disconnect it.
    - Each round, mutual-best pairs merge when their Ward cost n_a n_b/(n_a+n_b)·|μ_a−μ_b|² × (1 + shape_weight·(1 − shared / min perimeter)) is below the
@@ -103,7 +103,9 @@ The objective uses only layers that the segmentation does **not** see (`metrics.
 - LANDFIRE EVC tree cover.
 
 For each layer, R² = 1 − within-stand SS / total SS over the forest-land pixels of interior stands. It is compared with an **equal-count square-block
-partition** (blocks × status). The block side is searched until the number of block × status units equals the number of stands. The gain is how much
+partition** (blocks × status). The block side is an integer, so no side gives exactly as many block × status units as stands (the nearest
+is often ±5 % off, which moved the share by ±0.02); the block R² is therefore interpolated in log(unit count) between the two sides that bracket the
+stand count (since 2026-10-23; earlier tuning numbers used the nearest side and are ~0.01 higher on average, rankings unchanged). The gain is how much
 more of a layer's spatial structure the stands capture than arbitrary units of the same number. The MMU is one pixel count everywhere:
 round(mmu_ha / 0.09) = 22 px.
 

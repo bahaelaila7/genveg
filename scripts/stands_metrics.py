@@ -26,14 +26,17 @@ def nunits(side): return np.unique(blocks(side)[fl]).size
 lo_, hi_ = 1, int(np.sqrt(fl.sum())) + 2                                   # EQUAL COUNT: the block side whose block x status units number K
 while hi_ - lo_ > 1:
     mid = (lo_ + hi_) // 2; (lo_, hi_) = (mid, hi_) if nunits(mid) > K else (lo_, mid)
-side = hi_ if abs(nunits(hi_) - K) <= abs(nunits(lo_) - K) else lo_
-B = blocks(side); out['block_units'] = int(nunits(side))
+# the side is an integer, so no single side matches K (the nearest is often ±5 % off, which moves the baseline by ~±0.02 share): the baseline is the
+# block R² interpolated in log(unit count) between the two sides that bracket K (lo_: more units than K, hi_: at most K)
+n_lo, n_hi = nunits(lo_), nunits(hi_); B_lo, B_hi = blocks(lo_), blocks(hi_)
+t_ = (np.log(K) - np.log(n_hi)) / (np.log(n_lo) - np.log(n_hi)) if n_lo != n_hi else 0.0
+side = hi_; out['block_units'] = [int(n_lo), int(n_hi)]; out['block_interp_t'] = round(float(t_), 4)
 def r2(lab, x, m):
     l = lab[m]; v = x[m]; _, inv = np.unique(l, return_inverse=True)
     n = np.bincount(inv); s = np.bincount(inv, v); s2 = np.bincount(inv, v * v)
     within = (s2 - s * s / n).sum(); tot = ((v - v.mean()) ** 2).sum()
     return float(1 - within / tot) if tot > 0 else float('nan')
-out['block_side_px'] = side; out['heldout'] = {}
+out['block_side_px'] = [int(lo_), int(hi_)]; out['heldout'] = {}
 def oracle_r2(x, ok):
     """R² ceiling at the same unit count: the run's superpixels merged by the same Ward / RAG code on the layer itself (status hard, no size cap / shape)."""
     from rag_merge import merge
@@ -58,7 +61,7 @@ for rel in CFG['metrics']['heldout']:
         x = s.read(1, window=win).astype(np.float64); nd = s.nodata
     ok = fl & np.isfinite(x) & ((x != nd) if nd is not None and not np.isnan(nd) else True)
     if ok.sum() < 1000: out['heldout'][rel] = 'too few pixels'; continue
-    rs, rb, rp = r2(A, x, ok), r2(B, x, ok), r2(SP, x, ok & (SP > 0))
+    rs, rp = r2(A, x, ok), r2(SP, x, ok & (SP > 0)); rb = r2(B_hi, x, ok) + t_ * (r2(B_lo, x, ok) - r2(B_hi, x, ok))   # equal-count baseline (interpolated)
     out['heldout'][rel] = dict(r2_stands=round(rs, 4), r2_blocks=round(rb, 4), gain=round(rs - rb, 4), share=round((rs - rb) / (1 - rb), 4) if 1 - rb > 1e-9 else None,
                                headroom=round(1 - rb, 4), r2_superpixels=round(rp, 4))
     if CFG['metrics'].get('oracle'):
@@ -77,5 +80,5 @@ if seam_pairs > 0:
     out['seam_boundary_rate'] = float(seam_rate); out['boundary_rate'] = float(all_rate); out['seam_excess'] = float(seam_rate / all_rate)
 json.dump(out, open(f'{OUT}/metrics.json', 'w'), indent=1)
 print(json.dumps(out['heldout']))
-print(f"stands {K} (block units {out['block_units']}, side {side} px); area-weighted median {out['wmedian_ha']:.1f} ha; area < MMU {100*out['small_area_share']:.2f} %; held-out R² gain over equal-count blocks: "
+print(f"stands {K} (block units {out['block_units']} at sides {out['block_side_px']} px, interpolated); area-weighted median {out['wmedian_ha']:.1f} ha; area < MMU {100*out['small_area_share']:.2f} %; held-out R² gain over equal-count blocks: "
       + ', '.join(f"{os.path.basename(k).split('.')[0]} {v['gain']:+.3f}" for k, v in out['heldout'].items() if isinstance(v, dict)) + f" | mean gain {out['mean_gain']:+.3f} | mean SHARE of the blocks' unexplained variance {out['mean_share']:.3f}" + (f" | tile-seam excess {out['seam_excess']:.2f}x" if 'seam_excess' in out else ''))
