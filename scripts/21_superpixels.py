@@ -1,7 +1,7 @@
-"""Stage A: SLIC superpixels per 2048-px tile and per land status, inside forest land minus barrier pixels.
+"""Stage A: SLIC superpixels per sp_tile (512-px) tile and per land status, inside forest land minus barrier pixels.
 Writes <OUT>/sp.tif (int32 global superpixel id, 0 = none) and <OUT>/sp_stats.npz
-(id, n, status, feature sums). Superpixels never cross barriers, statuses or tile edges; the global RAG merge
-(stage C) joins them across tile edges. Window (driver) = the tiles whose origin lies inside (r0, c0, r1, c1). Ids are assigned in tile order
+(id, n, status, feature sums). Superpixels never cross barriers or statuses; with sp_seam_mode phased they cross tile seams (no seam
+artefacts), with stitch / no halo they are cut at tile edges. Window (driver) = every tile overlapping (r0, c0, r1, c1). Ids are assigned in tile order
 (deterministic: the merge's tie-breaking depends on ids)."""
 import sys, os, time, numpy as np, rasterio
 from rasterio.windows import Window
@@ -65,7 +65,7 @@ def work(job):
     fl = (land >= 1) & (land <= 4)
     if fl.sum() < 4: return ti, r, c, None, None
     bar = np.zeros(land.shape, bool)
-    for b in _bar: bar |= b.read(1, window=win) > 0
+    for b in _bar: bar |= b.read(1, window=win) == 1          # barrier rasters: 1 = line, 0 = none, 255 = nodata (outside the AOI)
     raw = _fz.raw(_src, win); X = _fz.features(raw); Y = slic_input(X, raw)
     M = Y if SEG['merge_groups'] == SEG['slic_groups'] and SEG['treemap_smooth_px'] == 0 else feature_space(SEG['merge_groups'], X, raw)   # merge feature space
     lab = np.zeros(land.shape, np.int32); nxt = 1
@@ -86,8 +86,9 @@ def work(job):
         # SLIC with enforce_connectivity can leave mask pixels at 0 when tiny; label them as their own pieces
     from scipy import ndimage
     miss = fl & ~bar & (lab == 0) & (~fixed if fixed is not None else True)
-    if miss.any():
-        l, n = ndimage.label(miss); lab = np.where(miss, l + nxt - 1, lab); nxt += n
+    for st in (1, 2, 3, 4):                                        # per status: a leftover piece never mixes statuses
+        ms = miss & (land == st)
+        if ms.any(): l, n = ndimage.label(ms); lab = np.where(ms, l + nxt - 1, lab); nxt += n
     # split any non-4-connected superpixel (SLIC connectivity is 8-ish) into 4-connected parts
     ids = np.unique(lab[lab > 0])
     out = np.zeros_like(lab); k = 0
@@ -184,7 +185,7 @@ def run_phased(jobs, H, W, prof, sp_path, nproc):
     win = Window(C0, R0, ww, hh)                                             # unassigned forest pixels: own pieces per status
     land = _src_land.read(1, window=win); bar = np.zeros((hh, ww), bool)
     for b in BARRIERS:
-        with rasterio.open(b) as d: bar |= d.read(1, window=win) > 0
+        with rasterio.open(b) as d: bar |= d.read(1, window=win) == 1
     gap = (G == 0) & (PH >= 0) & (land >= 1) & (land <= 4) & ~bar; ngap = int(gap.sum())
     for st in (1, 2, 3, 4):
         l, n_ = ndimage.label(gap & (land == st)); G = np.where(l > 0, l + off, G); off += n_

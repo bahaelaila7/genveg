@@ -6,7 +6,7 @@ f = np.array([0,0.1,0,0.05,0, 5,5.1,5,4.9, 5,5,5.05], float)[:, None]
 n = np.ones(12); st = np.array([1]*9 + [2]*3)
 a = np.arange(11); b = a + 1; ln = np.ones(11); perim = np.full(12, 4.0)
 lab = merge(n, f * n[:, None], st, a, b, ln, perim, threshold=1.0, max_n=100)
-print(lab); assert len(set(lab[:5])) == 1 and len(set(lab[5:9])) == 1 and len(set(lab[9:])) == 1 and lab[0] != lab[5] != lab[9]
+print(lab); assert len(set(lab[:5])) == 1 and len(set(lab[5:9])) == 1 and len(set(lab[9:])) == 1 and lab[0] != lab[5] and lab[5] != lab[9] and lab[0] != lab[9]
 lab = merge(n, f * n[:, None], st, a, b, ln, perim, threshold=1.0, max_n=3)
 print(lab); assert np.bincount(lab).max() <= 3
 # min_n absorption: region 5 alone (size 1) with status 1 neighbours

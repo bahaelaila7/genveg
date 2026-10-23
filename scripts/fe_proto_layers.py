@@ -3,6 +3,7 @@ Reads config/fe_layers.yml and writes, under <WORKSPACE>/<out>/, one file per la
 fe_pan apps/forest-explorer/public/proto.js). Layer kinds:
   stands        polygons of a stand-delineation run (data/derived/runs/<run>/finalize/stands.gpkg) clipped to the area (24_export_fe.py)
   geojson_file  an existing GeoJSON (e.g. the generative-vegetation pipeline's FE file)
+  parcels       a parcel GeoJSON of 07b_parcels_owner.py (grp_id, n_parcels, cnty, acres; no owner data), coloured by parcels joined
   raster        a grid raster in the raster window reprojected to EPSG:4326 (PNG + bounds); styles: land (status classes), edges (boundaries of an
                 id raster), aef_rgb (AlphaEarth PCs 1-3 of feature_fit as RGB), ramp / diverging (value range), latent_rgb (IWAE embedding PCs 1-3)
   freerun       HBAD3P free-run plots (freerun_val.csv of a fit) as points at the PUBLIC (fuzzed) FIA plot coordinates, relative errors per variable
@@ -103,6 +104,12 @@ def geojson_layer(L):
     has_gen = any('GEN_BA' in f['properties'] for f in d['features'][:50])
     return dict(type='fill', url=f"/proto/{L['id']}.geojson", props=(GEN_PROPS if has_gen else []) + STAND_PROPS, color='GEN_BA' if has_gen else 'status',
                 note=f"{len(d['features'])} stands"), None
+PARCEL_PROPS = [dict(name='n_parcels', label='parcels joined (same owner)', unit='', range=[1, 10]), dict(name='acres', label='area', unit='ac', range=[0, 640])]
+def parcels_layer(L):
+    p = os.path.join(ROOT, L['path'])
+    if not os.path.exists(p): return None, f'missing {p}'
+    d = json.load(open(p)); json.dump(d, open(f"{OUT}/{L['id']}.geojson", 'w'), separators=(',', ':'))
+    return dict(type='fill', url=f"/proto/{L['id']}.geojson", props=PARCEL_PROPS, color='n_parcels', note=f"{len(d['features'])} parcels"), None
 _plots = None
 def plot_coords():
     global _plots
@@ -177,7 +184,7 @@ def levels_layer(L):
     return dict(type='fill', url=f"/proto/{L['id']}.geojson", props=props, color='area_ha',
                 note=f"{len(st)} units; held-out mean share {lv[key]['mean_share']} (stands {lv['stands']['mean_share']}); nested in the stands of {L['run']}"), None
 
-KINDS = dict(levels=levels_layer, stands=stands_layer, geojson_file=geojson_layer, raster=raster_layer, freerun=freerun_layer, latent=latent_layer)
+KINDS = dict(levels=levels_layer, stands=stands_layer, geojson_file=geojson_layer, parcels=parcels_layer, raster=raster_layer, freerun=freerun_layer, latent=latent_layer)
 mf = f'{OUT}/manifest.json'; man = json.load(open(mf)) if os.path.exists(mf) else dict(layers=[])
 old = {l['id']: l for l in man['layers']}; layers = []
 for L in CFG['layers']:

@@ -10,33 +10,25 @@ import os, sys, json, numpy as np, rasterio
 from rasterio.windows import Window
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stands_cfg import CFG, IN, WINDOW, ROOT, OUT, sp_extent, mmu_px
+import heldout as HO
 PXHA = 0.09; SEG = CFG['segmentation']; MMU_PX = mmu_px(CFG)
 F = IN('finalize'); srs = rasterio.open(f'{F}/stands.tif'); H, W = srs.shape
 r0, c0, r1, c1 = sp_extent(CFG, WINDOW); win = Window(c0, r0, c1 - c0, r1 - r0)   # the superpixel extent (finalize's)
 A = srs.read(1, window=win).astype(np.int64); L = rasterio.open(f"{IN('clean')}/land_clean.tif").read(1, window=win)
 SP = rasterio.open(f"{IN('sp')}/sp.tif").read(1, window=win).astype(np.int64)
 edge_ids = np.unique(np.concatenate([A[0], A[-1], A[:, 0], A[:, -1]]))                    # stands cut by the data extent: excluded
-fl = (L >= 1) & (L <= 4) & (A > 0) & ~np.isin(A, edge_ids)
-ids, size = np.unique(A[fl], return_counts=True); K = ids.size; a = np.sort(size * PXHA)
-out = dict(stands=int(K), area_ha=float(a.sum()), q05_25_50_75_95=np.quantile(a, [.05, .25, .5, .75, .95]).round(2).tolist(),
+fl_all = (L >= 1) & (L <= 4) & (A > 0) & ~np.isin(A, edge_ids)                           # interior stands (size statistics)
+ids, size = np.unique(A[fl_all], return_counts=True); a = np.sort(size * PXHA)
+fl, K, n_iso, _ = HO.eval_mask(A, L, MMU_PX)                                             # held-out evaluation: interior, without isolated sub-MMU pieces
+out = dict(stands=int(ids.size), stands_evaluated=int(K), isolated_small_excluded=n_iso, area_ha=float(a.sum()), q05_25_50_75_95=np.quantile(a, [.05, .25, .5, .75, .95]).round(2).tolist(),
            wmedian_ha=float(a[np.searchsorted(np.cumsum(a), a.sum() / 2)]), small_area_share=float(size[size < MMU_PX].sum() / size.sum()), edge_stands_excluded=int((edge_ids > 0).sum()))
-rr, cc = np.mgrid[0:A.shape[0], 0:A.shape[1]]
-def blocks(side): return ((rr // side) * (A.shape[1] // side + 1) + cc // side) * 8 + L.astype(np.int64)
-def nunits(side): return np.unique(blocks(side)[fl]).size
-lo_, hi_ = 1, int(np.sqrt(fl.sum())) + 2                                   # EQUAL COUNT: the block side whose block x status units number K
-while hi_ - lo_ > 1:
-    mid = (lo_ + hi_) // 2; (lo_, hi_) = (mid, hi_) if nunits(mid) > K else (lo_, mid)
-# the side is an integer, so no single side matches K (the nearest is often ±5 % off, which moves the baseline by ~±0.02 share): the baseline is the
-# block R² interpolated in log(unit count) between the two sides that bracket K (lo_: more units than K, hi_: at most K)
-n_lo, n_hi = nunits(lo_), nunits(hi_); B_lo, B_hi = blocks(lo_), blocks(hi_)
-t_ = (np.log(K) - np.log(n_hi)) / (np.log(n_lo) - np.log(n_hi)) if n_lo != n_hi else 0.0
-side = hi_; out['block_units'] = [int(n_lo), int(n_hi)]; out['block_interp_t'] = round(float(t_), 4)
+BL = HO.Baseline(L, fl, K); out['block_units'] = [BL.n_lo, BL.n_hi]; out['block_interp_t'] = round(BL.t, 4)
 def r2(lab, x, m):
     l = lab[m]; v = x[m]; _, inv = np.unique(l, return_inverse=True)
     n = np.bincount(inv); s = np.bincount(inv, v); s2 = np.bincount(inv, v * v)
     within = (s2 - s * s / n).sum(); tot = ((v - v.mean()) ** 2).sum()
     return float(1 - within / tot) if tot > 0 else float('nan')
-out['block_side_px'] = [int(lo_), int(hi_)]; out['heldout'] = {}
+out['block_side_px'] = [int(BL.side[0]), int(BL.side[1])]; out['heldout'] = {}
 def oracle_r2(x, ok):
     """R² ceiling at the same unit count: the run's superpixels merged by the same Ward / RAG code on the layer itself (status hard, no size cap / shape)."""
     from rag_merge import merge
@@ -61,7 +53,7 @@ for rel in CFG['metrics']['heldout']:
         x = s.read(1, window=win).astype(np.float64); nd = s.nodata
     ok = fl & np.isfinite(x) & ((x != nd) if nd is not None and not np.isnan(nd) else True)
     if ok.sum() < 1000: out['heldout'][rel] = 'too few pixels'; continue
-    rs, rp = r2(A, x, ok), r2(SP, x, ok & (SP > 0)); rb = r2(B_hi, x, ok) + t_ * (r2(B_lo, x, ok) - r2(B_hi, x, ok))   # equal-count baseline (interpolated)
+    rs, rp = r2(A, x, ok), r2(SP, x, ok & (SP > 0)); rb = BL.r2(x, ok)                  # equal-count baseline (interpolated, heldout.Baseline)
     out['heldout'][rel] = dict(r2_stands=round(rs, 4), r2_blocks=round(rb, 4), gain=round(rs - rb, 4), share=round((rs - rb) / (1 - rb), 4) if 1 - rb > 1e-9 else None,
                                headroom=round(1 - rb, 4), r2_superpixels=round(rp, 4))
     if CFG['metrics'].get('oracle'):
@@ -80,5 +72,5 @@ if seam_pairs > 0:
     out['seam_boundary_rate'] = float(seam_rate); out['boundary_rate'] = float(all_rate); out['seam_excess'] = float(seam_rate / all_rate)
 json.dump(out, open(f'{OUT}/metrics.json', 'w'), indent=1)
 print(json.dumps(out['heldout']))
-print(f"stands {K} (block units {out['block_units']} at sides {out['block_side_px']} px, interpolated); area-weighted median {out['wmedian_ha']:.1f} ha; area < MMU {100*out['small_area_share']:.2f} %; held-out R² gain over equal-count blocks: "
+print(f"stands {ids.size} ({K} evaluated; {n_iso} isolated pieces < MMU excluded) (block units {out['block_units']} at sides {out['block_side_px']} px, interpolated); area-weighted median {out['wmedian_ha']:.1f} ha; area < MMU {100*out['small_area_share']:.2f} %; held-out R² gain over equal-count blocks: "
       + ', '.join(f"{os.path.basename(k).split('.')[0]} {v['gain']:+.3f}" for k, v in out['heldout'].items() if isinstance(v, dict)) + f" | mean gain {out['mean_gain']:+.3f} | mean SHARE of the blocks' unexplained variance {out['mean_share']:.3f}" + (f" | tile-seam excess {out['seam_excess']:.2f}x" if 'seam_excess' in out else ''))

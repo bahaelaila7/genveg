@@ -20,6 +20,9 @@ layers:
   - {id: superpixels, group: Stand delineation, kind: raster, source: "run:gafl_pilot/sp/sp.tif", style: edges, label: "Superpixel edges (SLIC on raw AlphaEarth, default, phased tiling)"}
   - {id: aef2025_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2025.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2025 — PCs 1-3 as RGB"}
   - {id: aef2022_rgb, group: Stand delineation, kind: raster, source: "data:aef/aef_2022.tif", style: aef_rgb, fit: "run:gafl_pilot/fit/feature_fit.npz", label: "AlphaEarth 2022 — PCs 1-3 as RGB (2025 basis)"}
+  # ---------------- parcels (stand barriers; scripts/07b_parcels_owner.py; no owner data in the layers)
+  - {id: parcels_owner, group: Parcels, kind: parcels, path: data/proto/parcels_owner_baker.geojson, label: "Parcels coalesced by owner (adjacent parcels of the same owner joined) — the stand barrier"}
+  - {id: parcels_all, group: Parcels, kind: parcels, path: data/proto/parcels_all_baker.geojson, label: "Parcels, all (FGDL 2025) — before owner coalescing"}
   # ---------------- held-out evaluation layers (not used by the segmentation)
   - {id: canopy2000, group: Held-out evaluation layers, kind: raster, source: "data:hansen/treecover2000.tif", style: ramp, range: [0, 100], unit: "%", label: "Hansen tree canopy 2000"}
   - {id: evc_tree_cover, group: Held-out evaluation layers, kind: raster, source: "data:derived/tree_cover.tif", style: ramp, range: [0, 100], unit: "%", label: "LANDFIRE EVC 2022 tree cover"}

@@ -58,6 +58,11 @@ for one run, and unknown keys are refused. Shared code: `scripts/stands_cfg.py` 
    - 1 − cos(AEF-2022, AEF-2025) (`aef_change`);
    - TreeMap 2022 attributes BALIVE, STANDHT, QMD, CANOPYPCT, TPA, softwood share (`treemap`; only on unharvested TreeMap forest);
    - soil PCs (`soil`).
+   **Barriers** (`segmentation.barriers`, rasters in `data/barriers/`): TIGER roads, water, and parcel lines. Since 2026-10-23 the parcel barrier is
+   `parcels_owner` (`scripts/07b_parcels_owner.py`): adjacent parcels of the same owner (normalised owner name; gaps ≤ 2 m) are joined first, so
+   the survey-section lines inside one owner's land (e.g. timber holdings) no longer cut stands. FL5: 99,914 parcels → 86,794 owner parcels
+   (7,204 join 2+), 13 % fewer barrier pixels; Baker 12,525 → 10,701. Owner names are only a grouping key and are never written; Forest Explorer
+   shows both parcel versions (group "Parcels"). `parcels` (all lines, `07_parcels.py`) is still available.
 4. **Superpixels.** SLIC of about `superpixel_ha` per tile and status, inside forest land minus barrier pixels (roads, water, parcel lines). They are
    split into 4-connected parts.
    **Seam-free tiling** (`sp_seam_halo` 16 px, `sp_seam_mode: phased`, default since 2026-10-22): tiles run in 4 checkerboard phases (tile row /

@@ -15,7 +15,7 @@ Stages (default all, in order): land clean fit embed sp merge finalize levels ve
 Stage outputs live in content-hashed cache dirs data/derived/cache/<stage>-<hash> (hash = the stage's config keys, window, code, upstream hashes):
 a variant re-runs only the stages its changes affect. data/derived/runs/<NAME>/ links the stages of one run + config_resolved.yml + summary.json.
 NAME defaults to the config name (no --set) or <config name>_<finalize hash>."""
-import os, sys, json, time, argparse, subprocess, shutil, yaml
+import hashlib, os, sys, json, time, argparse, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stands_stages as SC
 
@@ -26,7 +26,10 @@ def resolve(config, sets, window):
 
 def run_dir(cfg, sets, hashes, win, name=None):
     default = not sets and (list(win) if win else None) == cfg.get('window')     # the configuration as written (incl. its window)
-    return os.path.join(SC.ROOT, 'data', 'derived', 'runs', name or (cfg['name'] if default else f"{cfg['name']}_{hashes['finalize']}"))
+    # variants are named by a hash of the WHOLE resolved configuration (+ window): two --set variants that differ only in levels / verify /
+    # metrics keys share the finalize hash and would otherwise overwrite each other's run dir
+    vh = hashlib.sha1(json.dumps(dict(cfg, window=list(win) if win else None), sort_keys=True, default=str).encode()).hexdigest()[:12]
+    return os.path.join(SC.ROOT, 'data', 'derived', 'runs', name or (cfg['name'] if default else f"{cfg['name']}_{vh}"))
 
 def run(config=SC.DEFAULT_CONFIG, sets=(), window=None, name=None, stages=None, force=(), py=sys.executable, quiet=False):
     cfg, win, H = resolve(config, list(sets), window)

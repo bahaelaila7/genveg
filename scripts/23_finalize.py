@@ -93,7 +93,7 @@ else:
         bar = np.zeros(A.shape, bool)
         if not FIN['mmu_across_barriers']:
             for b in BARRIERS:
-                with rasterio.open(b) as bs: bar |= bs.read(1, window=win) > 0
+                with rasterio.open(b) as bs: bar |= bs.read(1, window=win) == 1
         for it in range(FIN['mmu_max_passes']):
             stat, size = majority_status(A, L); small = (size < MMU_PX) & (size > 0); small[0] = False
             if not small.any(): break

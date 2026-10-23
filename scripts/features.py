@@ -76,6 +76,7 @@ class Featurizer:
         out.append(grp(r['a22'], f['aef_mean'], f['aef_comp'][:8], f['aef_scale8'], w['aef_old']))
         cos = np.nansum(r['a25'] * r['a22'], -1) / np.sqrt(np.nansum(r['a25'] ** 2, -1) * np.nansum(r['a22'] ** 2, -1) + 1e-12)
         ch = (1 - np.nan_to_num(cos, nan=1.0))[..., None]
+        ch[~(np.isfinite(r['a25']).all(-1) & np.isfinite(r['a22']).all(-1))] = 0.0   # AlphaEarth missing in a year: no change signal (nansum would give 1)
         out.append(ch * (w['aef_change'] / f['change_sd']))
         tz = (r['tma'] - f['tm_mean']) / f['tm_sd']
         out.append(np.nan_to_num(tz) * (w['treemap'] / np.sqrt(tz.shape[-1])))

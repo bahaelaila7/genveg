@@ -44,7 +44,10 @@ for sid, (cr, cc_) in zip(sids, ctr):
 print(f'stand landscapes {len(XLs)} of {len(sids)} stands ({len(FR)} footprints in the extent)', flush=True)
 order = [int(x) for x in sids if int(x) in XLs]; node_of = {sid: k for k, sid in enumerate(order)}
 np.savez(f'{D}/stand_nodes.npz', nodes=np.array([ctr[list(sids).index(sid)] for sid in order]), XL=np.stack([XLs[sid] for sid in order]))   # for gv_verify_upstream (U8)
-USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []
+USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []; crows = []
+CAL_N, CAL_D = math.exp(CAL[0]), math.exp((CAL[1] - CAL[0]) / 2)        # cohort calibration: densities by the TPH factor, diameters so that BA gets the BA factor
+NA_ = 16
+keys_ = json.load(open(f'{D}/meta.json'))['keys']
 with torch.no_grad():
     for sid, g in S.groupby('stand_id'):
         fp = g.index.values
@@ -59,10 +62,22 @@ with torch.no_grad():
                 dm = dm + sum(((h(st[y]) - SA[[f_] * Mz][:, sl]) ** 2).sum(-1) for y, h, sl in ((2022, h22B, A22), (2025, h25B, A25))) / 2 / len(fp)
             w = torch.exp(-(dm - dm.min()) / TEMP); ESS.append(float(w.sum() ** 2 / (w ** 2).sum()))
         idx = torch.multinomial(w / w.sum(), 16, replacement=True); fpi = [fp[i % len(fp)] for i in range(16)]   # samples spread over the stand's footprints
-        st = flow(zs[idx], torch.full((16,), 2021.0), [2025], SD[fpi], SS[fpi]); s_ = list(summaries(*dec(st[2025])))
+        st = flow(zs[idx], torch.full((16,), 2021.0), [2025], SD[fpi], SS[fpi]); lp_, val_ = dec(st[2025]); s_ = list(summaries(lp_, val_))
+        # stand cohorts (TreeMap-independent initial state for the simulation engines): per slot (species key x 10-yr age class) the mean over the 16 samples
+        # of the expected density p * N, its quadratic-mean diameter, mean height and crown ratio (density-weighted); calibrated as CAL_N / CAL_D
+        pr_ = torch.sigmoid(calibrated(lp_)); Nn = torch.exp(val_[..., 0].clamp(max=12)) * pr_; Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
+        Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95); Ns = Nn.sum(0)
+        for j_ in torch.nonzero(Ns / 16 * CAL_N >= 1.0).flatten().tolist():
+            w_ = Nn[:, j_]; sw = float(w_.sum())
+            crows.append(dict(stand_id=int(sid), key=keys_[j_ // NA_], age_class=j_ % NA_, age=float(j_ % NA_ * 10 + 5), tph=sw / 16 * CAL_N,
+                              qmd_cm=math.sqrt(float((w_ * Dd[:, j_] ** 2).sum()) / sw) * CAL_D, ht_m=float((w_ * Hh[:, j_]).sum()) / sw, cr=float((w_ * Cr[:, j_]).sum()) / sw))
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]; comp = s_[4].mean(0)
         rows.append(dict(stand_id=int(sid), node=int(j), tph=float(s_[0].median()), ba=float(s_[1].median()), qmd=float(s_[2].median()), ba_sd=float(s_[1].std()), dom=int(comp.argmax())))
 out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3.parquet')
+C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3.parquet')
+_t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()
+_o = out.set_index('stand_id'); print(f'stand cohorts: {len(C_)} rows for {C_.stand_id.nunique()} stands (median {int(C_.groupby("stand_id").size().median())} per stand); '
+      f'cohort-sum / stand summary median ratio TPH {float((_t / _o.tph.reindex(_t.index)).median()):.3f}, BA {float((_b / _o.ba.reindex(_b.index)).median()):.3f}', flush=True)
 st_ = gpd.read_file(stands_run()['gpkg'], layer='stands', ignore_geometry=True).set_index('stand_id'); d = st_.join(out.set_index('stand_id'), how='inner')
 d['gen_ba_ft'] = d.ba * 4.356; d['gen_tpa'] = d.tph / 2.471
 print('USE_B', USE_B, '| likelihood ESS of', Mz, 'median / q10:', (round(float(np.median(ESS)), 1), round(float(np.quantile(ESS, 0.1)), 1)) if ESS else None); print(d.groupby('status')[['BALIVE', 'gen_ba_ft', 'TPA_LIVE', 'gen_tpa']].median().round(1))

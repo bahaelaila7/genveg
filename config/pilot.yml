@@ -34,7 +34,7 @@ segmentation:
   merge_threshold: auto       # Ward threshold; auto = calibrate to target_median_ha
   target_median_ha: 15        # area-weighted median stand size the auto threshold aims for
   shape_weight: 0.5           # preference for merging along long shared boundaries (compact stands)
-  barriers: [roads, water, parcels]
+  barriers: [roads, water, parcels_owner]   # parcels_owner = parcel lines after joining adjacent parcels of the same owner (07b_parcels_owner.py); parcels = all lines
 merge:
   calib_components: 300       # auto threshold: graph components sampled for the bisection (those > 4 x target_median_ha; all if none)
   calib_iters: 14

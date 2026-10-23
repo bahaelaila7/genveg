@@ -10,7 +10,7 @@ Stages (default all, in order):
   train         g03b_train_gafl.py       temporal JEPA model, one per seed (<model_prefix>_s<seed>.pt)
   dynamics      g06_dynamics_check.py    held-out disturbance-response test of every seed and eval_loc
   downscale     g04_bayes_downscale.py   landscape prior (MDN) + likelihood B + mapping-path calibration (model = model_seed)
-  map           g05_map_stands.py        stand vegetation per use_b (stand_veg_v3_B<b>.parquet; the last = stand_veg_v3.parquet)
+  map           g05_map_stands.py        stand vegetation per use_b (stand_veg_v3_B<b>.parquet; the last = stand_veg_v3.parquet) + stand cohorts (stand_cohorts_v3[_B<b>].parquet)
   fe            24_export_fe.py + g07_fe_attach.py   Forest Explorer stands layer of the stand run + GEN_* attributes (the host serves it)
   verify        gv_verify.py + gv_verify_upstream.py   independent recomputation of every stage (+ U8 stand mapping) [check: exit 0 required]
 Outputs are the scripts' own files under data/proto/<data>/. The driver keeps data/proto/<data>/pipeline_state.json: per stage the hash of its config
@@ -103,6 +103,7 @@ def main():
             for b in cfg['map']['use_b']:
                 out.append((S('g05_map_stands.py'), dict(tenv, **{k: str(v) for k, v in cfg['map']['env'].items()}, MODEL=model, USE_B=str(b))))
                 out.append((['cp', f'{D}/stand_veg_v3.parquet', f'{D}/stand_veg_v3_B{b}.parquet'], {}))
+                out.append((['cp', f'{D}/stand_cohorts_v3.parquet', f'{D}/stand_cohorts_v3_B{b}.parquet'], {}))
             return out
         if st == 'fe':
             gj = os.path.join(WS, cfg['fe']['geojson'])

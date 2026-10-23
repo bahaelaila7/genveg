@@ -25,7 +25,7 @@ L = rasterio.open(f"{IN('clean')}/land_clean.tif").read(1, window=win)
 stt = np.load(f"{IN('sp')}/sp_stats.npz"); spn = stt['n'].astype(np.float64); spS = stt['S'].astype(np.float64); spst = stt['status'].astype(np.int64)
 bar = np.zeros(A.shape, bool)
 for b in barrier_files(CFG):
-    with rasterio.open(b) as bs: bar |= bs.read(1, window=win) > 0
+    with rasterio.open(b) as bs: bar |= bs.read(1, window=win) == 1
 def wmedian_ha(sz): s = np.sort(sz) * PXHA; return s[np.searchsorted(np.cumsum(s), s.sum() / 2)]
 def bisect(fn, target, lo=1e-3, hi=1e5, it=16):
     """threshold whose area-weighted median unit size is the target (fn(thr) -> unit sizes in px)."""
@@ -102,23 +102,22 @@ cover = bool(((F > 0) == (A > 0)).all() and ((C > 0) == (A > 0)).all())
 print(f'nesting: every fine unit in one stand {nest_f}; every stand in one compartment {nest_c}; same coverage {cover}; fine units without a superpixel {nh} px', flush=True)
 assert nest_f and nest_c and cover, 'levels not nested'
 # ---------------- held-out share per level (interior units, equal-count blocks)
-rr, cc = np.mgrid[0:A.shape[0], 0:A.shape[1]]
+import heldout as HO
 def share_of(U):
-    edge = np.unique(np.concatenate([U[0], U[-1], U[:, 0], U[:, -1]])); fl = (L >= 1) & (L <= 4) & (U > 0) & ~np.isin(U, edge); K = np.unique(U[fl]).size
-    blocks = lambda s: ((rr // s) * (A.shape[1] // s + 1) + cc // s) * 8 + L.astype(np.int64)
-    side = min(range(2, 300), key=lambda s: abs(np.unique(blocks(s)[fl]).size - K)); B = blocks(side)
-    def r2(lab, x, mk):
-        _, inv = np.unique(lab[mk], return_inverse=True); v = x[mk]; n = np.bincount(inv); s = np.bincount(inv, v); s2 = np.bincount(inv, v * v)
-        return 1 - (s2 - s * s / n).sum() / ((v - v.mean()) ** 2).sum()
-    out = {}
+    """held-out share of a unit raster with the stage `metrics` definition (heldout.py: interior units without isolated sub-MMU pieces,
+    interpolated equal-count block baseline), so the `stands` level equals metrics.json"""
+    fl, K, n_iso, _ = HO.eval_mask(U, L, mmu_px(CFG)); BL = HO.Baseline(L, fl, K); out = {}
     for rel in CFG['metrics']['heldout']:
         p = f'{ROOT}/data/{rel}'
         if not os.path.exists(p): continue
-        with rasterio.open(p) as s: x = s.read(1, window=win).astype(np.float64); nd = s.nodata
+        with rasterio.open(p) as s:
+            assert s.shape == ST.shape and s.transform == ST.transform, f'{rel} not on the grid'
+            x = s.read(1, window=win).astype(np.float64); nd = s.nodata
         ok = fl & np.isfinite(x) & ((x != nd) if nd is not None and not np.isnan(nd) else True)
-        rs, rb = r2(U, x, ok), r2(B, x, ok)
+        if ok.sum() < 1000: continue
+        rs, rb = HO.r2(U, x, ok), BL.r2(x, ok)
         if 1 - rb >= CFG['metrics']['headroom_min']: out[os.path.basename(rel).split('.')[0]] = round(float((rs - rb) / (1 - rb)), 4)
-    return dict(units=int(K), mean_share=round(float(np.mean(list(out.values()))), 4), share=out)
+    return dict(units=int(K), isolated_small_excluded=n_iso, mean_share=round(float(np.mean(list(out.values()))), 4), share=out)
 res = dict(fine=dict(threshold=float(thr_f), **share_of(F)), stands=share_of(A), compartments=dict(threshold=float(thr_c), **share_of(C)),
            fine_wmedian_ha=float(wmedian_ha(np.bincount(F[F > 0])[1:][np.bincount(F[F > 0])[1:] > 0])), compartment_wmedian_ha=float(wmedian_ha(np.bincount(lab_c, sn))),
            nested=True)
