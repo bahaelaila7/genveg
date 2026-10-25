@@ -46,3 +46,14 @@ until the comparison is reviewed (the live Forest Explorer layer is not replaced
 * Table: `NCAND` 128 (GA+FL 256; ~3.5× the plots: ~30k plots, ~115k visits in curated_trees since 2000), `TOPK` 24 (GA+FL 16; Region 4 is more diverse).
 * Train v4 on Region 4; evaluate on held-out 10-km blocks across Region 4 (per state too); downscale; map the Baker stands (the GA+FL stand run
   `gafl_pilot`, features from the Region 4 rasters), outputs in `data/proto/r4_v4` (not the live FE layer).
+
+## C. Run (resumable; every step skips finished work)
+```
+.venv/bin/python -I scripts/r4_grid.py
+for y in 2022 2025; do .venv/bin/python -I scripts/r4_aef90.py $y 4 && .venv/bin/python -I scripts/r4_aef90.py $y assemble; done   # resumable per window
+for s in hansen_dl hansen dist land soils90 soilfill; do .venv/bin/python -I scripts/r4_rasters.py $s 2; done
+.venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_r4.yml          # table … verify (stage hashes; reruns only stale stages)
+.venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_v4.yml          # GA+FL v4 (inputs adopted from gafl_pipe)
+```
+Code changes to g02b / g02j / g05 / gv_verify change the stage code hashes of the GA+FL pipelines too (by design); their outputs are byte-identical
+for the defaults, so an existing GA+FL data dir can re-adopt its stages (`--adopt`) instead of rebuilding.
