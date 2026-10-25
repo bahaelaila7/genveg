@@ -100,6 +100,7 @@ class Enc(nn.Module):
         r = s.rho(torch.cat([mean, mx, ((yr - 2012) / 10).unsqueeze(-1)], -1))
         return 3 * torch.tanh(r / 3)                                       # soft bound: SIGReg's ECF test saturates (no restoring gradient) for large z
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
+    sparse_j = False
     def __init__(s):
         super().__init__(); ns = SOIL.shape[1]
         s.g = nn.Sequential(nn.Linear(D_Z + ns, 64), nn.Tanh(), nn.Linear(64, D_Z)); s.A = nn.Parameter(torch.zeros(D_Z)); s.ltau = nn.Parameter(torch.full((D_Z,), 2.0))
@@ -117,7 +118,10 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
             z = zs + (z - zs) * torch.exp(-lam * dt)
             act = ((start <= y + 0.5) & (end >= y + 0.5)).float().unsqueeze(-1)   # visit-year events count for a first-half start / second-half end only
             ev = dist[:, jj]; has = (ev[:, :NC].sum(-1, keepdim=True) + ev[:, NC + 1:NC + 2] > 0).float() * act
-            z = z + has * torch.tanh(s.J(torch.cat([z, ev], -1)))          # bounded jump
+            if s.sparse_j:                                                  # (v4) the jump network only on the rows with an event: same result, ~1/20 of the cost
+                ix = has.squeeze(-1).nonzero(as_tuple=True)[0]
+                if len(ix): z = z.index_add(0, ix, torch.tanh(s.J(torch.cat([z[ix], ev[ix]], -1))))
+            else: z = z + has * torch.tanh(s.J(torch.cat([z, ev], -1)))    # bounded jump
             for st in stop:
                 if y == st: out[st] = z
         return out
@@ -157,6 +161,7 @@ class EncV4(nn.Module):       # Set Transformer: token embedding -> 4 SAB -> PMA
         r = s.out(torch.cat([p, ((yr - 2012) / 10).unsqueeze(-1)], -1))
         return 3 * torch.tanh(r / 3)
 class FlowV4(Flow):           # same liquid time-constant cell; deeper gate; residual jump network ending in a Linear (gv_verify T-checks use J[-1])
+    sparse_j = True
     def __init__(s):
         super().__init__(); ns = SOIL.shape[1]
         s.g = nn.Sequential(nn.Linear(D_Z + ns, 128), nn.Tanh(), nn.Linear(128, 128), nn.Tanh(), nn.Linear(128, D_Z))
