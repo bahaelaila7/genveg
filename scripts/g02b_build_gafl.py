@@ -13,7 +13,10 @@
              ×0.25. Kept candidates carry prior × inverse inclusion weight (each stands for incl_w footprints); hi = footprint in the full disk's
              high-prior set (prior >= 4 x median); plots carry n_hi / mass_hi on the full disk (localisation)
   conc     = per plot, prior mass on its top 10 % of footprints (localisation confidence; curriculum)
-Mapping set: Baker stands as in g02. Output data/proto/gafl/…"""
+Mapping set: Baker stands as in g02. Output data/proto/gafl/…
+Region switches (docs/GENVEG_V4_R4.md §B): REGION = FIA STATECDs (default 12,13 = GA+FL); AEF90=1 reads the Region 4 rasters of r4_grid.py /
+r4_aef90.py / r4_rasters.py (30 m land / disturbance / Hansen on grid_r4, AlphaEarth footprint means and soils at 90 m on grid_r4_90): plot windows
+start on a multiple of 3 so footprint centres are the 90 m block centres, and the AlphaEarth / soil features are the 90 m pixel of the block."""
 import sys, os, json, numpy as np, pandas as pd, duckdb, rasterio, geopandas as gpd
 from rasterio.windows import Window
 from pyproj import Transformer
@@ -23,6 +26,8 @@ from features import ROOT, WS, SOILS, dequant
 from stand_runs import stands_run
 R = 1600.0; NCAND = int(os.environ.get('NCAND', 256)); OUT = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; os.makedirs(OUT, exist_ok=True)
 YEARS = list(range(2000, 2026))
+REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({', '.join(map(str, REGION))})"
+AEF90 = os.environ.get('AEF90', '0') == '1'
 CLS = {'harvest': ['Clearcut', 'Harvest'], 'thin': ['Thinning', 'Mastication', 'Other Mechanical', 'Mechanical Remove', 'Mechanical Add', 'Mechanical Unknown'],
        'fire': ['Wildfire', 'Fire', 'Prescribed Fire', 'Wildland Fire Use', 'Wildland Fire', 'Unknown/Possibly Fire'],
        'insdis': ['Insects/Disease', 'Insects', 'Disease'], 'weather': ['Weather'], 'chem': ['Herbicide', 'Chemical', 'Insecticide', 'Biological'], 'dev': ['Development'],
@@ -30,6 +35,8 @@ CLS = {'harvest': ['Clearcut', 'Harvest'], 'thin': ['Thinning', 'Mastication', '
 # description says burned (BAECV >= 95 %, burn probability >= 95 %) or 'most likely fire related' are fire (see init)
 NC = len(CLS); NF = 64 + 64 + len(YEARS) * (NC + 2) + len(SOILS)
 SOIL_FILL = {'clay030': 7.58, 'sand030': 83.2, 'soc030': 0.964, 'awc030': 0.052, 'ph030': 5.18, 'restrdepth': 200.0}   # GA+FL forest-land medians
+if AEF90: SOIL_FILL = json.load(open(f'{ROOT}/data/r4/soils90/fill.json'))      # Region 4 forest-land medians (r4_rasters.py soilfill)
+def land_path(): return f'{ROOT}/data/r4/land.tif' if AEF90 else stands_run()['land_clean']
 _S = {}
 def init():
     codes = pd.read_csv(f'{ROOT}/data/landfire/dist/dist_codes.csv')
@@ -44,22 +51,40 @@ def init():
         # file year — NOT DIST_YEAR: the 2008 table labels 135 of 215 codes 2009, but their pixels carry Hansen loss in 2008 (25.5 %), not 2009 (1.8 %)
         ey = int(r.CALENDAR_YR) if pd.notna(getattr(r, 'CALENDAR_YR', np.nan)) else int(r.year)
         lut[(int(r.year), int(r.VALUE))] = (c_, SEV.get(str(r.SEVERITY).strip(), 1.0), ey)
+    if AEF90:
+        _S.update(lut=lut, land=rasterio.open(land_path()), d={y: rasterio.open(f'{ROOT}/data/r4/dist/dist_{y}.tif') for y in YEARS},
+                  h=rasterio.open(f'{ROOT}/data/r4/hansen_lossyear.tif'), a22=rasterio.open(f'{ROOT}/data/aef90/aef90_2022.tif'),
+                  a25=rasterio.open(f'{ROOT}/data/aef90/aef90_2025.tif'), soil={k: rasterio.open(f'{ROOT}/data/r4/soils90/{k}.tif') for k in SOILS})
+        return
     _S.update(lut=lut, land=rasterio.open(stands_run()['land_clean']), d={y: rasterio.open(f'{ROOT}/data/landfire/dist/dist_{y}.tif') for y in YEARS},
               h=rasterio.open(f'{ROOT}/data/hansen/lossyear.tif'), a22=rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'), a25=rasterio.open(f'{ROOT}/data/aef/aef_2025.tif'),
               soil={k: rasterio.open(f'{ROOT}/data/soils/{k}.tif') for k in SOILS})
+def stand_offset(sr):
+    """(dR, dC) to add to a pixel of the stand raster sr (the mapped stands' grid) for the feature grid of _S['land']: 0, 0 unless AEF90 (grid_r4, a multiple of 3 px off)"""
+    if not AEF90: return 0, 0
+    lt, stt = _S['land'].transform, sr.transform; fr, fc = (lt.f - stt.f) / 30, (stt.c - lt.c) / 30; dR, dC = round(fr), round(fc)
+    assert abs(fr - dR) < 1e-6 and abs(fc - dC) < 1e-6 and dR % 3 == 0 and dC % 3 == 0, 'stand raster not on the 90 m lattice of the feature grid'
+    return dR, dC
 def feats(r0, c0, h, w):
     s = _S; win = Window(c0, r0, w, h)
     L = s['land'].read(1, window=win, boundless=True, fill_value=0)
     rr, cc = np.mgrid[1:h - 1:3, 1:w - 1:3]; rr, cc = rr.ravel(), cc.ravel(); ok = (L[rr, cc] >= 1) & (L[rr, cc] <= 4); rr, cc = rr[ok], cc[ok]
     if len(rr) == 0: return rr, cc, np.zeros((0, NF), np.float32)
-    A2 = dequant(s['a22'].read(window=win, boundless=True, fill_value=-128)); A5 = dequant(s['a25'].read(window=win, boundless=True, fill_value=-128))
     HL = s['h'].read(1, window=win, boundless=True, fill_value=0); DS = np.stack([s['d'][y].read(1, window=win, boundless=True, fill_value=0) for y in YEARS])
-    SO = np.stack([s['soil'][k].read(1, window=win, boundless=True, fill_value=-9999).astype(np.float32) for k in SOILS])
-    for i_, k in enumerate(SOILS): SO[i_][SO[i_] <= -9000] = SOIL_FILL[k]      # SOLUS nodata (-9999) -> regional median
-    def m3n(X):                        # 3x3 mean over the valid AlphaEarth pixels (nodata = NaN); all-nodata -> 0
-        S_ = sum(np.nan_to_num(X[:, rr + dr, cc + dc]) for dr in (-1, 0, 1) for dc in (-1, 0, 1)); N_ = sum((~np.isnan(X[:1, rr + dr, cc + dc])).astype(np.float32) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
-        return (S_ / np.maximum(N_, 1)).T
-    F = [m3n(A2), m3n(A5)]; n = len(rr)
+    if AEF90:                          # 90 m rasters: footprint (3x3 block) j of the window = 90 m pixel (r0 // 3 + j); r0, c0 multiples of 3, centres = 1 mod 3
+        assert r0 % 3 == 0 and c0 % 3 == 0
+        w9 = Window(c0 // 3, r0 // 3, (w + 2) // 3, (h + 2) // 3); br, bc = (rr - 1) // 3, (cc - 1) // 3
+        SO = np.stack([s['soil'][k].read(1, window=w9, boundless=True, fill_value=-9999).astype(np.float32) for k in SOILS])
+        for i_, k in enumerate(SOILS): SO[i_][SO[i_] <= -9000] = SOIL_FILL[k]
+        F = [np.nan_to_num(dequant(s[a].read(window=w9, boundless=True, fill_value=-128))[:, br, bc]).T for a in ('a22', 'a25')]; n = len(rr)
+    else:
+        A2 = dequant(s['a22'].read(window=win, boundless=True, fill_value=-128)); A5 = dequant(s['a25'].read(window=win, boundless=True, fill_value=-128))
+        SO = np.stack([s['soil'][k].read(1, window=win, boundless=True, fill_value=-9999).astype(np.float32) for k in SOILS])
+        for i_, k in enumerate(SOILS): SO[i_][SO[i_] <= -9000] = SOIL_FILL[k]      # SOLUS nodata (-9999) -> regional median
+        def m3n(X):                        # 3x3 mean over the valid AlphaEarth pixels (nodata = NaN); all-nodata -> 0
+            S_ = sum(np.nan_to_num(X[:, rr + dr, cc + dc]) for dr in (-1, 0, 1) for dc in (-1, 0, 1)); N_ = sum((~np.isnan(X[:1, rr + dr, cc + dc])).astype(np.float32) for dr in (-1, 0, 1) for dc in (-1, 0, 1))
+            return (S_ / np.maximum(N_, 1)).T
+        F = [m3n(A2), m3n(A5)]; n = len(rr); br, bc = rr, cc
     OH = np.zeros((n, len(YEARS), NC), np.float32); SV = np.zeros((n, len(YEARS)), np.float32)
     # disturbance evidence = FRACTION of the footprint's 3x3 pixels (90 m, as for AlphaEarth) per class and event calendar year; severity = max
     for j, y in enumerate(YEARS):                                    # file years; events land at their calendar year
@@ -73,7 +98,7 @@ def feats(r0, c0, h, w):
     HF = np.stack([sum(((HL[rr + dr, cc + dc] == y - 2000) & (HL[rr + dr, cc + dc] > 0)).astype(np.float32) for dr in (-1, 0, 1) for dc in (-1, 0, 1)) / 9
                    for y in YEARS], 1).astype(np.float32)            # lossyear 0 = no loss
     for j in range(len(YEARS)): F += [OH[:, j], SV[:, j:j + 1], HF[:, j:j + 1]]
-    F.append(np.nan_to_num(SO[:, rr, cc].T)); return rr, cc, np.concatenate(F, 1).astype(np.float32)
+    F.append(np.nan_to_num(SO[:, br, bc].T)); return rr, cc, np.concatenate(F, 1).astype(np.float32)
 # FIA event kinds -> compatible candidate evidence (class indices of CLS; 'H' = Hansen loss), year window (relative to the FIA year), likelihood ratio
 # (assumed detectability: cuts / regeneration / site preparation / human / crown fire are well visible from space, ground fire / other treatments weakly)
 H_ = NC + 1; IX = {k: i for i, k in enumerate(CLS)}
@@ -132,9 +157,11 @@ def prior_weights(per, evs, negs):
     return w
 def plot_job(a):
     pid, x, y, evs, negs = a; s = _S; row, col = s['land'].index(x, y); RP = int(R // 30) + 2
-    rr, cc, F = feats(row - RP, col - RP, 2 * RP + 1, 2 * RP + 1)
-    d = np.hypot(rr - RP, cc - RP) * 30; m = d <= R; F, d = F[m], d[m]
-    ar, ac = (rr[m] + row - RP).astype(np.int32), (cc[m] + col - RP).astype(np.int32)        # absolute grid row / col of each footprint centre (verifiability)
+    if AEF90: r0, c0 = 3 * ((row - RP) // 3), 3 * ((col - RP) // 3); hw = 3 * ((2 * RP + 1 + 2) // 3) + 3     # 90 m-aligned window covering the disk
+    else: r0, c0, hw = row - RP, col - RP, 2 * RP + 1
+    rr, cc, F = feats(r0, c0, hw, hw)
+    d = np.hypot(rr + r0 - row, cc + c0 - col) * 30; m = d <= R; F, d = F[m], d[m]
+    ar, ac = (rr[m] + r0).astype(np.int32), (cc[m] + c0).astype(np.int32)        # absolute grid row / col of each footprint centre (verifiability)
     if len(d) == 0: return pid, None
     per = F[:, 128:128 + len(YEARS) * (NC + 2)].reshape(len(d), len(YEARS), NC + 2)
     wr = prior_weights(per, evs, negs); w = wr / wr.sum()
@@ -156,22 +183,22 @@ def decimal_year(md):
 def fiadb_visits(fc):
     """FIADB visits (read-only) with a forested condition: forested area shares relative to the SAMPLED plot area (non-sampled COND_STATUS_CD 5
     excluded, as in FIA estimation), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
-    FV = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, p.MEASYEAR my, p.CN cn,
+    FV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, p.MEASYEAR my, p.CN cn,
                                any_value(q.MEASYEAR) prev_my,
                                sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
                                sum(case when c.COND_STATUS_CD = 1 then c.MICRPROP_UNADJ else 0 end) f1m, sum(case when c.COND_STATUS_CD = 5 then c.MICRPROP_UNADJ else 0 end) n5m,
                                max(case when c.COND_STATUS_CD = 1 then c.STDORGCD end) org
                         from PLOT p join COND c on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN
-                        where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
-    nlive = fc.execute("select PLT_CN cn, count(*) n from TREE where STATECD in (12, 13) and STATUSCD = 1 group by 1").df()
+                        where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
+    nlive = fc.execute(f"select PLT_CN cn, count(*) n from TREE where STATECD in {ST_SQL} and STATUSCD = 1 group by 1").df()
     FV = FV.merge(nlive, on='cn', how='left'); FV['n'] = FV.n.fillna(0); FV['md'] = pd.to_datetime(FV.md)
     FV['fsub'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, (FV.f1m / (1 - FV.n5m).clip(lower=1e-6)).clip(upper=1.0), FV.fsub)
     return FV
 def fiadb_events(fc):
     """TRT / DSTRB codes of the forested conditions of every FIADB visit since 2000 (read-only)."""
-    FE = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md,
+    FE = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md,
                                c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
-                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in (12, 13) and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
+                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
     FE['md'] = pd.to_datetime(FE.md); return FE
 def fia_records(FE, FV, P, key):
     """FIA events per plot {pid: {(kind, year)}} from every forested condition; negative evidence {pid: [(y_lo, y_hi)]} = measurement periods whose
@@ -201,15 +228,15 @@ def fia_records(FE, FV, P, key):
     return evs, negs, blocked
 if __name__ == '__main__':
     con = duckdb.connect(f'{WS}/landis_region4/data_r4/slim_r4.duckdb', read_only=True)
-    t = con.execute("""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
+    t = con.execute(f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
                               t.STATUSCD status, t.CONDID cond, t.cond_stdage stdage, t.TRTCD1, t.TRTYR1, t.TRTCD2, t.TRTYR2, t.DSTRBCD1, t.DSTRBYR1, t.DSTRBCD2, t.DSTRBYR2, t.cond_stdorgcd org
                        from curated_trees t join REF_SPECIES r on r.SPCD = t.SPCD
-                       where t.STATECD in (12, 13) and t.MEASDATE >= '2000-01-01' order by t.STATECD, t.UNITCD, t.COUNTYCD, t.PLOT, t.MEASDATE, t.SUBP, t.TREE""").df()
+                       where t.STATECD in {ST_SQL} and t.MEASDATE >= '2000-01-01' order by t.STATECD, t.UNITCD, t.COUNTYCD, t.PLOT, t.MEASDATE, t.SUBP, t.TREE""").df()
     t['live'] = t.status == 1          # every visit is kept (bare / just-harvested visits = no live tree = empty cohort table); cohorts from live trees only
     t['md'] = pd.to_datetime(t.md); key = ['st', 'u', 'c', 'p']
     fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
-    CS = fc.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, c.CONDID cond, c.COND_STATUS_CD cs
-                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in (12, 13) and p.MEASYEAR >= 2000""").df(); CS['md'] = pd.to_datetime(CS.md)
+    CS = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, c.CONDID cond, c.COND_STATUS_CD cs
+                        from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df(); CS['md'] = pd.to_datetime(CS.md)
     t = t.merge(CS, on=key + ['md', 'cond'], how='left'); n0_ = len(t)
     print(f"tree records on non-forest / unmatched conditions dropped: {int((t.cs != 1).sum())} of {n0_} (live {int(((t.cs != 1) & (t.status == 1)).sum())})", flush=True)
     t = t[t.cs == 1].reset_index(drop=True)            # the cohort table describes the FORESTED conditions (visits with only non-forest conditions drop out)
@@ -238,8 +265,8 @@ if __name__ == '__main__':
     vis['planted'] = vis.org.fillna(0).values == 1; vis = vis.drop(columns=['org'])          # FIA COND STDORGCD (forested conditions): 0 natural, 1 artificial
     pairs = vis.sort_values(['pid', 'year']).groupby('pid').apply(lambda x: pd.DataFrame({'v1': x.vid.values[:-1], 'v2': x.vid.values[1:]}), include_groups=False).reset_index(level=0)
     print(f'GA+FL: plots {vis.pid.nunique()} visits {len(vis)} tokens {len(TK)} pairs {len(pairs)} keys {KEYS}', flush=True)
-    pl = fc.execute("select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12, 13) group by all").df()
-    P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(stands_run()['land_clean'])
+    pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in {ST_SQL} group by all").df()
+    P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(land_path())
     tf = Transformer.from_crs(4326, land.crs, always_xy=True); P['x'], P['y'] = tf.transform(P.lon.values, P.lat.values); P = P[P.lat.notna()]
     evs, negs, blocked = fia_records(FE, FV, P, key)
     print(f"plots with typed FIA events {len(evs)} (events {sum(map(len, evs.values()))}); negative-evidence periods {sum(map(len, negs.values()))}", flush=True)

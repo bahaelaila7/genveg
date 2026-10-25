@@ -1,0 +1,33 @@
+# Generative-vegetation pipeline (scripts/genveg_pipeline.py; docs/GENVEG_PIPELINE.md) — every switch of every stage lives here.
+name: r4_v4
+data: r4_v4                     # data/proto/<data>: EPA Region 4 (AL FL GA KY MS NC SC TN) at 90 m, v4 architecture (docs/GENVEG_V4_R4.md §B)
+stands_run: gafl_pilot          # stand-delineation run: the MAPPED stands (Baker County); the candidates' forest mask is data/r4/land.tif (AEF90)
+env:                            # region switches, passed to every stage
+  REGION: '1,12,13,21,28,37,45,47'
+  AEF90: 1                      # Region 4 rasters: AlphaEarth footprint means + soils at 90 m (r4_aef90.py, r4_rasters.py), 90 m-aligned footprints
+  CF16: 1                       # g03b: candidate features kept float16 in memory (~4 M candidates)
+table:                          # g02b_build_gafl: visits, cohort tokens, footprint candidates + location prior (the long stage)
+  NCAND: 128                    # candidate footprints kept per plot (stratified, inclusion-weighted; 256 for GA+FL — halved for ~3.5x the plots)
+  TOPK: 24                      # species keys (top-K, else _S / _H; 16 for GA+FL — Region 4 is more diverse)
+  NPROC: 6
+train:                          # g03b_train_gafl (the same env is passed to g04 / g05 / g06, which load the model through g03b)
+  seeds: [0, 1]
+  model_prefix: m_r4            # writes <data>/<model_prefix>_s<seed>.pt
+  env: {ARCH: v4, EPOCHS: 14, CURRIC: 4, NT: 4, BATCH: 64, DZ: 32, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
+        W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25}
+model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
+dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
+  eval_loc: [history]
+  env: {NT: 7, G06_SET: test}
+downscale:                      # g04_bayes_downscale: landscape prior A (MDN) + likelihood B + mapping-path calibration
+  env: {NT: 7, EPB: 6, MDN_EP: 60}
+map:                            # g05_map_stands: stand vegetation; one output per USE_B (stand_veg_v3_B<b>.parquet); the LAST one is stand_veg_v3.parquet
+  use_b: [0, 1]
+  env: {NT: 7}
+fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
+  area: data/derived/baker_county.gpkg
+  geojson: standmap/data/proto/r4_v4/baker_fl.geojson       # relative to WORKSPACE (NOT the live FE layer until reviewed)
+  tag: r4 v4 90m (pipeline)
+verify:
+  n: 300                        # gv_verify sample size
+  n_upstream: 200               # gv_verify_upstream points

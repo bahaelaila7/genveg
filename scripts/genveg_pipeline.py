@@ -73,10 +73,11 @@ def main():
     for st in ORDER:
         d = STAGES[st]
         H[st] = hashlib.sha256(json.dumps(dict(stage=st, cfg={k: cfg.get(k) for k in d['cfg']}, data=cfg['data'], code=code_hash(d['code']),
-                                               up={u: H[u] for u in d['up']}, stands={s: srh[s] for s in d['stands']}), sort_keys=True, default=str).encode()).hexdigest()[:12]
+                                               up={u: H[u] for u in d['up']}, stands={s: srh[s] for s in d['stands']}, **({'env': cfg['env']} if 'env' in cfg else {})),
+                                          sort_keys=True, default=str).encode()).hexdigest()[:12]      # (optional top-level env: region switches for every stage)
     py = [sys.executable, '-I']
     tenv = {k: str(v) for k, v in cfg['train']['env'].items()}
-    base_env = dict(os.environ, STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']))
+    base_env = dict(os.environ, STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']), **{k: str(v) for k, v in cfg.get('env', {}).items()})
     model = f"{cfg['train']['model_prefix']}_s{cfg['model_seed']}.pt"
     def sh(stage, cmds):
         with open(f'{LOGD}/{stage}.log', 'w') as lf:

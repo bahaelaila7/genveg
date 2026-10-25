@@ -16,12 +16,21 @@ SEED = int(os.environ.get('SEED', 0)); torch.manual_seed(SEED); np.random.seed(S
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
 D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
-C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy').astype(np.float32)
+CF16 = os.environ.get('CF16', '0') == '1'      # keep the candidate features float16 in memory (Region 4: ~4 M candidates), cast to float32 when indexed
+C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r') if CF16 else np.load(f'{D}/cand_feat.npy').astype(np.float32)
 NK, NA = len(M['keys']), 16; YEARS = M['years']; NY = len(YEARS); NC = len(M['classes']); D_Z = int(os.environ.get('DZ', 16))
 # ---- feature slices
 A22, A25 = slice(0, 64), slice(64, 128); DS = slice(128, 128 + NY * (NC + 2)); SO = slice(128 + NY * (NC + 2), CF.shape[1])
-smu, ssd = CF[:, SO].mean(0), CF[:, SO].std(0) + 1e-6; CF[:, SO] = (CF[:, SO] - smu) / ssd
-DIST = torch.tensor(CF[:, DS].reshape(-1, NY, NC + 2)); AEF = torch.tensor(CF[:, :128]); SOIL = torch.tensor(CF[:, SO])
+if CF16:
+    class F32View:                                 # float16 storage; indexing returns float32 (exact: every float16 is a float32), as the float32 tensors do
+        def __init__(self, t): self.t = t
+        def __getitem__(self, i): return self.t[i].float()
+        def __len__(self): return len(self.t)
+    _so = np.asarray(CF[:, SO], dtype=np.float32); smu, ssd = _so.mean(0), _so.std(0) + 1e-6; SOIL = torch.tensor((_so - smu) / ssd); del _so
+    DIST = F32View(torch.from_numpy(np.ascontiguousarray(CF[:, DS]).reshape(-1, NY, NC + 2))); AEF = F32View(torch.from_numpy(np.ascontiguousarray(CF[:, :128]))); del CF
+else:
+    smu, ssd = CF[:, SO].mean(0), CF[:, SO].std(0) + 1e-6; CF[:, SO] = (CF[:, SO] - smu) / ssd
+    DIST = torch.tensor(CF[:, DS].reshape(-1, NY, NC + 2)); AEF = torch.tensor(CF[:, :128]); SOIL = torch.tensor(CF[:, SO])
 # ---- tokens → padded tensors per visit
 TK = TK[TK.N > 0].copy(); TK[['key', 'ac', 'vid']] = TK[['key', 'ac', 'vid']].astype(int); TK['lN'] = np.log(TK.N); TK['lQ'] = np.log(TK.QMD); TK['h'] = TK.H / 30; TK['crm'] = TK.CR.notna().astype(float); TK['cr'] = TK.CR.fillna(0)
 nv = len(V); maxT = int(TK.groupby('vid').size().max())
@@ -121,7 +130,52 @@ class Q(nn.Module):           # satellite + disturbance history + soils → z(20
     def __init__(s):
         super().__init__(); s.f = nn.Sequential(nn.Linear(128 + NY * (NC + 2) + SOIL.shape[1], 256), nn.GELU(), nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 2 * D_Z))
     def forward(s, x): o = s.f(x); return 3 * torch.tanh(o[:, :D_Z] / 3), o[:, D_Z:].clamp(-4, 1)
-enc, flow, dec, qn = Enc(), Flow(), Dec(), Q(); h22, h25 = nn.Linear(D_Z, 64), nn.Linear(D_Z, 64)
+# ---- ARCH=v4 (docs/GENVEG_V4_R4.md §A, user 2026-10-25: deeper encoder / jump / decoder, non-linear satellite heads). Same interfaces as above, so every
+# stage that execs this file (g04, g05, g06, gv_verify) gets the architecture of the train env. Default ARCH=v3 = the classes above, unchanged.
+ARCH = os.environ.get('ARCH', 'v3')
+class ResBlock(nn.Module):    # pre-LayerNorm residual MLP block
+    def __init__(s, d, h=None):
+        super().__init__(); h = h or 2 * d; s.ln = nn.LayerNorm(d); s.f = nn.Sequential(nn.Linear(d, h), nn.GELU(), nn.Linear(h, d))
+    def forward(s, x): return x + s.f(s.ln(x))
+class SAB(nn.Module):         # pre-LN self-attention block over the cohort tokens (key padding mask)
+    def __init__(s, d=128, nh=4):
+        super().__init__(); s.l1 = nn.LayerNorm(d); s.at = nn.MultiheadAttention(d, nh, batch_first=True); s.ff = ResBlock(d)
+    def forward(s, x, pad):
+        h = s.l1(x); x = x + s.at(h, h, h, key_padding_mask=pad, need_weights=False)[0]; return s.ff(x)
+class EncV4(nn.Module):       # Set Transformer: token embedding -> 4 SAB -> PMA (1 learned seed) + year -> MLP -> z
+    def __init__(s, d=128, L=4):
+        super().__init__(); s.ek = nn.Embedding(NK, 16); s.ea = nn.Embedding(NA, 8); s.inp = nn.Linear(16 + 8 + 5, d)
+        s.cls = nn.Parameter(torch.zeros(1, 1, d))               # always-valid token: visits without trees (fresh clear-cuts) get a defined encoding
+        s.blocks = nn.ModuleList([SAB(d) for _ in range(L)]); s.seed = nn.Parameter(torch.randn(1, 1, d) * 0.02)
+        s.pma = nn.MultiheadAttention(d, 4, batch_first=True); s.lo = nn.LayerNorm(d)
+        s.out = nn.Sequential(nn.Linear(d + 1, d), nn.GELU(), ResBlock(d), nn.Linear(d, D_Z))
+    def forward(s, v, yr):
+        x = s.inp(torch.cat([s.ek(tok_k[v]), s.ea(tok_a[v]), tok_x[v]], -1)); n = x.shape[0]
+        x = torch.cat([s.cls.expand(n, -1, -1), x], 1); pad = torch.cat([torch.zeros(n, 1, dtype=torch.bool), tok_m[v] == 0], 1)
+        for b in s.blocks: x = b(x, pad)
+        p = s.pma(s.seed.expand(n, -1, -1), s.lo(x), s.lo(x), key_padding_mask=pad, need_weights=False)[0].squeeze(1)
+        r = s.out(torch.cat([p, ((yr - 2012) / 10).unsqueeze(-1)], -1))
+        return 3 * torch.tanh(r / 3)
+class FlowV4(Flow):           # same liquid time-constant cell; deeper gate; residual jump network ending in a Linear (gv_verify T-checks use J[-1])
+    def __init__(s):
+        super().__init__(); ns = SOIL.shape[1]
+        s.g = nn.Sequential(nn.Linear(D_Z + ns, 128), nn.Tanh(), nn.Linear(128, 128), nn.Tanh(), nn.Linear(128, D_Z))
+        s.J = nn.Sequential(nn.Linear(D_Z + NC + 2, 128), *[ResBlock(128) for _ in range(4)], nn.LayerNorm(128), nn.Linear(128, D_Z))   # class one-hot -> embedding via the input layer
+class DecV4(nn.Module):
+    def __init__(s):
+        super().__init__(); s.f = nn.Sequential(nn.Linear(D_Z, 256), *[ResBlock(256) for _ in range(4)], nn.LayerNorm(256), nn.Linear(256, NK * NA * 5))
+    def forward(s, z): o = s.f(z).view(-1, NK * NA, 5); return o[..., 0], o[..., 1:]
+class HeadV4(nn.Module):      # satellite head: linear skip (keeps the latent tied to AlphaEarth space for the MIL distance) + 2-layer MLP
+    def __init__(s):
+        super().__init__(); s.lin = nn.Linear(D_Z, 64); s.mlp = nn.Sequential(nn.Linear(D_Z, 128), nn.GELU(), nn.Linear(128, 64))
+    def forward(s, z): return s.lin(z) + s.mlp(z)
+if ARCH == 'v4':
+    enc, flow, dec, qn = EncV4(), FlowV4(), DecV4(), Q(); h22, h25 = HeadV4(), HeadV4()
+elif ARCH == 'v3':
+    enc, flow, dec, qn = Enc(), Flow(), Dec(), Q(); h22, h25 = nn.Linear(D_Z, 64), nn.Linear(D_Z, 64)
+else: raise ValueError(f'ARCH must be v3 or v4, got {ARCH}')
+print(f'ARCH {ARCH}: D_Z {D_Z}; parameters enc {sum(p.numel() for p in enc.parameters()):,} flow {sum(p.numel() for p in flow.parameters()):,} '
+      f'dec {sum(p.numel() for p in dec.parameters()):,} heads {sum(p.numel() for p in [*h22.parameters(), *h25.parameters()]):,}', flush=True)
 params = [*enc.parameters(), *flow.parameters(), *dec.parameters(), *qn.parameters(), *h22.parameters(), *h25.parameters()]
 opt = torch.optim.AdamW(params, lr=float(os.environ.get('LR', 1e-3)), weight_decay=1e-4)
 def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):

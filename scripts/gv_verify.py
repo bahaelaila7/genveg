@@ -11,27 +11,34 @@ rng = np.random.default_rng(42); RES = []
 def check(name, ok, detail=''):
     RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
 M = json.load(open(f'{D}/meta.json')); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
+# region switches (as g02b): REGION = FIA STATECDs; AEF90 = Region 4 rasters (AlphaEarth / soils at 90 m: a footprint = one 90 m pixel, centres = 1 mod 3)
+REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({','.join(map(str, REGION))})"; AEF90 = os.environ.get('AEF90', '0') == '1'
+LAND = f'{ROOT}/data/r4/land.tif' if AEF90 else stands_run()['land_clean']
+AEFP = {y: f'{ROOT}/data/aef90/aef90_{y}.tif' if AEF90 else f'{ROOT}/data/aef/aef_{y}.tif' for y in (2022, 2025)}
+SOILP = (lambda k: f'{ROOT}/data/r4/soils90/{k}.tif') if AEF90 else (lambda k: f'{ROOT}/data/soils/{k}.tif')
+DISTP = (lambda y: f'{ROOT}/data/r4/dist/dist_{y}.tif') if AEF90 else (lambda y: f'{ROOT}/data/landfire/dist/dist_{y}.tif')
+HANSP = f'{ROOT}/data/r4/hansen_lossyear.tif' if AEF90 else f'{ROOT}/data/hansen/lossyear.tif'
 key = ['st', 'u', 'c', 'p']; V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 P = pd.read_parquet(f'{D}/plots.parquet'); C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r')
 con = duckdb.connect(f'{WS}/landis_region4/data_r4/slim_r4.duckdb', read_only=True)
 # ======================= T1 visits and cohort tokens (SQL aggregation, independent of the pandas builder)
-top = [r[0] for r in con.execute("""select r.SPECIES_SYMBOL from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD where t.STATECD in (12,13) and t.MEASDATE>='2000-01-01'
-                                    and t.STATUSCD=1 group by 1 order by count(*) desc, 1 limit 16""").fetchall()]
-check('T1b species keys = top-16 live species (SQL) + _H/_S', sorted(top) + ['_H', '_S'] == KEYS, f'{sorted(top)[:5]}…')
+top = [r[0] for r in con.execute(f"""select r.SPECIES_SYMBOL from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01'
+                                    and t.STATUSCD=1 group by 1 order by count(*) desc, 1 limit {len(KEYS) - 2}""").fetchall()]
+check(f'T1b species keys = top-{len(KEYS) - 2} live species (SQL) + _H/_S', sorted(top) + ['_H', '_S'] == KEYS, f'{sorted(top)[:5]}…')
 samp = V.sample(min(NS, len(V)), random_state=1)
 reg = duckdb.connect(); reg.register('samp', samp[key + ['vid']].assign(yr=samp.year))
-q = """select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp, t.DIA dia, t.HT ht, t.CR cr, t.TPA_UNADJ tpa,
+q = f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp, t.DIA dia, t.HT ht, t.CR cr, t.TPA_UNADJ tpa,
               t.estimated_age age, t.STATUSCD status, t.cond_stdorgcd org, t.CONDID cond
-       from curated_trees t join REF_SPECIES r on r.SPCD = t.SPCD where t.STATECD in (12,13) and t.MEASDATE >= '2000-01-01'"""
+       from curated_trees t join REF_SPECIES r on r.SPCD = t.SPCD where t.STATECD in {ST_SQL} and t.MEASDATE >= '2000-01-01'"""
 T = con.execute(q).df(); T['md'] = pd.to_datetime(T.md)
 # ---- the visit set, rebuilt independently from FIADB (pandas aggregation of per-condition rows; string dates):
 #      visits with curated trees on a forested condition  ∪  forested FIADB visits of the same plots with no live tree in FIADB TREE;
 #      forested share of the SAMPLED area (non-sampled status 5 excluded) >= 0.1
 _fx = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
-_cc = _fx.execute("""select p.CN pcn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, printf('%04d-%02d-%02d', p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) ds,
+_cc = _fx.execute(f"""select p.CN pcn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, printf('%04d-%02d-%02d', p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) ds,
         c.CONDID cond, c.COND_STATUS_CD cs, c.SUBPPROP_UNADJ sp, c.MICRPROP_UNADJ mp, c.STDORGCD org from PLOT p join COND c on c.PLT_CN = p.CN
-        where p.STATECD in (12,13) and p.MEASYEAR >= 2000""").df()
-_nl = _fx.execute("select PLT_CN pcn, count(*) nl from TREE where STATECD in (12,13) and STATUSCD = 1 group by 1").df()
+        where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+_nl = _fx.execute(f"select PLT_CN pcn, count(*) nl from TREE where STATECD in {ST_SQL} and STATUSCD = 1 group by 1").df()
 _f = _cc.assign(sp1=np.where(_cc.cs == 1, _cc.sp, 0), sp5=np.where(_cc.cs == 5, _cc.sp, 0), mp1=np.where(_cc.cs == 1, _cc.mp, 0), mp5=np.where(_cc.cs == 5, _cc.mp, 0),
                 org1=np.where(_cc.cs == 1, _cc.org, np.nan)).groupby(['pcn'] + key + ['ds']).agg(sp1=('sp1', 'sum'), sp5=('sp5', 'sum'), mp1=('mp1', 'sum'), mp5=('mp5', 'sum'), org=('org1', 'max')).reset_index()
 _f = _f.merge(_nl, on='pcn', how='left').fillna({'nl': 0}); _f = _f[_f.sp1 > 0]
@@ -66,8 +73,8 @@ pv = V.sort_values(['pid', 'year']); exp_pairs = set(zip(pv.vid.values[:-1], pv.
 check('T1h pairs = consecutive visits of each plot', set(zip(PR.v1, PR.v2)) == exp_pairs, f'{len(PR)} pairs')
 pl_ind = EX.set_index('vid').org.fillna(0) == 1
 check('T1i planted flag = COND STDORGCD 1 (forested conditions) of the visit', (V.set_index('vid').planted.reindex(pl_ind.index) == pl_ind).all(), f'planted share {pl_ind.mean():.3f}')
-fv = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True).execute("""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
-      from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in (12,13) and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
+fv = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True).execute(f"""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
+      from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
 ours = V[key].assign(my=V.year.astype(int)).drop_duplicates(); inplots = fv.merge(V[key].drop_duplicates(), on=key)
 miss = inplots.merge(ours, on=key + ['my'], how='left', indicator=True); nm = (miss._merge == 'left_only').sum()
 nplots_f = len(fv[key].drop_duplicates()); nplots_o = len(V[key].drop_duplicates())
@@ -75,13 +82,19 @@ check('T1j FIADB forested visits of our plots that are absent from the table (ba
       f'missing {nm} of {len(inplots)}; forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
 # ======================= T2 plot coordinates
 fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
-pl = fc.execute("select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12,13) group by all").df()
+pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in {ST_SQL} group by all").df()
 m = P.merge(pl, on=key, suffixes=('', '_f'))
 check('T2a plot lat/lon = FIADB PLOT mean', np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f), f'n {len(m)}')
-land = rasterio.open(stands_run()['land_clean']); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
+land = rasterio.open(LAND); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
 check('T2b projected x/y (EPSG:5070) recomputed', np.allclose(x, m.x, atol=1e-3) and np.allclose(y, m.y, atol=1e-3))
-okst = ((m.st == 12) & (m.lat < 31.1) | (m.st == 13) & (m.lat > 30.3)).mean()
-check('T2c plots lie in their state (latitude band check)', okst > 0.99, f'{okst:.4f}')
+if AEF90:          # point in the state's polygon (TIGER counties dissolved), 2 km tolerance (FIA coordinate fuzz)
+    import geopandas as gpd
+    stp = gpd.read_file(f'{WS}/TIGER/tl_2024_us_county/tl_2024_us_county.shp'); stp = stp[stp.STATEFP.astype(int).isin(REGION)].to_crs(land.crs).dissolve('STATEFP').geometry
+    pts = gpd.GeoSeries(gpd.points_from_xy(x, y), crs=land.crs); okst = np.mean([stp[f'{st_:02d}'].distance(pt) <= 2000 for st_, pt in zip(m.st.astype(int), pts)])
+    check('T2c plots lie in their state (state polygon, 2 km tolerance)', okst > 0.995, f'{okst:.4f}')
+else:
+    okst = ((m.st == 12) & (m.lat < 31.1) | (m.st == 13) & (m.lat > 30.3)).mean()
+    check('T2c plots lie in their state (latitude band check)', okst > 0.99, f'{okst:.4f}')
 # ======================= T3 candidates: direct raster reads at stored coordinates
 pids = rng.choice(C.pid.unique(), min(60, C.pid.nunique()), replace=False); Cs = C[C.pid.isin(pids)]
 Pi = P.set_index('pid')
@@ -92,14 +105,31 @@ check('T3a stored dist_m = distance(plot pixel, candidate pixel); all <= 1600 m'
 lc = np.array([land.read(1, window=Window(c, r, 1, 1))[0, 0] for r, c in zip(Cs.row, Cs.col)])
 check('T3b every candidate centre is forest land (classes 1-4)', ((lc >= 1) & (lc <= 4)).all(), f'classes {np.unique(lc)}')
 sub = Cs.sample(min(400, len(Cs)), random_state=3); X = np.asarray(CF[sub.cid.values], dtype=np.float32)
-a22 = rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'); a25 = rasterio.open(f'{ROOT}/data/aef/aef_2025.tif')
+a22 = rasterio.open(AEFP[2022]); a25 = rasterio.open(AEFP[2025])
 def dq(a): v = a.astype(np.float32); o = np.sign(v) * (v / 127.5) ** 2; o[a == -128] = np.nan; return o
-e22 = np.stack([np.nan_to_num(np.nanmean(dq(a22.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1)) for r, c in zip(sub.row, sub.col)])
-e25 = np.stack([np.nan_to_num(np.nanmean(dq(a25.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1)) for r, c in zip(sub.row, sub.col)])
+def aef_fp(src, r, c):             # the footprint's AlphaEarth: 3x3 mean of the 30 m mosaic, or (AEF90) the 90 m pixel of its block
+    if AEF90: return np.nan_to_num(dq(src.read(window=Window(c // 3, r // 3, 1, 1))).reshape(64))
+    return np.nan_to_num(np.nanmean(dq(src.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1))
+if AEF90: check('T3c0 footprint centres are 90 m block centres (row, col = 1 mod 3)', ((C.row % 3 == 1) & (C.col % 3 == 1)).all())
+e22 = np.stack([aef_fp(a22, r, c) for r, c in zip(sub.row, sub.col)]); e25 = np.stack([aef_fp(a25, r, c) for r, c in zip(sub.row, sub.col)])
 err = max(np.abs(e22 - X[:, :64]).max(), np.abs(e25 - X[:, 64:128]).max())
-check('T3c AlphaEarth 2022 / 2025 = 3x3 mean of the mosaics at the stored centre', err < 2e-3, f'max abs err {err:.2e} (float16 storage)')
-SOILS = M['soils']; FILL = {'clay030': 7.58, 'sand030': 83.2, 'soc030': 0.964, 'awc030': 0.052, 'ph030': 5.18, 'restrdepth': 200.0}
-so = np.array([[(lambda v: FILL[k] if v <= -9000 else v)(float(rasterio.open(f'{ROOT}/data/soils/{k}.tif').read(1, window=Window(c, r, 1, 1))[0, 0])) for k in SOILS]
+check('T3c AlphaEarth 2022 / 2025 = 3x3 mean of the mosaics at the stored centre' + (' (AEF90: the 90 m pixel)' if AEF90 else ''), err < 2e-3, f'max abs err {err:.2e} (float16 storage)')
+if AEF90:          # the 90 m route against the GA+FL 30 m mosaics (independent: 3x3 means of 02_aef.py's 30 m product), candidates inside that extent
+    g30 = {y: rasterio.open(f'{ROOT}/data/aef/aef_{y}.tif') for y in (2022, 2025)}; tl = land.transform
+    ci = C[C.st.isin([12, 13])] if 'st' in C.columns else C.merge(P[['pid', 'st']], on='pid').query('st in (12, 13)')
+    ci = ci.sample(min(300, len(ci)), random_state=4); e3, e9 = [], []
+    for r, c, cid_ in zip(ci.row, ci.col, ci.cid):
+        xx, yy = tl * (c + 0.5, r + 0.5); r3, c3 = g30[2025].index(xx, yy)
+        if not (1 <= r3 < g30[2025].height - 1 and 1 <= c3 < g30[2025].width - 1): continue
+        m30 = np.nanmean(dq(g30[2025].read(window=Window(c3 - 1, r3 - 1, 3, 3))).reshape(64, -1), 1)
+        if np.isnan(m30).any(): continue
+        e3.append(m30); e9.append(np.asarray(CF[cid_, 64:128], dtype=np.float32))
+    e3, e9 = np.array(e3), np.array(e9); cs = (e3 * e9).sum(1) / (np.linalg.norm(e3, axis=1) * np.linalg.norm(e9, axis=1) + 1e-9)
+    check('T3c2 AEF90 footprint (2025) = 3x3 mean of the GA+FL 30 m mosaic (re-quantisation tolerance)', len(e3) > 50 and np.median(np.abs(e3 - e9).max(1)) < 0.02 and np.quantile(cs, 0.05) > 0.98,
+          f'{len(e3)} footprints; median max|Δ| {np.median(np.abs(e3 - e9).max(1)):.4f}, cosine q05 {np.quantile(cs, .05):.4f}')
+SOILS = M['soils']; FILL = json.load(open(f'{ROOT}/data/r4/soils90/fill.json')) if AEF90 else {'clay030': 7.58, 'sand030': 83.2, 'soc030': 0.964, 'awc030': 0.052, 'ph030': 5.18, 'restrdepth': 200.0}
+SDIV = 3 if AEF90 else 1               # (AEF90: soils on the 90 m grid)
+so = np.array([[(lambda v: FILL[k] if v <= -9000 else v)(float(rasterio.open(SOILP(k)).read(1, window=Window(c // SDIV, r // SDIV, 1, 1))[0, 0])) for k in SOILS]
                for r, c in zip(sub.row[:120], sub.col[:120])])
 Xs = X[:120, -len(SOILS):]; se = np.abs(so - Xs) / (np.abs(so) * 1e-3 + 1e-3)
 check('T3d soils = centre pixel, nodata -> regional median (float16 storage)', se.max() < 1 and (np.asarray(CF[::97, -len(SOILS):]) > -9000).all(), f'max err / tol {se.max():.2f}; no -9999 left')
@@ -118,7 +148,7 @@ def cls_of(r):
     return next((i for i, k in enumerate(CLS) if t in cmap[k]), None)
 lk = {(int(r.year), int(r.VALUE)): (cls_of(r), int(r.ey)) for r in codes.itertuples()}
 print(f"   (fiscal-year codes placed in the previous calendar year: {sum(1 for (fy, _), (c_, ey) in lk.items() if c_ is not None and ey != fy)})")
-hl = rasterio.open(f'{ROOT}/data/hansen/lossyear.tif'); LF = {yr: rasterio.open(f'{ROOT}/data/landfire/dist/dist_{yr}.tif') for yr in YEARS}; bad = 0; nev = 0; nh = 0; maxd = 0
+hl = rasterio.open(HANSP); LF = {yr: rasterio.open(DISTP(yr)) for yr in YEARS}; bad = 0; nev = 0; nh = 0; maxd = 0
 for (r, c), xrow in zip(zip(sub.row[:150], sub.col[:150]), X[:150]):
     per = xrow[128:128 + NY * (NC + 2)].reshape(NY, NC + 2); hw = hl.read(1, window=Window(c - 1, r - 1, 3, 3)); exp = np.zeros((NY, NC))
     for yr in YEARS:
@@ -147,9 +177,9 @@ SPEC[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
 for cd in range(50, 55): SPEC[('D', cd)] = (['weather'], (-1, 1), 2)
 SPEC[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
 HARMLESS = {12, 22, 31, 40, 41, 42, 43, 44, 45, 46, 60}
-evr = _fx.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy,
+evr = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy,
                     c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
-                    from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in (12,13) and p.MEASYEAR >= 2000""").df()
+                    from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
 evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
 ratios, nneg, ncl = [], 0, 0; REC = {}
 for pid, g in Cs.groupby('pid'):
@@ -204,8 +234,11 @@ sys.path.insert(0, f'{ROOT}/scripts'); import g02b_build_gafl as G2; G2.init()
 cnt_err = []
 for pid, g in Cs.groupby('pid'):
     r0, c0 = land.index(Pi.loc[pid].x, Pi.loc[pid].y); RP = int(1600 // 30) + 2
-    L = land.read(1, window=Window(c0 - RP, r0 - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=0)
-    rr, cc = np.mgrid[1:2 * RP:3, 1:2 * RP:3]; rr, cc = rr.ravel(), cc.ravel(); fl = (L[rr, cc] >= 1) & (L[rr, cc] <= 4) & (np.hypot(rr - RP, cc - RP) * 30 <= 1600)
+    L = land.read(1, window=Window(c0 - RP - 3, r0 - RP - 3, 2 * RP + 7, 2 * RP + 7), boundless=True, fill_value=0)       # (window origin r0 - RP - 3)
+    if AEF90: ar_ = np.arange(r0 - RP - 3, r0 + RP + 4); ac_ = np.arange(c0 - RP - 3, c0 + RP + 4); ar_, ac_ = ar_[ar_ % 3 == 1], ac_[ac_ % 3 == 1]   # 90 m block centres
+    else: ar_, ac_ = np.arange(r0 - RP + 1, r0 + RP, 3), np.arange(c0 - RP + 1, c0 + RP, 3)                                    # the plot window's own stride-3 lattice
+    AR, AC = np.meshgrid(ar_, ac_, indexing='ij'); AR, AC = AR.ravel(), AC.ravel(); Lc = L[AR - (r0 - RP - 3), AC - (c0 - RP - 3)]
+    fl = (Lc >= 1) & (Lc <= 4) & (np.hypot(AR - r0, AC - c0) * 30 <= 1600)
     cnt_err.append(abs(g.incl_w.sum() - fl.sum()) / fl.sum())
 check('T3g inclusion weights sum to the full forest-footprint count of the disk', max(cnt_err) < 1e-4, f'max rel err {max(cnt_err):.2e}')
 # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
@@ -267,7 +300,9 @@ for pid in pids:
     if g.incl_w.max() <= 1: continue                       # disk not subsampled: trivially exact
     xs = land_(AEF[cid], DIST[cid], SOIL[cid], g.incl_w.values); xu = land_(AEF[cid], DIST[cid], SOIL[cid])
     r0, c0 = land.index(Pi.loc[pid].x, Pi.loc[pid].y); RP = int(1600 // 30) + 2
-    rr, cc, F = G2.feats(r0 - RP, c0 - RP, 2 * RP + 1, 2 * RP + 1); F = F[np.hypot(rr - RP, cc - RP) * 30 <= 1600]; F[:, -len(SOILS):] = (F[:, -len(SOILS):] - smu) / ssd
+    if AEF90: wr0, wc0, hw = 3 * ((r0 - RP) // 3), 3 * ((c0 - RP) // 3), 2 * RP + 7
+    else: wr0, wc0, hw = r0 - RP, c0 - RP, 2 * RP + 1
+    rr, cc, F = G2.feats(wr0, wc0, hw, hw); F = F[np.hypot(rr + wr0 - r0, cc + wc0 - c0) * 30 <= 1600]; F[:, -len(SOILS):] = (F[:, -len(SOILS):] - smu) / ssd
     F = torch.tensor(F); xf = land_(F[:, :128], F[:, 128:128 + NY * (NC + 2)].reshape(-1, NY, NC + 2), F[:, -len(SOILS):])
     dW.append(xs - xf); dU.append(xu - xf)
 dW, dU = np.array(dW), np.array(dU)
@@ -281,8 +316,9 @@ S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy', 
 sraster = rasterio.open(stands_run()['tif'])
 sid_chk = np.array([sraster.read(1, window=Window(c, r, 1, 1))[0, 0] for r, c in zip(ssub.row, ssub.col)])
 check('T6a stand footprints lie in their stand (stands.tif)', (sid_chk == ssub.stand_id.values).all())
-e25s = np.stack([np.nan_to_num(np.nanmean(dq(a25.read(window=Window(c - 1, r - 1, 3, 3))).reshape(64, -1), 1)) for r, c in zip(ssub.row, ssub.col)])
-check('T6b stand footprint AlphaEarth 2025 = mosaic 3x3 mean', np.abs(e25s - Xs[:, 64:128]).max() < 2e-3, f'max abs err {np.abs(e25s - Xs[:, 64:128]).max():.2e}')
+dR6, dC6 = G2.stand_offset(sraster)          # (AEF90: the feature grid is grid_r4)
+e25s = np.stack([aef_fp(a25, r + dR6, c + dC6) for r, c in zip(ssub.row, ssub.col)])
+check('T6b stand footprint AlphaEarth 2025 = mosaic 3x3 mean' + (' (AEF90: the 90 m pixel)' if AEF90 else ''), np.abs(e25s - Xs[:, 64:128]).max() < 2e-3, f'max abs err {np.abs(e25s - Xs[:, 64:128]).max():.2e}')
 check('T6c unit conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', abs(1 / 0.229568 - 4.356) < 1e-3 and abs(2.47105 - 2.471) < 1e-3)
 # ======================= T7 downstream keys (pid is a row number of THIS table)
 LS = pd.read_parquet(f'{D}/localisation.parquet'); jl = LS.join(P.set_index('pid')[key], rsuffix='_t')
@@ -445,8 +481,9 @@ for fnw in sorted(_gl.glob(f'{D}/visit_aef/*_2021.npy') + _gl.glob(f'{D}/visit_a
             rr = g.row.values - (r0 - RPw) + dr; cc = g.col.values - (c0 - RPw) + dc; ok_ = (rr >= 1) & (rr < Wn.shape[1] - 1) & (cc >= 1) & (cc < Wn.shape[2] - 1)
             Wv = np.stack([np.nan_to_num(np.nanmean(Wn[:, r - 1:r + 2, c - 1:c + 2].reshape(64, -1), 1)) for r, c in zip(rr[ok_], cc[ok_])]); Wv /= np.linalg.norm(Wv, axis=1, keepdims=True) + 1e-9
             acc13.setdefault((dr, dc), []).append(float(np.median((Wv * M22[ok_]).sum(1))))
-med13 = {k: np.median(v) for k, v in acc13.items()}; best13 = max(med13, key=med13.get)
-check('T13 targeted AlphaEarth windows are pixel-exact: agreement with the 2022 mosaic peaks at offset (0, 0) among ±2 px shifts', best13 == (0, 0),
+med13 = {k: np.median(v) for k, v in acc13.items()}; best13 = max(med13, key=med13.get) if med13 else None
+if best13 is None: print('SKIP  T13 no targeted AlphaEarth windows (g02c) in this table')
+else: check('T13 targeted AlphaEarth windows are pixel-exact: agreement with the 2022 mosaic peaks at offset (0, 0) among ±2 px shifts', best13 == (0, 0),
       f'{nv13} windows; median cosine at (0,0) {med13[(0, 0)]:.4f}, best {best13} {med13[best13]:.4f}, at (+1,0) {med13[(1, 0)]:.4f}, (0,+1) {med13[(0, 1)]:.4f}')
 # ======================= T14 no leakage: the joint AlphaEarth location posterior (g08) exists only for TRAINING plots (spatial blocks + buffer of g03b)
 if os.path.exists(f'{D}/cand_loc_aef.parquet'):

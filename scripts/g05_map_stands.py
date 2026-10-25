@@ -28,9 +28,11 @@ SA = torch.tensor(SF[:, :128]); SD = torch.tensor(SF[:, DS].reshape(-1, NY, NC +
 # ---- per-stand landscapes: footprint features once over the extent (global stride-3 grid, row bands), then each stand's own 1.6 km disk
 RP = int(1600 // 30) + 2; cen = S.groupby('stand_id')[['row', 'col']].mean()
 r0, r1, c0, c1 = int(cen.row.min()) - RP, int(cen.row.max()) + RP + 1, int(cen.col.min()) - RP, int(cen.col.max()) + RP + 1
+dR, dC = G2.stand_offset(rasterio.open(stands_run()['tif']))                        # (AEF90: feature grid grid_r4; the extent starts on a 90 m block)
+if G2.AEF90: r0, c0 = 3 * (r0 // 3), 3 * (c0 // 3)
 FR, FC, FF = [], [], []; BAND = 600                                                 # multiple of 3: the stride-3 grid continues across bands
 for rb in range(r0, r1, BAND):
-    rr, cc, F = G2.feats(rb, c0, min(BAND, r1 - rb) + 2, c1 - c0 + 2)
+    rr, cc, F = G2.feats(rb + dR, c0 + dC, min(BAND, r1 - rb) + 2, c1 - c0 + 2)
     keep = rr <= min(BAND, r1 - rb)                                                   # rows of this band only (feats' grid starts at row 1 of the window)
     FR.append(rr[keep] + rb); FC.append(cc[keep] + c0); FF.append(F[keep])
 FR, FC = np.concatenate(FR), np.concatenate(FC); FF = np.concatenate(FF); FF[:, SO] = (FF[:, SO] - smu) / ssd; FF = torch.tensor(FF)

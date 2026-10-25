@@ -53,6 +53,47 @@ for r, c in pts6:
 n6 = sum(conf.values()); agree6 = sum(n for (a, b), n in conf.items() if a == b) / max(n6, 1)
 check('U6 forest-land classes (land.tif) = the written rules re-derived from TreeMap / EVT / Hansen at random AOI pixels', agree6 > 0.99,
       f'{n6} pixels, agreement {agree6:.4f}; disagreements (rule, land.tif): { {k: v for k, v in conf.items() if k[0] != k[1]} }')
+# ======================= U1r / U6r Region 4 rasters (AEF90 = 1, docs/GENVEG_V4_R4.md §B): grids, and the forest-land classes of data/r4/land.tif re-derived
+#                          from the written rules at random AOI pixels, reading the CONUS TreeMap / EVT by COORDINATES (r4_rasters.land uses pixel offsets)
+AEF90 = os.environ.get('AEF90', '0') == '1'
+if AEF90:
+    G4 = json.load(open(f'{ROOT}/data/grid/grid_r4.json')); G49 = json.load(open(f'{ROOT}/data/grid/grid_r4_90.json')); TR4, TR49 = Affine(*G4['transform']), Affine(*G49['transform'])
+    f30 = ['r4/land.tif', 'r4/hansen_lossyear.tif', 'r4/hansen_treecover2000.tif', 'r4/hansen_datamask.tif', *[f'r4/dist/dist_{y}.tif' for y in (2000, 2012, 2024, 2025)]]
+    f90 = ['grid/aoi_r4_mask90.tif', 'aef90/aef90_2022.tif', 'aef90/aef90_2025.tif', *[f'r4/soils90/{k}.tif' for k in ('clay030', 'sand030', 'soc030', 'awc030', 'ph030', 'restrdepth')]]
+    on = lambda p_, t_, g_: (lambda s_: s_.transform.almost_equals(t_) and s_.width == g_['width'] and s_.height == g_['height'] and s_.crs.to_epsg() == 5070)(rasterio.open(f'{ROOT}/data/{p_}'))
+    bad = [p_ for p_ in f30 if not on(p_, TR4, G4)] + [p_ for p_ in f90 if not on(p_, TR49, G49)]
+    lat = (TR4.c - TR.c) / 30, (TR.f - TR4.f) / 30
+    check('U1r Region 4 rasters on grid_r4 (30 m) / grid_r4_90 (90 m); grid_r4 on the TreeMap lattice of grid.json, a multiple of 3 px off', not bad and all(abs(v - round(v)) < 1e-6 and round(v) % 3 == 0 for v in lat),
+          f'{len(f30) + len(f90)} rasters; off-grid {bad}; offset {lat}')
+    flr = yaml.safe_load(open(f'{ROOT}/config/pilot.yml'))['forest_land']        # the rules r4_rasters.land applies
+    excl4 = evt.EVT_LF.isin(flr['exclude_evt_lf']) | evt.EVT_PHYS.astype(str).str.startswith(tuple(flr['exclude_evt_phys_prefix']))
+    dist4 = evt.EVT_NAME.astype(str).str.contains('|'.join(flr['disturbed_evt_name']))
+    s4 = dict(land=rasterio.open(f'{ROOT}/data/r4/land.tif'), loss=rasterio.open(f'{ROOT}/data/r4/hansen_lossyear.tif'), tc=rasterio.open(f'{ROOT}/data/r4/hansen_treecover2000.tif'),
+              dm=rasterio.open(f'{ROOT}/data/r4/hansen_datamask.tif'), aoi=rasterio.open(f'{ROOT}/data/grid/aoi_r4_mask90.tif'))
+    tmC = rasterio.open(WS + '/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif'); evC = rasterio.open(f'{ROOT}/data/landfire/raw/LF2022_EVT_CONUS/Tif/LF2022_EVT_CONUS.tif')
+    conf4 = {}; n4 = 0
+    while n4 < 4000:
+        r, c = int(rng.integers(0, G4['height'])), int(rng.integers(0, G4['width']))
+        if not s4['aoi'].read(1, window=Window(c // 3, r // 3, 1, 1))[0, 0]: continue
+        n4 += 1; x_, y_ = TR4 * (c + 0.5, r + 0.5)
+        v = {k: s_.read(1, window=Window(c, r, 1, 1))[0, 0] for k, s_ in s4.items() if k != 'aoi'}
+        rt, ct = tmC.index(x_, y_); re_, ce_ = evC.index(x_, y_)
+        tmv = tmC.read(1, window=Window(ct, rt, 1, 1), boundless=True, fill_value=0)[0, 0]; e = int(evC.read(1, window=Window(ce_, re_, 1, 1), boundless=True, fill_value=-1)[0, 0])
+        tm_ok = int(tmv) > 0 and (tmC.nodata is None or tmv != tmC.nodata); ex = bool(excl4.get(e, False))
+        ly = int(v['loss']); ly = 2000 + ly if 0 < ly < 100 else 0; tcv = 0 if int(v['tc']) == 255 else int(v['tc'])
+        former = tcv >= flr['treecover2000_min']; recent = ly >= flr['recent_loss_from']; older = 0 < ly < flr['recent_loss_from']
+        if int(v['dm']) != 1: exp = 0
+        elif ly and former and ex and not tm_ok: exp = 9
+        elif tm_ok: exp = 2 if (recent and former and not ex) else 1
+        elif ex: exp = 0
+        elif recent and former: exp = 2
+        elif (older and former) or bool(dist4.get(e, False)) or (bool(sh_.get(e, False)) and tcv >= flr['shrub_treecover2000_min']): exp = 3
+        elif bool(tree_.get(e, False)): exp = 4
+        else: exp = 0
+        conf4[(exp, int(v['land']))] = conf4.get((exp, int(v['land'])), 0) + 1
+    ag4 = sum(n for (a, b), n in conf4.items() if a == b) / n4
+    check('U6r Region 4 forest-land classes (data/r4/land.tif) = the written rules re-derived (CONUS TreeMap / EVT by coordinates, R4 Hansen) at random AOI pixels', ag4 > 0.99,
+          f'{n4} pixels, agreement {ag4:.4f}; disagreements (rule, land.tif): { {k: v for k, v in conf4.items() if k[0] != k[1]} }')
 # ======================= U7 stands raster vs the stand polygons (gpkg): pixel centre inside its stand's polygon; polygon area ≈ pixel area
 import geopandas as gpd
 from shapely.geometry import Point
@@ -73,17 +114,31 @@ if os.environ.get('GV_SKIP_U8') == '1':                     # genveg_pipeline st
 elif os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/stand_veg_v3.parquet').columns:
     import pickle
     NZ = np.load(f'{D}/stand_nodes.npz'); km = pickle.load(open(f'{D}/bayes_kmeans.pkl', 'rb')); a22, a25 = rasterio.open(f'{ROOT}/data/aef/aef_2022.tif'), rasterio.open(f'{ROOT}/data/aef/aef_2025.tif')
+    if AEF90:       # Region 4 features: footprints = 90 m blocks of grid_r4 (centres 1 mod 3), AlphaEarth = the 90 m pixel; stand pixels shifted by the grid offset
+        a22, a25 = rasterio.open(f'{ROOT}/data/aef90/aef90_2022.tif'), rasterio.open(f'{ROOT}/data/aef90/aef90_2025.tif'); land4 = rasterio.open(f'{ROOT}/data/r4/land.tif')
+        st_tr = rasterio.open(SRN['tif']).transform; oR, oC = round((land4.transform.f - st_tr.f) / 30), round((st_tr.c - land4.transform.c) / 30)
     RP = int(1600 // 30) + 2; dd8 = []; sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet')
     Ssub = pd.read_parquet(f'{D}/stands.parquet'); cen = Ssub.groupby('stand_id')[['row', 'col']].mean()
     okn = (np.abs(NZ['nodes'][sv.node.values] - np.rint(cen.loc[sv.stand_id.values].values)).max(1) == 0).mean()   # each stand's landscape is centred on its own centroid
     for i in rng.choice(len(NZ['nodes']), 20, replace=False):
-        r, c = NZ['nodes'][i]; L = land.read(1, window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=0)
-        rr, cc = np.mgrid[1:2 * RP:3, 1:2 * RP:3]; rr, cc = rr.ravel(), cc.ravel(); m = (L[rr, cc] >= 1) & (L[rr, cc] <= 4) & (np.hypot(rr - RP, cc - RP) * 30 <= 1600)
-        rr, cc = rr[m], cc[m]
-        if len(rr) < 20: continue
-        A2 = dq(a22.read(window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=-128)); A5 = dq(a25.read(window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=-128))
-        def m3(A): return np.stack([np.nan_to_num(np.nanmean(A[:, y - 1:y + 2, x - 1:x + 2].reshape(64, -1), 1)) for y, x in zip(rr, cc)])
-        e22, e25 = m3(A2), m3(A5); hist = np.bincount(km.predict(e25.astype(np.float32)), minlength=32) / len(rr)
+        r, c = NZ['nodes'][i]
+        if AEF90:
+            R_, C_ = r + oR, c + oC; ar_ = np.arange(R_ - RP - 3, R_ + RP + 4); ac_ = np.arange(C_ - RP - 3, C_ + RP + 4); ar_, ac_ = ar_[ar_ % 3 == 1], ac_[ac_ % 3 == 1]
+            AR, AC = np.meshgrid(ar_, ac_, indexing='ij'); AR, AC = AR.ravel(), AC.ravel()
+            L = land4.read(1, window=Window(C_ - RP - 3, R_ - RP - 3, 2 * RP + 7, 2 * RP + 7), boundless=True, fill_value=0)[AR - (R_ - RP - 3), AC - (C_ - RP - 3)]
+            m = (L >= 1) & (L <= 4) & (np.hypot(AR - R_, AC - C_) * 30 <= 1600); AR, AC = AR[m], AC[m]
+            if len(AR) < 20: continue
+            def p9(A): return np.stack([np.nan_to_num(dq(A.read(window=Window(x // 3, y // 3, 1, 1))).reshape(64)) for y, x in zip(AR, AC)])
+            e22, e25 = p9(a22), p9(a25); rr = AR
+        else:
+            L = land.read(1, window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=0)
+            rr, cc = np.mgrid[1:2 * RP:3, 1:2 * RP:3]; rr, cc = rr.ravel(), cc.ravel(); m = (L[rr, cc] >= 1) & (L[rr, cc] <= 4) & (np.hypot(rr - RP, cc - RP) * 30 <= 1600)
+            rr, cc = rr[m], cc[m]
+            if len(rr) < 20: continue
+            A2 = dq(a22.read(window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=-128)); A5 = dq(a25.read(window=Window(c - RP, r - RP, 2 * RP + 1, 2 * RP + 1), boundless=True, fill_value=-128))
+            def m3(A): return np.stack([np.nan_to_num(np.nanmean(A[:, y - 1:y + 2, x - 1:x + 2].reshape(64, -1), 1)) for y, x in zip(rr, cc)])
+            e22, e25 = m3(A2), m3(A5)
+        hist = np.bincount(km.predict(e25.astype(np.float32)), minlength=32) / len(rr)
         x_ind = np.r_[e22.mean(0), e25.mean(0), hist]; dd8.append(NZ['XL'][i][:160] - x_ind)
     dd8 = np.array(dd8); sd8 = dd8.std(0, ddof=1); okd = sd8 > 1e-9; t8 = np.abs(dd8.mean(0)[okd]) / (sd8[okd] / np.sqrt(len(dd8)))
     check('U8 g05: every stand landscape is centred on the stand centroid; landscape (AlphaEarth means + cluster histogram) = independent full-disk recomputation (unbiased)',
