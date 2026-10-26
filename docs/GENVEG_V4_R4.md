@@ -93,3 +93,21 @@ use the test plot's own FIA records (stands have none), so localisation-dependen
 empty consistent set (the "empty set keeps its prior" branch of g03b is unused). FIA also SWAPS up to 20 % of private plots' coordinates with a similar plot of the
 same county: for those plots no footprint within 1.6 km is the plot's — not modelled. The satellite likelihood B shows no localisation skill (audit): the mapped
 stands' composition comes from the landscape prior; whether v4's non-linear heads change that is part of the v3 vs v4 comparison.
+
+## F. Audit round 3 (2026-10-26, fresh independent Opus review of b60cd87) and the user's decisions
+Mechanical fixes (7fd09c9): gv_verify T3h on the prior's evidence part (B3); the live v3 config's production map is B0 (B4); a failed / forced run is not left
+current (I4); the Q-decode window centred on z(2025) = the end-2025 state; per-stand seeding of g05's draws; g04 in the dynamics stage hash; dead code / docstrings.
+User decisions (2026-10-26): (1) the curated tree table misses about half the live saplings in AL / GA / NC / SC / TN (a RECONCILECD-based tree exclusion) —
+**fixed upstream** in FIA_DATA_PREP (branch curation-fix), every model to re-derive its inputs; (2) **fix the dynamics, then map from 2000**; (3) retrain v3
+on the rebuilt table too (config/genveg_v3b.yml, data gafl_v3b); (4) runs halted until the pipelines are vetted.
+Dynamics / mapping changes (switches; the new configs enable them, defaults keep the older models loadable):
+* `SITE_ATTR` — the flow's attractor depends on the site: A + MLP(soil), zero-initialised (one global attractor made every undisturbed stand revert to it).
+* `PAIR_ALL` (`PAIR_HMAX` 25 yr) — every ordered visit pair of a plot trains the flow (multi-horizon; a training visit samples one of its pairs); an
+  "undisturbed" span requires no hiding FIA code at ANY visit in between.
+* `PAIR_SYN` — an FIA-recorded event cluster that no candidate's LANDFIRE / Hansen evidence matches is injected into the pair's histories at its FIA year
+  (its classes, severity 2): recorded but undetected disturbances no longer feed the no-event drift.
+* `MAP_Y0` 2000 — the mapping path (g04 calibration and g05) draws z from the landscape prior at 2000 and flows through the footprint's whole 2000–2025 history
+  (from 2021, a stand cut in 2016–20 was mapped as mature).
+* g06 reports undisturbed held-out pairs by horizon (< 8, 8–15, > 15 yr): predicted vs observed BA log change per year.
+* Fixed while smoke-testing: the F6 pair-loss tensor was named `ep`, shadowing the epoch counter (broke the curriculum switch and the epoch log).
+* `SMOKE_BATCHES` — a code-path check of the training step (no checkpoint, no evaluation).

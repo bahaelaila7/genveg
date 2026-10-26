@@ -32,6 +32,7 @@ t0 = time.time()
 from sklearn.cluster import MiniBatchKMeans
 samp = np.random.choice(len(AEF), 200000, replace=False); km = MiniBatchKMeans(32, random_state=0, n_init=3).fit(AEF[samp][:, 64:].numpy())
 BINS = [(2000, 2009), (2010, 2016), (2017, 2021), (2022, 2025)]
+MAP_Y0 = float(os.environ.get('MAP_Y0', 2021.0))       # the start year of the mapping path (g05 execs this block too)
 def landscape(F_aef, F_dist, F_soil, wt=None):
     """X_L from a set of footprints, weighted by inverse inclusion probability wt (None = uniform sample): mean AEF22/25, AEF25 cluster histogram,
     disturbance class + Hansen fractions per period, mean soils — unbiased whole-disk statistics."""
@@ -172,14 +173,16 @@ with torch.no_grad():
         nl_ = [x[sl_] for x in null_pred(vyear[te_loc])]; out['null'] = {k: err(nl_[i], o_l[i]) for i, k in enumerate(['TPH', 'BA', 'QMD'])}
         out['knn'] = {k: err(kn[i], o_l[i]) for i, k in enumerate(['TPH', 'BA', 'QMD'])} | {'bray': bray(kc, o_l[4]), 'dominant_acc': float((kc.argmax(1) == o_l[3]).float().mean())}
         ev['AxB_localised_heldout'] = out
-    # ---- the MAPPING path of g05, validated: z ~ p(z | X_L, 2021) -> v2 flow (decoder-consistent) through a prior-drawn candidate's history to the visit
+    # MAP_Y0: the year the mapping path starts (z drawn from the landscape prior at MAP_Y0, then flowed through the footprint's own history; 2000 lets
+    # the stand's whole 2000-2025 history act — audit r3 B1: from 2021, a stand cut in 2016-20 was mapped as mature)
+    # ---- the MAPPING path of g05, validated: z ~ p(z | X_L, MAP_Y0) -> v2 flow (decoder-consistent) through a prior-drawn candidate's history to the visit
     # date -> decode. Calibration factors for THIS path from the calibration plots (visits 2022-2025), errors on held-out plots' visits 2022-2025.
     def map_path(vs, ms=32):
         out_ = []
         for v in vs:
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
-            zs = mdn.sample(Xv[[vi[v]]], torch.tensor([2021.0]), ms)[0]; yy = int(math.floor(float(yv)))
-            st = flow(zs, torch.full((ms,), 2021.0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms)); s_ = summ(st[yy])
+            zs = mdn.sample(Xv[[vi[v]]], torch.tensor([MAP_Y0]), ms)[0]; yy = int(math.floor(float(yv)))
+            st = flow(zs, torch.full((ms,), MAP_Y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms)); s_ = summ(st[yy])
             out_.append([torch.exp(torch.log(s_[i] + 1e-3).median()) for i in range(3)] + [s_[4].mean(0)])
         return out_
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]

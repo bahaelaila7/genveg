@@ -2,7 +2,7 @@
 and were not comparable with the plots' disks). Per stand, its OWN landscape: the forest footprints (3x3, stride 3) within 1.6 km of the stand's centroid, the
 a uniform 256-subsample (seed = stand id; the plots' descriptors are inclusion-weighted estimates from their NCAND stratified candidates —
 both estimate the full-disk descriptor, with different noise), the same descriptor (g04.landscape). (Until 2026-10-22 every stand took the descriptor of the
-nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, 2021) (MDN, saved by g04);
+nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, MAP_Y0) (env MAP_Y0, as g04's mapping path) (MDN, saved by g04);
 optional likelihood weighting (USE_B=1, B's flow + heads saved by g04 — likelihood only; joint evidence of the stand's footprints = mean AlphaEarth distance); flow to 2025
 through the footprints' disturbance histories with the v2 flow (decoder-consistent; samples spread over the footprints); decode;
 the mapping-path calibration factors of g04 (validated there on held-out plots). Writes data/proto/gafl/stand_veg_v3.parquet and prints diagnostics (by status, correlation with TreeMap)."""
@@ -57,16 +57,16 @@ with torch.no_grad():
         fp = g.index.values
         if int(sid) not in XLs: continue
         j = node_of[int(sid)]; xl = nx(XLs[int(sid)]).unsqueeze(0); torch.manual_seed(int(sid))     # a stand's draws depend on its id only (not on the stand set / order)
-        zs = mdn.sample(xl, torch.tensor([2021.0]), Mz)[0]
+        zs = mdn.sample(xl, torch.tensor([MAP_Y0]), Mz)[0]
         w = torch.ones(Mz)
         if USE_B:     # every footprint of the stand observes the SAME vegetation: tempered joint evidence = mean distance over the footprints
             dm = torch.zeros(Mz)
             for f_ in fp:
-                st = flowB(zs, torch.full((Mz,), 2021.0), [2022, 2025], SD[[f_] * Mz], SS[[f_] * Mz])
+                st = flowB(zs, torch.full((Mz,), MAP_Y0), [2022, 2025], SD[[f_] * Mz], SS[[f_] * Mz])
                 dm = dm + sum(((h(st[y]) - SA[[f_] * Mz][:, sl]) ** 2).sum(-1) for y, h, sl in ((2022, h22B, A22), (2025, h25B, A25))) / 2 / len(fp)
             w = torch.exp(-(dm - dm.min()) / TEMP); ESS.append(float(w.sum() ** 2 / (w ** 2).sum()))
         idx = torch.multinomial(w / w.sum(), 16, replacement=True); fpi = [fp[i % len(fp)] for i in range(16)]   # samples spread over the stand's footprints
-        st = flow(zs[idx], torch.full((16,), 2021.0), [2025], SD[fpi], SS[fpi]); lp_, val_ = dec(st[2025]); s_ = list(summaries(lp_, val_))
+        st = flow(zs[idx], torch.full((16,), MAP_Y0), [2025], SD[fpi], SS[fpi]); lp_, val_ = dec(st[2025]); s_ = list(summaries(lp_, val_))
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]
         tph_m, ba_m = float(s_[0].median()), float(s_[1].median())
         # stand cohorts (TreeMap-independent initial state for the simulation engines): ONE plausible stand — the posterior draw closest to the calibrated

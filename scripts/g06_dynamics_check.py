@@ -62,4 +62,21 @@ with torch.no_grad():
         out[f'pairs_{grp}'] = {'n': len(ix), 'obs_v1_BA_median': float(np.median(ob1)), 'obs_v2_BA_median': float(np.median(ob2)), 'pred_v2_BA_median': float(np.median(pb)),
                                'share_v2_bare': float(np.mean(ob2 <= 0)), 'err_model': e(pb, ob2), 'err_persistence': e(ob1, ob2),
                                'corr_logchange_model_obs': float(np.corrcoef(np.log((pb + 0.5) / (ob1 + 0.5)), np.log((ob2 + 0.5) / (ob1 + 0.5)))[0, 1]) if len(ix) > 3 else None}
+    # 3 LONG-HORIZON undisturbed growth (audit r3 I1: the no-event flow shrank stands ~2.4 %/yr over long horizons; FIA undisturbed pairs grow):
+    #   held-out pairs of every horizon (g03b.pair_cand2: PAIR_ALL) with no detectable FIA event in the span and no hiding code at any visit in between —
+    #   predicted vs observed BA log change per year, by horizon
+    blk_ = V.fia_blocked.values if 'fia_blocked' in V.columns else np.zeros(nv, bool); vs_of = V.assign(vid=np.arange(nv)).sort_values('year').groupby('pid').vid.apply(list).to_dict()
+    lh = []
+    for (v1, v2), (cid, pr) in pair_cand2.items():
+        if vpid[v1] not in test_pid: continue
+        y1, y2 = float(vyear[v1]), float(vyear[v2]); seq = vs_of[vpid[v1]]; mid = seq[seq.index(v1) + 1:seq.index(v2) + 1]
+        if blk_[mid].any() or [c for c in G2.clusters([(k, y) for k, y in ev_of.get(vpid[v1], []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]: continue
+        ob1, ob2 = float(obs_summ(torch.tensor([v1]))[1][0]), float(obs_summ(torch.tensor([v2]))[1][0])
+        if ob1 < 1.0: continue
+        ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = int(math.floor(y2)); z0 = enc(torch.tensor([v1]), vyear[[v1]])
+        st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
+        p0 = float(summaries(*dec(z0))[1][0]); lh.append((y2 - y1, math.log((pb + 0.5) / (p0 + 0.5)) / (y2 - y1), math.log((ob2 + 0.5) / (ob1 + 0.5)) / (y2 - y1)))
+    for lo_, hi_ in ((0, 8), (8, 15), (15, 99)):
+        r_ = [x for x in lh if lo_ <= x[0] < hi_]
+        if r_: out[f'undisturbed_h{lo_}_{hi_}'] = {'n': len(r_), 'median_pred_logchange_per_yr': float(np.median([x[1] for x in r_])), 'median_obs_logchange_per_yr': float(np.median([x[2] for x in r_]))}
 print(json.dumps(out, indent=1)); json.dump(out, open(f'{D}/dynamics_check_{out["tag"] or "run"}.json', 'w'), indent=1)

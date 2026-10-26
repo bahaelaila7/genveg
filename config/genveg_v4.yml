@@ -11,7 +11,8 @@ train:                          # g03b_train_gafl (the same env is passed to g04
   seeds: [0, 1]
   model_prefix: m_v4            # writes <data>/<model_prefix>_s<seed>.pt
   env: {ARCH: v4, EPOCHS: 14, CURRIC: 4, NT: 1, BATCH: 64, DZ: 32, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
-        W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5}
+        W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5,
+        SITE_ATTR: 1, PAIR_ALL: 1, PAIR_HMAX: 25, PAIR_SYN: 1, MAP_Y0: 2000}   # dynamics fixes (audit r3 I1 / B1): site attractor, multi-horizon pairs, recorded-undetected events; mapping from 2000
 model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
 dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
   eval_loc: [history]
