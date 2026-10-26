@@ -24,6 +24,14 @@ from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
 from features import ROOT, WS, SOILS, dequant
 from stand_runs import stands_run
+# location prior: FIA public coordinates are perturbed within 1 mile (1.6 km) of the plot, and "the proportion perturbed more than 0.5 mi (0.8 km) is small"
+# (Coulston et al., FIA perturbation studies; audit F7: a uniform disk put 75 % of the mass beyond 0.8 km): RADIAL_P of the prior mass inside 0.5 mile,
+# uniform over the area within each zone
+RADIAL_P = float(os.environ.get('RADIAL_P', 0.9)); R_IN = 804.672
+def radial_weight(d):
+    """Per-footprint location weight at distance d [m] (relative; footprints tile the disk uniformly): RADIAL_P / area within R_IN, (1 − RADIAL_P) / annulus area."""
+    a_in = np.pi * R_IN ** 2; a_out = np.pi * (R ** 2 - R_IN ** 2)
+    return np.where(d <= R_IN, RADIAL_P / a_in, (1 - RADIAL_P) / a_out) * a_in / RADIAL_P
 R = 1600.0; NCAND = int(os.environ.get('NCAND', 256)); OUT = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; os.makedirs(OUT, exist_ok=True)
 YEARS = list(range(2000, 2026))
 REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({', '.join(map(str, REGION))})"
@@ -165,7 +173,7 @@ def plot_job(a):
     ar, ac = (rr[m] + r0).astype(np.int32), (cc[m] + c0).astype(np.int32)        # absolute grid row / col of each footprint centre (verifiability)
     if len(d) == 0: return pid, None
     per = F[:, 128:128 + len(YEARS) * (NC + 2)].reshape(len(d), len(YEARS), NC + 2)
-    wr = prior_weights(per, evs, negs); w = wr / wr.sum()
+    wr = prior_weights(per, evs, negs); w = wr * radial_weight(d); w = w / w.sum()      # evidence x radial location prior
     conc = float(np.sort(w)[::-1][:max(1, len(w) // 10)].sum())
     hi = wr >= 4.0; n_hi, mass_hi = int(hi.sum()), float(w[hi].sum())       # localisation on the full disk: footprints POSITIVELY matched (baseline weight 1)
     iw = np.ones(len(d)); keep = np.arange(len(d))
@@ -182,8 +190,9 @@ def decimal_year(md):
     put leap-year Dec-31 visits at the next year)."""
     md = pd.to_datetime(md); return md.dt.year + (md.dt.dayofyear - 0.5) / np.where(md.dt.is_leap_year, 366.0, 365.0)
 def fiadb_visits(fc):
-    """FIADB visits (read-only) with a forested condition: forested area shares relative to the SAMPLED plot area (non-sampled COND_STATUS_CD 5
-    excluded, as in FIA estimation), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
+    """FIADB visits (read-only) with a forested condition: forested shares of the WHOLE plot (fsub / fmic: TPA_UNADJ expands a tree to the whole plot area,
+    so trees per forested area = Σ TPA / f1s — audit 2026-10-26 F8; the earlier f1s / (1 − n5s) made densities low by (1 − n5s)) and of the SAMPLED area
+    (fsub_s, non-sampled COND_STATUS_CD 5 excluded: the visit filter), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
     FV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, p.MEASYEAR my, p.CN cn,
                                any_value(q.MEASYEAR) prev_my,
                                sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
@@ -193,7 +202,8 @@ def fiadb_visits(fc):
                         where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
     nlive = fc.execute(f"select PLT_CN cn, count(*) n from TREE where STATECD in {ST_SQL} and STATUSCD = 1 group by 1").df()
     FV = FV.merge(nlive, on='cn', how='left'); FV['n'] = FV.n.fillna(0); FV['md'] = pd.to_datetime(FV.md)
-    FV['fsub'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, (FV.f1m / (1 - FV.n5m).clip(lower=1e-6)).clip(upper=1.0), FV.fsub)
+    FV['fsub_s'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0)
+    FV['fsub'] = FV.f1s.clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, FV.f1m.clip(upper=1.0), FV.fsub)
     return FV
 def fiadb_events(fc):
     """TRT / DSTRB codes of the forested conditions of every FIADB visit since 2000 (read-only)."""
@@ -248,9 +258,9 @@ if __name__ == '__main__':
     # visits = forested visits with curated tree records + truly bare forested visits (no live tree in FIADB, absent from the curated table) of the same plots
     vt = t[key + ['md']].drop_duplicates(); kp_ = vt[key].drop_duplicates()
     bare = FV[FV.n == 0].merge(kp_, on=key).merge(vt.assign(_in=1), on=key + ['md'], how='left'); bare = bare[bare._in.isna()][key + ['md']]
-    vis = pd.concat([vt, bare]).merge(FV[key + ['md', 'fsub', 'fmic', 'org']], on=key + ['md'], how='left')
+    vis = pd.concat([vt, bare]).merge(FV[key + ['md', 'fsub', 'fsub_s', 'fmic', 'org']], on=key + ['md'], how='left')
     print(f"visits: with curated trees {len(vt)}, bare FIADB visits added {len(bare)}, without a forested FIADB condition {int(vis.fsub.isna().sum())}", flush=True)
-    lowf = vis.fsub < 0.1; print(f"visits with forested share < 0.1 of the sampled area dropped: {int(lowf.sum())}", flush=True)
+    lowf = vis.fsub_s < 0.1; print(f"visits with forested share < 0.1 of the sampled area dropped: {int(lowf.sum())}", flush=True)
     vis = vis[vis.fsub.notna() & ~lowf].sort_values(key + ['md']).reset_index(drop=True); vis['vid'] = np.arange(len(vis))
     vis['year'] = decimal_year(vis.md); t = t.merge(vis[key + ['md', 'vid']], on=key + ['md'])
     t = t.merge(vis[['vid', 'fsub', 'fmic']], on='vid')
@@ -267,7 +277,11 @@ if __name__ == '__main__':
     pairs = vis.sort_values(['pid', 'year']).groupby('pid').apply(lambda x: pd.DataFrame({'v1': x.vid.values[:-1], 'v2': x.vid.values[1:]}), include_groups=False).reset_index(level=0)
     rl = 'GA+FL' if REGION == (12, 13) else f'states {",".join(map(str, REGION))}'
     print(f'{rl}: plots {vis.pid.nunique()} visits {len(vis)} tokens {len(TK)} pairs {len(pairs)} keys {KEYS}', flush=True)
-    pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in {ST_SQL} group by all").df()
+    # plot coordinates from the annual-inventory rows (MEASYEAR >= 2000, the table's visits) only: in Kentucky 1,199 plot keys reuse the number of a
+    # 1986-88 periodic plot several km away (audit 2026-10-26 F1); the spread of a key's rows is reported
+    pl = fc.execute(f"""select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon, (max(LAT) - min(LAT)) * 111.0 + (max(LON) - min(LON)) * 111.0 * cos(radians(avg(LAT))) spread_km
+                         from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000 group by all""").df()
+    print(f"plot coordinates (rows since 2000): keys {len(pl)}, spread of a key's rows > 0.1 km: {int((pl.spread_km > 0.1).sum())}", flush=True)
     P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(land_path())
     tf = Transformer.from_crs(4326, land.crs, always_xy=True); P['x'], P['y'] = tf.transform(P.lon.values, P.lat.values); P = P[P.lat.notna()]
     evs, negs, blocked = fia_records(FE, FV, P, key)
@@ -286,5 +300,5 @@ if __name__ == '__main__':
     vis.to_parquet(f'{OUT}/visits.parquet'); TK.to_parquet(f'{OUT}/tokens.parquet'); pairs.to_parquet(f'{OUT}/pairs.parquet'); P.to_parquet(f'{OUT}/plots.parquet')
     C.to_parquet(f'{OUT}/cands.parquet'); np.save(f'{OUT}/cand_feat.npy', np.concatenate(CF))
     # stand footprints of the mapping set: scripts/g02j_stand_footprints.py (pipeline stage stands_fp; depends on the stand run, not on this table)
-    json.dump(dict(keys=KEYS, years=YEARS, classes=list(CLS), soils=SOILS, nf=NF, radius_m=R, ncand=NCAND, region=list(REGION), aef90=AEF90), open(f'{OUT}/meta.json', 'w'))
+    json.dump(dict(keys=KEYS, years=YEARS, classes=list(CLS), soils=SOILS, nf=NF, radius_m=R, ncand=NCAND, region=list(REGION), aef90=AEF90, radial_p=RADIAL_P, radial_in_m=R_IN), open(f'{OUT}/meta.json', 'w'))
     print(f'done: candidates {len(C)} plots {C.pid.nunique()}; localisation concentration quantiles {np.quantile([v[0] for v in concs.values()], [.1, .5, .9]).round(3)}')

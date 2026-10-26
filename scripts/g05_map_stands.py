@@ -1,6 +1,7 @@
 """Generative vegetation v3 — stand mapping with CONSISTENT landscape descriptors (fix of g04's stand mapping, whose landscapes came from 4 footprints per stand
 and were not comparable with the plots' disks). Per stand, its OWN landscape: the forest footprints (3x3, stride 3) within 1.6 km of the stand's centroid, the
-same uniform 256-subsample as the plots (g02b; seed = stand id), the same descriptor (g04.landscape). (Until 2026-10-22 every stand took the descriptor of the
+a uniform 256-subsample (seed = stand id; the plots' descriptors are inclusion-weighted estimates from their NCAND stratified candidates —
+both estimate the full-disk descriptor, with different noise), the same descriptor (g04.landscape). (Until 2026-10-22 every stand took the descriptor of the
 nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, 2021) (MDN, saved by g04);
 optional likelihood weighting (USE_B=1, B's flow + heads saved by g04 — likelihood only; joint evidence of the stand's footprints = mean AlphaEarth distance); flow to 2025
 through the footprints' disturbance histories with the v2 flow (decoder-consistent; samples spread over the footprints); decode;
@@ -46,7 +47,7 @@ for sid, (cr, cc_) in zip(sids, ctr):
 print(f'stand landscapes {len(XLs)} of {len(sids)} stands ({len(FR)} footprints in the extent)', flush=True)
 order = [int(x) for x in sids if int(x) in XLs]; node_of = {sid: k for k, sid in enumerate(order)}
 np.savez(f'{D}/stand_nodes.npz', nodes=np.array([ctr[list(sids).index(sid)] for sid in order]), XL=np.stack([XLs[sid] for sid in order]))   # for gv_verify_upstream (U8)
-USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []; crows = []
+USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []; crows = []; fND = []
 CAL_N, CAL_D = math.exp(CAL[0]), math.exp((CAL[1] - CAL[0]) / 2)        # cohort calibration: densities by the TPH factor, diameters so that BA gets the BA factor
 NA_ = 16
 keys_ = json.load(open(f'{D}/meta.json'))['keys']
@@ -65,26 +66,34 @@ with torch.no_grad():
             w = torch.exp(-(dm - dm.min()) / TEMP); ESS.append(float(w.sum() ** 2 / (w ** 2).sum()))
         idx = torch.multinomial(w / w.sum(), 16, replacement=True); fpi = [fp[i % len(fp)] for i in range(16)]   # samples spread over the stand's footprints
         st = flow(zs[idx], torch.full((16,), 2021.0), [2025], SD[fpi], SS[fpi]); lp_, val_ = dec(st[2025]); s_ = list(summaries(lp_, val_))
-        # stand cohorts (TreeMap-independent initial state for the simulation engines): per slot (species key x 10-yr age class) the mean over the 16 samples
-        # of the expected density p * N, its quadratic-mean diameter, mean height and crown ratio (density-weighted); calibrated as CAL_N / CAL_D
-        pr_ = torch.sigmoid(calibrated(lp_)); Nn = torch.exp(val_[..., 0].clamp(max=12)) * pr_; Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
-        Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95); Ns = Nn.sum(0)
+        s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]
+        tph_m, ba_m = float(s_[0].median()), float(s_[1].median())
+        # stand cohorts (TreeMap-independent initial state for the simulation engines): ONE plausible stand — the posterior draw closest to the calibrated
+        # median summary (medoid in log TPH / BA / QMD) with its present slots (calibrated presence ≥ 0.5; else its largest slot) — not the ensemble mean
+        # of the 16 draws, which spread every stand over ~13 keys and ~48 cohorts (audit F2) and made the mean-share dominant collapse onto the regional
+        # mode (F3). Its totals are scaled to the calibrated median TPH / BA (one density and one diameter factor; ages, heights, crowns kept).
+        pr_ = torch.sigmoid(calibrated(lp_)); Nr = torch.exp(val_[..., 0].clamp(max=12)); Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
+        Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95)
+        dist_ = sum((torch.log(s_[i].clamp(min=1e-6)) - math.log(max(float(s_[i].median()), 1e-6))) ** 2 for i in range(3)); i_ = int(dist_.argmin())
+        pres = torch.nonzero(pr_[i_] >= 0.5).flatten().tolist() or [int((pr_[i_] * Nr[i_]).argmax())]
         c0_ = len(crows)
-        for j_ in torch.nonzero(Ns / 16 * CAL_N >= 1.0).flatten().tolist():
-            w_ = Nn[:, j_]; sw = float(w_.sum())
-            crows.append(dict(stand_id=int(sid), key=keys_[j_ // NA_], age_class=j_ % NA_, age=float(j_ % NA_ * 10 + 5), tph=sw / 16 * CAL_N,
-                              qmd_cm=math.sqrt(float((w_ * Dd[:, j_] ** 2).sum()) / sw) * CAL_D, ht_m=float((w_ * Hh[:, j_]).sum()) / sw, cr=float((w_ * Cr[:, j_]).sum()) / sw))
-        s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]; comp = s_[4].mean(0)
-        rows.append(dict(stand_id=int(sid), node=int(j), tph=float(s_[0].median()), ba=float(s_[1].median()), qmd=float(s_[2].median()), ba_sd=float(s_[1].std()), dom=int(comp.argmax())))
-        # the cohort table must carry the CALIBRATED stand summary (validated in g04 for the median-of-samples estimator), not the mean of the samples
-        # (audit 2026-10-26 M1: cohort sums were 1.41 x TPH / 1.14 x BA): one density and one diameter factor per stand, composition and ages unchanged
-        ct = sum(c['tph'] for c in crows[c0_:]); cb = sum(c['tph'] * math.pi / 4 * (c['qmd_cm'] / 100) ** 2 for c in crows[c0_:])
-        if ct > 0 and cb > 0 and rows[-1]['tph'] > 0 and rows[-1]['ba'] > 0:
-            fN = rows[-1]['tph'] / ct; fD = math.sqrt((rows[-1]['ba'] / rows[-1]['tph']) / (cb / ct))
+        for j_ in pres:
+            crows.append(dict(stand_id=int(sid), key=keys_[j_ // NA_], age_class=j_ % NA_, age=float(j_ % NA_ * 10 + 5), tph=float(Nr[i_, j_]),
+                              qmd_cm=float(Dd[i_, j_]), ht_m=float(Hh[i_, j_]), cr=float(Cr[i_, j_])))
+        ct = sum(c['tph'] for c in crows[c0_:]); cb = sum(c['tph'] * math.pi / 4 * (c['qmd_cm'] / 100) ** 2 for c in crows[c0_:]); fND.append((math.nan, math.nan))
+        if ct > 0 and cb > 0 and tph_m > 0 and ba_m > 0:
+            fN = tph_m / ct; fD = math.sqrt((ba_m / tph_m) / (cb / ct)); fND[-1] = (fN, fD)
             for c in crows[c0_:]: c['tph'] *= fN; c['qmd_cm'] *= fD
+        kb = {}
+        for c in crows[c0_:]: kb[c['key']] = kb.get(c['key'], 0.0) + c['tph'] * c['qmd_cm'] ** 2
+        dom_ = keys_.index(max(kb, key=kb.get)) if kb else int(s_[4].mean(0).argmax())
+        # GEN_QMD = the QMD of the calibrated TPH / BA (consistent with the cohort table; the median of the samples' QMDs was not: audit F10)
+        rows.append(dict(stand_id=int(sid), node=int(j), tph=tph_m, ba=ba_m, qmd=100 * math.sqrt(ba_m / (tph_m * math.pi / 4)) if tph_m > 0 else 0.0,
+                         ba_sd=float(s_[1].std()), dom=dom_, draw=i_))
 out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3.parquet')
 C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3.parquet')
 _t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()
+_fnd = np.array(fND); print(f'medoid-draw factors fN q05/q50/q95 {np.nanquantile(_fnd[:, 0], [.05, .5, .95]).round(3)}, fD {np.nanquantile(_fnd[:, 1], [.05, .5, .95]).round(3)}', flush=True)
 _o = out.set_index('stand_id'); print(f'stand cohorts: {len(C_)} rows for {C_.stand_id.nunique()} stands (median {int(C_.groupby("stand_id").size().median())} per stand); '
       f'cohort-sum / stand summary median ratio TPH {float((_t / _o.tph.reindex(_t.index)).median()):.3f}, BA {float((_b / _o.ba.reindex(_b.index)).median()):.3f}', flush=True)
 st_ = gpd.read_file(stands_run()['gpkg'], layer='stands', ignore_geometry=True).set_index('stand_id'); d = st_.join(out.set_index('stand_id'), how='inner')

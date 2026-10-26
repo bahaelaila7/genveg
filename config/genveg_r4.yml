@@ -10,11 +10,12 @@ table:                          # g02b_build_gafl: visits, cohort tokens, footpr
   NCAND: 128                    # candidate footprints kept per plot (stratified, inclusion-weighted; 256 for GA+FL — halved for ~3.5x the plots)
   TOPK: 24                      # species keys (top-K, else _S / _H; 16 for GA+FL — Region 4 is more diverse)
   NPROC: 6
+  RADIAL_P: 0.9                 # location prior: share of the mass within 0.5 mile (FIA perturbation; audit F7)
 train:                          # g03b_train_gafl (the same env is passed to g04 / g05 / g06, which load the model through g03b); NT 1: on the shared 8-core box (campaign + AEF90) 1 torch thread beat 2 and 4 (spin-wait contention)
   seeds: [0, 1]
   model_prefix: m_r4            # writes <data>/<model_prefix>_s<seed>.pt
   env: {ARCH: v4, EPOCHS: 14, CURRIC: 4, NT: 1, BATCH: 64, DZ: 32, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
-        W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25}
+        W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5}
 model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
 dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
   eval_loc: [history]
@@ -22,7 +23,7 @@ dynamics:                       # g06_dynamics_check: held-out disturbance-respo
 downscale:                      # g04_bayes_downscale: landscape prior A (MDN) + likelihood B + mapping-path calibration
   env: {NT: 1, EPB: 6, MDN_EP: 60}
 map:                            # g05_map_stands: stand vegetation; one output per USE_B (stand_veg_v3_B<b>.parquet); the LAST one is stand_veg_v3.parquet
-  use_b: [0, 1]
+  use_b: [1, 0]                 # the LAST one is the production map: B0 (prior A only) — the validated path; B1 (stand likelihood) is unvalidated (audit F4)
   env: {NT: 1}
 fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
   area: data/derived/baker_county.gpkg

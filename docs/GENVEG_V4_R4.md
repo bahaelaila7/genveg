@@ -74,3 +74,22 @@ permutation invariance / bare visits, held-out blocks (3.2 km buffer), the Regio
 features, a direct recomputation of 40 plots outside GA+FL, GA+FL default byte-identity. Not changed (documented): an event's jump applies at the end
 of its year (the event year's AlphaEarth state is post-event); 6 Kentucky pairs after 2025 are cut at the end of 2025.
 The models trained before these fixes (gafl_pipe v3, the first v4 runs) were trained with M2 / M3; v4 GA+FL and Region 4 are retrained.
+
+## E. Audit round 2 (2026-10-26, fresh independent Opus review of 79c73b7; findings reproduced before fixing)
+| id | finding | fix |
+|---|---|---|
+| F1 | Kentucky: 1,199 plot keys reuse the number of a 1986-88 periodic plot km away; g02b averaged LAT/LON over all PLOT rows (547 R4 plots > 1.6 km off) | coordinates from the MEASYEAR ≥ 2000 rows; gv_verify T2a0 (a key's rows agree) |
+| F8 | densities divided by the forested share of the SAMPLED area; TPA_UNADJ expands to the whole plot → low by (1 − nonsampled share) (0.5 % / 0.9 % of visits) | per forested area = Σ TPA / f1s (the sampled share stays the visit filter); gv_verify recomputation likewise |
+| F7 | uniform location prior over the 1.6 km disk (75 % of the mass beyond 0.8 km); FIA: perturbed within 1 mile, only a small share beyond 0.5 mile | radial prior RADIAL_P = 0.9 within 0.5 mile (uniform per zone), recorded in meta.json; T3f re-implements it |
+| F6 | remeasurement-pair loss averaged over K candidate histories (22 % of pairs mix stand-replacing and other histories) | mixture (soft-min, T_PAIR = 0.1) as the MIL; flowed-state decoding weighted by the detached posterior |
+| F5 | every seed wrote eval.json / stand_veg.parquet; the direct predictor's geometric-mean estimator was biased low | per-model files (eval_<model>.json, stand_veg_q_<model>.parquet); prior-weighted median |
+| F2/F3 | stand cohort tables = ensemble mean of 16 draws (median 48 cohorts, 13 keys / stand vs FIA 8 / 4); mean-share argmax made 94.5 % of stands PIEL-dominant | one plausible stand: the medoid draw (closest to the calibrated median summary) with its present slots (p ≥ 0.5), scaled to the calibrated TPH / BA; dominant key from that table |
+| F4 | the production map was USE_B = 1 (stand likelihood), unvalidated (no localisation skill; worse TPH) | use_b [1, 0]: B0 (validated prior path) is the production map; B1 kept as an alternative output |
+| F10 | GEN_QMD = median of the samples' QMDs, inconsistent with the calibrated TPH / BA | QMD of the calibrated TPH / BA |
+| F11 | stage hashes ignored outputs: a forced / re-run stage left downstream stages current | each run records an output fingerprint; downstream hashes include it |
+| F14 | g05 docstring ("same uniform subsample as the plots") | corrected |
+Documented, not changed: F9 — the mapping path is calibrated at the visits' dates (mean 2023.9) while g05 maps the end-2025 state; F12 — held-out candidate priors
+use the test plot's own FIA records (stands have none), so localisation-dependent held-out scores are optimistic for stand mapping; F13 — g02g never returns an
+empty consistent set (the "empty set keeps its prior" branch of g03b is unused). FIA also SWAPS up to 20 % of private plots' coordinates with a similar plot of the
+same county: for those plots no footprint within 1.6 km is the plot's — not modelled. The satellite likelihood B shows no localisation skill (audit): the mapped
+stands' composition comes from the landscape prior; whether v4's non-linear heads change that is part of the v3 vs v4 comparison.

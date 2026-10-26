@@ -42,7 +42,7 @@ ORDER = list(STAGES)
 STAND_FILES = dict(clean='clean/land_clean.tif', land='land/land.tif', finalize='finalize/stands.tif')
 # every switch a stage script reads from its environment: never inherited from the shell (an exported AEF90 / REGION / ARCH … would otherwise build or
 # train another region / architecture under this config's hash; audit 2026-10-26 P1) — only the config (top-level env, stage env) sets them
-STAGE_SWITCHES = {'AEF90', 'ARCH', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
+STAGE_SWITCHES = {'AEF90', 'ARCH', 'RADIAL_P', 'T_PAIR', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
                   'GV_SKIP_U8', 'KC', 'LOAD', 'LOC', 'LR', 'MDN_EP', 'MIN_FSHARE', 'MODEL', 'NCAND', 'NPROC', 'NT', 'PAIR_ANCHOR', 'QD_WIN', 'RAD_M', 'REGION',
                   'SEED', 'SEVERITY_ANCHOR', 'STANDS_RUN', 'TAG', 'TOPK', 'USE_B', 'WRITE_LOC', 'W_COMP', 'W_SUM'}
 # Region 4 (AEF90) inputs the table / stand-footprint stages read instead of the stand run's rasters (audit P2): fingerprinted by size + mtime (the
@@ -89,12 +89,26 @@ def main():
     srh = {k: pixel_hash(os.path.join(SR, f)) for k, f in STAND_FILES.items()}          # CONTENT of the stand run's outputs genveg reads
     stf = f'{D}/pipeline_state.json'; state = json.load(open(stf)) if os.path.exists(stf) else {}
     r4h = r4_fingerprint() if str(cfg.get('env', {}).get('AEF90', '0')) == '1' else None
+    # stage hash = its config sections, code, region switches and inputs, and per upstream stage its hash AND the fingerprint of the outputs that run wrote
+    # (state[u]['out']): a re-run or --force of a stage (e.g. a non-deterministic retrain) makes every downstream stage stale (audit 2026-10-26 F11)
     H = {}
-    for st in ORDER:
-        d = STAGES[st]
-        H[st] = hashlib.sha256(json.dumps(dict(stage=st, cfg={k: cfg.get(k) for k in d['cfg']}, data=cfg['data'], code=code_hash(d['code']),
-                                               up={u: H[u] for u in d['up']}, stands={s: srh[s] for s in d['stands']}, **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {})),
-                                          sort_keys=True, default=str).encode()).hexdigest()[:12]      # (optional top-level env: region switches for every stage)
+    def rehash():
+        for st in ORDER:
+            d = STAGES[st]
+            H[st] = hashlib.sha256(json.dumps(dict(stage=st, cfg={k: cfg.get(k) for k in d['cfg']}, data=cfg['data'], code=code_hash(d['code']),
+                                                   up={u: (H[u], state.get(u, {}).get('out')) for u in d['up']}, stands={s: srh[s] for s in d['stands']},
+                                                   **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {})),
+                                              sort_keys=True, default=str).encode()).hexdigest()[:12]
+    rehash()
+    def outputs_since(t0):
+        """Fingerprint of the files a stage wrote in the data dir (name, size, mtime; logs and the pipeline state excluded)."""
+        h = hashlib.sha256()
+        for root, _, fs in os.walk(D):
+            if os.path.abspath(root).startswith(os.path.abspath(LOGD)): continue
+            for f in sorted(fs):
+                fp = os.path.join(root, f); st_ = os.stat(fp)
+                if f != 'pipeline_state.json' and st_.st_mtime >= t0 - 1: h.update(f'{os.path.relpath(fp, D)}:{st_.st_size}:{st_.st_mtime_ns}'.encode())
+        return h.hexdigest()[:12]
     py = [sys.executable, '-I']
     tenv = {k: str(v) for k, v in cfg['train']['env'].items()}
     base_env = dict({k: v for k, v in os.environ.items() if k not in STAGE_SWITCHES}, STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']), **{k: str(v) for k, v in cfg.get('env', {}).items()})
@@ -133,7 +147,8 @@ def main():
     for st in (a.stages or ORDER):
         if st not in STAGES: sys.exit(f'unknown stage {st}')
         if st in adopt:
-            state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how='adopted'); print(f'== {st}: ADOPTED existing outputs as current ({H[st]})'); continue
+            state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how='adopted', out=state.get(st, {}).get('out')); rehash()
+            print(f'== {st}: ADOPTED existing outputs as current ({H[st]})'); continue
         if state.get(st, {}).get('hash') == H[st] and st not in force:
             print(f'== {st}: current ({state[st]["how"]} {state[st]["at"]})'); continue
         stale = [u for u in STAGES[st]['up'] if state.get(u, {}).get('hash') != H[u]]
@@ -144,7 +159,8 @@ def main():
         tail = open(f'{LOGD}/{st}.log').read().strip().splitlines()[-1:] or ['']
         if rc != 0:
             print(f'!! {st} FAILED (exit {rc}): {tail[0][:300]}'); json.dump(state, open(stf, 'w'), indent=1); sys.exit(1)
-        state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s'); json.dump(state, open(stf, 'w'), indent=1)
+        state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s', out=outputs_since(t0)); json.dump(state, open(stf, 'w'), indent=1)
+        rehash()                                                                            # downstream hashes now see this run's outputs
         print(f'   {tail[0][:300]}', flush=True)
     json.dump(state, open(stf, 'w'), indent=1)
 

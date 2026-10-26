@@ -9,7 +9,7 @@ metrics). Derived from g03_train_proto.py, step 2: temporal JEPA model (liquid f
   pairs    FIA remeasurement: flow(z(v1)) along candidate histories CONSISTENT WITH THE PLOT'S FIA RECORDS (TRT / DSTRB between the visits) to v2's
            date ≈ z(v2) (stop-gradient on the target), and decoded ≈ v2's cohorts — the FIA records anchor the disturbance jumps
   decoder  z → cohort slots (species x age class): presence (BCE) + log N, log QMD, H, CR (masked MSE)
-  Q        inverse encoder: candidate features (AlphaEarth 2022 + 2025, disturbance history, soils) → z(2025) (Gaussian) — the mapping model
+  Q        inverse encoder: candidate features (AlphaEarth 2022 + 2025, disturbance history, soils) → z(2025) (Gaussian) — a direct predictor evaluated here; the stand mapping is g04 (landscape prior × likelihood) + g05
 Held-out: plots of 20 % of 10-km blocks. Baseline: kNN on the prior-weighted mean candidate features. Writes data/proto/baker/{model.pt, eval.json, stand_veg.parquet}."""
 import os, sys, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
 SEED = int(os.environ.get('SEED', 0)); torch.manual_seed(SEED); np.random.seed(SEED); torch.set_num_threads(int(os.environ.get('NT', 6)))
@@ -200,6 +200,7 @@ def sample_cands(pids, K):
 _N = torch.exp(slot_v[..., 0]) * slot_p; _D = torch.exp(slot_v[..., 1])
 OBS_T = _N.sum(1); OBS_B = (_N * math.pi / 4 * (_D / 100) ** 2).sum(1); OBS_Q = torch.sqrt((_N * _D ** 2).sum(1) / OBS_T.clamp(min=1e-6))
 _bko = (_N * _D ** 2).view(-1, NK, NA).sum(-1); OBS_S = _bko / _bko.sum(-1, keepdim=True).clamp(min=1e-9)      # observed BA shares by species key
+T_PAIR = float(os.environ.get('T_PAIR', 0.1))   # temperature of the mixture over a pair's candidate histories (per-dimension squared latent distance)
 QD_WIN = float(os.environ.get('QD_WIN', 1.5))     # Q-decode loss: visits within this many years of 2025 (the state Q predicts)
 W_SUM = float(os.environ.get('W_SUM', 1.0)); W_COMP = float(os.environ.get('W_COMP', 1.0)); LQ_MAX = math.log(150.0)                # QMD of a slot <= 150 cm (physical cap, also in g04.summaries)
 # values of ABSENT slots are otherwise untrained, yet enter the expected summaries through their (small) presence probability: pull them toward the
@@ -306,11 +307,15 @@ for ep in range(EP):
             yy = torch.floor(y2).long().clamp(YEARS[0], YEARS[-1]); outs = []
             stp = sorted(set(yy.tolist())); st2 = flow(zz, vyear[v[sel]].repeat_interleave(K), stp, DIST[c2], SOIL[c2], end=y2.repeat_interleave(K))   # state AT v2's date
             fz = torch.stack([st2[int(yy[i // K])][i] for i in range(len(c2))]).view(len(has2), K, D_Z)
-            lpair = ((fz - z2.unsqueeze(1)) ** 2).mean(-1).mean(1).mean()
+            # one of the K candidate histories is the plot's: a MIXTURE over them (soft-min, as the MIL), not their average — averaging trained the flow toward
+            # the history-mean outcome (22 % of the pairs mix stand-replacing and other histories; audit 2026-10-26 F6); the decoding of the flowed state is
+            # weighted by the same (detached) posterior over the histories
+            ep = ((fz - z2.unsqueeze(1)) ** 2).mean(-1)                                     # [pairs, K]
+            lpair = -(torch.logsumexp(-ep / T_PAIR, 1) - math.log(K)).mean() * T_PAIR; wph = torch.softmax(-ep.detach() / T_PAIR, 1)
             # the decoder must read FLOWED states too: decode the flowed z(v1→v2) against v2's observed cohorts (bare v2 after a cut: no presence)
             lp2, val2 = dec(fz.reshape(-1, D_Z)); tp = slot_p[v2].repeat_interleave(K, 0); tv = slot_v[v2].repeat_interleave(K, 0); tm = slot_vm[v2].repeat_interleave(K, 0) * tp.unsqueeze(-1)
             bce2 = bce(lp2, tp, reduction='none').mean(-1); mse2 = (((val2 - tv) ** 2 * tm).sum((-1, -2)) / tm.sum((-1, -2)).clamp(min=1))
-            v2r = v2.repeat_interleave(K); ldecf = (bce2 + mse2 + W_SUM * summ_err(lp2, val2, v2r) + 0.1 * absent_reg(val2, v2r)).view(len(has2), K).mean(1).mean()
+            v2r = v2.repeat_interleave(K); ldecf = ((bce2 + mse2 + W_SUM * summ_err(lp2, val2, v2r) + 0.1 * absent_reg(val2, v2r)).view(len(has2), K) * wph).sum(1).mean()
         else:
             ldecf = torch.tensor(0.0)
         # inverse encoder Q: candidate features → z(2025) (posterior-weighted, stop-gradient)
@@ -347,10 +352,12 @@ def plot_feat(pid):    # prior-weighted mean candidate features (the plot's sate
     cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); return (X * torch.tensor(pr, dtype=torch.float32).unsqueeze(-1)).sum(0)
 with torch.no_grad():
     Xte = torch.stack([plot_feat(vpid[v]) for v in te_last]); Xtr = torch.stack([plot_feat(vpid[v]) for v in tr_last])
-    def pred_plot(pid):   # per-candidate prediction, prior-weighted in log space (TPH, BA, QMD) and by vote (dominant key)
+    def wmedian(x, w):    # weighted median (the geometric mean of the per-candidate predictions was biased low: audit F5b)
+        o = torch.argsort(x); cw = torch.cumsum(w[o], 0); return x[o][torch.searchsorted(cw, cw[-1] * 0.5).clamp(max=len(x) - 1)]
+    def pred_plot(pid):   # per-candidate prediction, prior-weighted median (TPH, BA, QMD) and by vote (dominant key)
         cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); qm_, _ = qn(X); s_ = summaries(*dec(qm_)); w_ = torch.tensor(pr, dtype=torch.float32)
         comp = (s_[4] * w_.unsqueeze(-1)).sum(0)
-        return [torch.exp((torch.log(s_[i] + 1e-3) * w_).sum()) for i in range(3)] + [comp.argmax(), comp]
+        return [wmedian(s_[i], w_) for i in range(3)] + [comp.argmax(), comp]
     pp = [pred_plot(vpid[v]) for v in te_last]; m_t = [torch.stack([p_[i] for p_ in pp]) for i in range(5)]; o_t = obs_summ(torch.tensor(te_last))
     # kNN baseline (k = 5) in standardised feature space on the training plots' last visits
     # feature groups (AlphaEarth, disturbance history, soils) each scaled to unit total variance: per-dimension z-scores would blow up rare disturbance dims
@@ -391,7 +398,8 @@ with torch.no_grad():
         loc.append((post[hi_].sum(), iw_[hi_].sum() / iw_.sum()))
     if loc:
         a = np.array(loc); ev['localisation'] = {'plots': len(a), 'posterior_mass_on_event_matching_candidates': float(a[:, 0].mean()), 'their_share_of_candidates': float(a[:, 1].mean())}
-print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/eval.json', 'w'), indent=1)
+_mstem = os.path.splitext(os.environ.get('MODEL', 'model.pt'))[0]                      # per-model outputs (every seed wrote eval.json: audit F5a)
+print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/eval_{_mstem}.json', 'w'), indent=1)
 # ---------------- map Baker stands: K_S samples per footprint → cohort slots → stand summaries (mean of footprints)
 S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
 with torch.no_grad():
@@ -403,5 +411,5 @@ with torch.no_grad():
 S['tph'] = R_[:, :, 0].mean(0).numpy(); S['ba'] = R_[:, :, 1].mean(0).numpy(); S['qmd'] = R_[:, :, 2].mean(0).numpy()
 S['ba_sd'] = R_[:, :, 1].std(0).numpy(); S['dom'] = torch.mode(R_[:, :, 3].long(), 0).values.numpy()
 out = S.groupby('stand_id').agg(tph=('tph', 'mean'), ba=('ba', 'mean'), qmd=('qmd', 'mean'), ba_sd=('ba_sd', 'mean'), dom=('dom', lambda x: x.mode().iloc[0])).reset_index()
-out['dom_key'] = [M['keys'][int(i)] for i in out.dom]; out.to_parquet(f'{D}/stand_veg.parquet')
+out['dom_key'] = [M['keys'][int(i)] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_q_{_mstem}.parquet')     # (the direct Q predictor; the stand map is g05)
 print('stands mapped', len(out), out[['tph', 'ba', 'qmd', 'ba_sd']].describe().loc[['mean', '50%']].round(2).to_dict(), out.dom_key.value_counts().head(6).to_dict())

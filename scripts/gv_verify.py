@@ -42,11 +42,12 @@ _nl = _fx.execute(f"select PLT_CN pcn, count(*) nl from TREE where STATECD in {S
 _f = _cc.assign(sp1=np.where(_cc.cs == 1, _cc.sp, 0), sp5=np.where(_cc.cs == 5, _cc.sp, 0), mp1=np.where(_cc.cs == 1, _cc.mp, 0), mp5=np.where(_cc.cs == 5, _cc.mp, 0),
                 org1=np.where(_cc.cs == 1, _cc.org, np.nan)).groupby(['pcn'] + key + ['ds']).agg(sp1=('sp1', 'sum'), sp5=('sp5', 'sum'), mp1=('mp1', 'sum'), mp5=('mp5', 'sum'), org=('org1', 'max')).reset_index()
 _f = _f.merge(_nl, on='pcn', how='left').fillna({'nl': 0}); _f = _f[_f.sp1 > 0]
-_f['fs'] = np.minimum(_f.sp1 / (1 - _f.sp5), 1.0); _f['fm'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1 / (1 - _f.mp5), 1.0), _f.fs)
+_f['fs'] = np.minimum(_f.sp1 / (1 - _f.sp5), 1.0); _f['fm'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1 / (1 - _f.mp5), 1.0), _f.fs)      # shares of the SAMPLED area (visit filter)
+_f['fsw'] = np.minimum(_f.sp1, 1.0); _f['fmw'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1, 1.0), _f.fsw)          # shares of the WHOLE plot: TPA_UNADJ expands to it (densities)
 T['ds'] = T.md.dt.strftime('%Y-%m-%d'); T = T.merge(_cc[key + ['ds', 'cond', 'cs']], on=key + ['ds', 'cond'], how='left'); nT = len(T); T = T[T.cs == 1]
 _tv = T[key + ['ds']].drop_duplicates(); _bare = _f[_f.nl == 0].merge(_tv[key].drop_duplicates(), on=key).merge(_tv.assign(_i=1), on=key + ['ds'], how='left')
 _bare = _bare[_bare._i.isna()][key + ['ds']]
-EX = pd.concat([_tv, _bare]).merge(_f[key + ['ds', 'fs', 'fm', 'org']], on=key + ['ds'], how='inner'); EX = EX[EX.fs >= 0.1]
+EX = pd.concat([_tv, _bare]).merge(_f[key + ['ds', 'fs', 'fm', 'fsw', 'fmw', 'org']], on=key + ['ds'], how='inner'); EX = EX[EX.fs >= 0.1]
 EX['md'] = pd.to_datetime(EX.ds); EX = EX.sort_values(key + ['md']).reset_index(drop=True); EX['vid'] = np.arange(len(EX)); EX['year'] = EX.md.dt.year + (EX.md.dt.dayofyear - 0.5) / np.where(EX.md.dt.is_leap_year, 366.0, 365.0)
 check('T1a visit set = curated forested-condition visits ∪ bare FIADB visits, share >= 0.1 (rebuilt from FIADB)', len(EX) == len(V),
       f'independent {len(EX)} (bare {len(_bare)}) table {len(V)}; non-forest-condition tree records {nT - len(T)}')
@@ -55,7 +56,7 @@ check('T1c visit ids reproduce (sorted plot, date order)', len(EX) == len(V) and
 T = T.merge(EX[key + ['ds', 'vid', 'fs', 'fm']], on=key + ['ds']); Ts = T[T.vid.isin(samp.vid)]
 live = Ts[(Ts.status == 1) & (Ts.dia > 0) & (Ts.tpa > 0) & (Ts.age > 0) & (Ts.ht > 0)].copy()
 live['key'] = [KEYS.index(s) if s in top else KEYS.index('_' + (g if g in ('S', 'H') else 'H')) for s, g in zip(live.sym, live.grp)]
-live['share'] = np.where(live.dia < 5, live.fm, live.fs)
+live['share'] = np.where(live.dia < 5, live.fmw, live.fsw)
 live['ac'] = np.clip((live.age // 10).astype(int), 0, 15); live['w'] = live.tpa * 2.47105 / live.share; live['D'] = live.dia * 2.54; live['H'] = live.ht * 0.3048
 print(f'   (sampled visits with forested share < 0.95: {(live.groupby("vid").fs.first() < 0.95).mean():.3f})')
 agg = live.groupby(['vid', 'key', 'ac']).apply(lambda x: pd.Series({'N': x.w.sum(), 'QMD': math.sqrt((x.w * x.D ** 2).sum() / x.w.sum()), 'H': (x.w * x.H).sum() / x.w.sum()}), include_groups=False).reset_index()
@@ -82,9 +83,13 @@ check('T1j FIADB forested visits of our plots that are absent from the table (ba
       f'missing {nm} of {len(inplots)}; forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
 # ======================= T2 plot coordinates
 fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
-pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in {ST_SQL} group by all").df()
+pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, MEASYEAR my, LAT lat, LON lon from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000").df()
+_sp = pl.groupby(key).agg(la0=('lat', 'min'), la1=('lat', 'max'), lo0=('lon', 'min'), lo1=('lon', 'max')).reset_index()
+check('T2a0 a plot key\'s annual-inventory rows (MEASYEAR >= 2000) agree on the coordinates (< 0.2 km)', ((_sp.la1 - _sp.la0) * 111 < 0.2).mean() > 0.999 and ((_sp.lo1 - _sp.lo0) * 92 < 0.2).mean() > 0.999,
+      f'{len(_sp)} keys; spread > 0.2 km: {int((((_sp.la1 - _sp.la0) * 111 >= 0.2) | ((_sp.lo1 - _sp.lo0) * 92 >= 0.2)).sum())}')
+pl = pl.groupby(key).agg(lat=('lat', 'mean'), lon=('lon', 'mean')).reset_index()
 m = P.merge(pl, on=key, suffixes=('', '_f'))
-check('T2a plot lat/lon = FIADB PLOT mean', np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f), f'n {len(m)}')
+check('T2a plot lat/lon = FIADB PLOT mean of the annual-inventory rows', np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f), f'n {len(m)}')
 land = rasterio.open(LAND); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
 check('T2b projected x/y (EPSG:5070) recomputed', np.allclose(x, m.x, atol=1e-3) and np.allclose(y, m.y, atol=1e-3))
 if AEF90:          # point in the state's polygon (TIGER counties dissolved), 2 km tolerance (FIA coordinate fuzz)
@@ -212,8 +217,10 @@ for pid, g in Cs.groupby('pid'):
     for a, b in per_:
         a, b = max(a - 2000, 0), min(b - 2000, NY - 1)
         if b >= a: w = w * np.where(srv[:, a:b + 1].any(1), 0.25, 1.0); nneg += 1
-    q = g.prior.values / (w * g.incl_w.values); ratios.append(q.max() / q.min()); REC[pid] = (cl, per_)
-check('T3f prior ∝ (clustered typed FIA events x FIA-protocol negative evidence) x incl_w — re-implemented from the spec on FIADB COND', max(ratios) < 1 + 2e-3,
+    # radial location prior (FIA perturbation: RADIAL_P of the mass within 0.5 mile, uniform per zone; written out from the spec, not imported)
+    rp_ = float(M.get('radial_p', 0.9)); rad = np.where(g.dist_m.values <= 804.672, rp_ / (np.pi * 804.672 ** 2), (1 - rp_) / (np.pi * (1600.0 ** 2 - 804.672 ** 2)))
+    q = g.prior.values / (w * rad * g.incl_w.values); ratios.append(q.max() / q.min()); REC[pid] = (cl, per_)
+check('T3f prior ∝ (clustered typed FIA events x FIA-protocol negative evidence) x radial location prior x incl_w — re-implemented from the spec on FIADB COND', max(ratios) < 1 + 2e-3,
       f'{len(ratios)} plots ({ncl} event clusters, {nneg} negative periods), max ratio spread {max(ratios):.5f}')
 # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose stand-replacing evidence falls in 2023-2025
 smp = np.sort(rng.choice(len(C), 200000, replace=False)); XX = np.asarray(CF[smp], dtype=np.float32)
