@@ -65,10 +65,11 @@ def stand_offset(sr):
     lt, stt = _S['land'].transform, sr.transform; fr, fc = (lt.f - stt.f) / 30, (stt.c - lt.c) / 30; dR, dC = round(fr), round(fc)
     assert abs(fr - dR) < 1e-6 and abs(fc - dC) < 1e-6 and dR % 3 == 0 and dC % 3 == 0, 'stand raster not on the 90 m lattice of the feature grid'
     return dR, dC
-def feats(r0, c0, h, w):
+def feats(r0, c0, h, w, keep_all=False):
+    """Footprint features of the stride-3 centres of a window (forest-land centres only; keep_all: every centre — g02j's 90 m sliver blocks)."""
     s = _S; win = Window(c0, r0, w, h)
     L = s['land'].read(1, window=win, boundless=True, fill_value=0)
-    rr, cc = np.mgrid[1:h - 1:3, 1:w - 1:3]; rr, cc = rr.ravel(), cc.ravel(); ok = (L[rr, cc] >= 1) & (L[rr, cc] <= 4); rr, cc = rr[ok], cc[ok]
+    rr, cc = np.mgrid[1:h - 1:3, 1:w - 1:3]; rr, cc = rr.ravel(), cc.ravel(); ok = (L[rr, cc] >= 1) & (L[rr, cc] <= 4) | keep_all; rr, cc = rr[ok], cc[ok]
     if len(rr) == 0: return rr, cc, np.zeros((0, NF), np.float32)
     HL = s['h'].read(1, window=win, boundless=True, fill_value=0); DS = np.stack([s['d'][y].read(1, window=win, boundless=True, fill_value=0) for y in YEARS])
     if AEF90:                          # 90 m rasters: footprint (3x3 block) j of the window = 90 m pixel (r0 // 3 + j); r0, c0 multiples of 3, centres = 1 mod 3

@@ -24,8 +24,10 @@ if __name__ == '__main__':
         yy, xx = np.nonzero(SR == s_)
         if len(yy) == 0: continue
         k = np.argmin((yy - yy.mean()) ** 2 + (xx - xx.mean()) ** 2); r_, c_ = int(yy[k]) + r0, int(xx[k]) + c0
-        if B.AEF90: r_, c_ = 3 * (r_ // 3) + 1, 3 * (c_ // 3) + 1          # (AEF90: the 90 m block holding that pixel)
-        rr1, cc1, F1 = B.feats(r_ - 1 + dR, c_ - 1 + dC, 3, 3)               # the centre of a 3 x 3 window = that pixel (if forest land)
+        if B.AEF90:   # the 90 m block holding that (forest-land, in-stand) pixel, whatever its centre pixel is; the stored position stays the stand pixel
+            rr1, cc1, F1 = B.feats(3 * (r_ // 3) + dR, 3 * (c_ // 3) + dC, 3, 3, keep_all=True)
+        else:
+            rr1, cc1, F1 = B.feats(r_ - 1 + dR, c_ - 1 + dC, 3, 3)           # the centre of a 3 x 3 window = that pixel (if forest land)
         if len(rr1): fr.append(r_); fc.append(c_); Fx.append(F1[0]); sx.append(s_)
     print(f'sliver stands given a footprint at their central pixel: {len(sx)}', flush=True)
     for f in ('stands.parquet', 'stand_feat.npy'):
