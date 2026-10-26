@@ -72,13 +72,16 @@ if AEF90:
               dm=rasterio.open(f'{ROOT}/data/r4/hansen_datamask.tif'), aoi=rasterio.open(f'{ROOT}/data/grid/aoi_r4_mask90.tif'))
     tmC = rasterio.open(WS + '/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif'); evC = rasterio.open(f'{ROOT}/data/landfire/raw/LF2022_EVT_CONUS/Tif/LF2022_EVT_CONUS.tif')
     conf4 = {}; n4 = 0
-    while n4 < 4000:
-        r, c = int(rng.integers(0, G4['height'])), int(rng.integers(0, G4['width']))
-        if not s4['aoi'].read(1, window=Window(c // 3, r // 3, 1, 1))[0, 0]: continue
+    am = s4['aoi'].read(1); ia = np.flatnonzero(am.ravel() == 1); del am           # AOI 90 m pixels -> a random 30 m pixel inside each sampled block
+    pk = rng.choice(ia, 4000, replace=False); P4 = [(3 * (q // G49['width']) + int(rng.integers(0, 3)), 3 * (q % G49['width']) + int(rng.integers(0, 3))) for q in pk]
+    P4.sort()                                                                          # row order: the strip-organised TreeMap CONUS re-uses its decoded rows
+    def px(src, x_, y_, fill):                                                         # one pixel by coordinates (plain window read; boundless reads build a VRT: slow)
+        r_, c_ = src.index(x_, y_)
+        return src.read(1, window=Window(c_, r_, 1, 1))[0, 0] if 0 <= r_ < src.height and 0 <= c_ < src.width else fill
+    for r, c in P4:
         n4 += 1; x_, y_ = TR4 * (c + 0.5, r + 0.5)
         v = {k: s_.read(1, window=Window(c, r, 1, 1))[0, 0] for k, s_ in s4.items() if k != 'aoi'}
-        rt, ct = tmC.index(x_, y_); re_, ce_ = evC.index(x_, y_)
-        tmv = tmC.read(1, window=Window(ct, rt, 1, 1), boundless=True, fill_value=0)[0, 0]; e = int(evC.read(1, window=Window(ce_, re_, 1, 1), boundless=True, fill_value=-1)[0, 0])
+        tmv = px(tmC, x_, y_, 0); e = int(px(evC, x_, y_, -1))
         tm_ok = int(tmv) > 0 and (tmC.nodata is None or tmv != tmC.nodata); ex = bool(excl4.get(e, False))
         ly = int(v['loss']); ly = 2000 + ly if 0 < ly < 100 else 0; tcv = 0 if int(v['tc']) == 255 else int(v['tc'])
         former = tcv >= flr['treecover2000_min']; recent = ly >= flr['recent_loss_from']; older = 0 < ly < flr['recent_loss_from']
