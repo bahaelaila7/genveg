@@ -50,16 +50,22 @@ _S = {}
 def init():
     codes = pd.read_csv(f'{ROOT}/data/landfire/dist/dist_codes.csv')
     cid = {t_: i + 1 for i, (c_, ts) in enumerate(CLS.items()) for t_ in ts}
-    SEV = {'Low': 1, 'Low-Medium': 1.5, 'Medium-Low': 1.5, 'Medium': 2, 'Medium-High': 2.5, 'High-Medium': 2.5, 'High': 3}
+    # severity scale 1-3; the 2013-14 / 2024-25 products say 'Moderate' for Medium (audit r7 I1: 36-39 % of their disturbed pixels fell back to Low);
+    # 'No Severity' (no rating assigned) = the neutral Medium; a classed code with any other label is an error, not a silent Low
+    SEV = {'Low': 1, 'Unburned/Low': 1, 'Low-Medium': 1.5, 'Medium-Low': 1.5, 'Low-Moderate': 1.5, 'Moderate-Low': 1.5, 'Medium': 2, 'Moderate': 2,
+           'No Severity': 2, 'Medium-High': 2.5, 'High-Medium': 2.5, 'Moderate-High': 2.5, 'High-Moderate': 2.5, 'High': 3}
     lut = {}
     for r in codes.itertuples():
         typ = str(r.DIST_TYPE).strip(); c_ = cid.get(typ, 0); de = ' '.join(str(getattr(r, 'DESCRIPTION', '')) .split() + str(getattr(r, 'DESCRIPTIO', '')).split())
         if typ == 'Unknown' and ('indicates burned' in de or 'burn probability is 95% or greater' in de or 'most likely fire' in de): c_ = cid['Wildfire']
         if 'Green' in str(r.SEVERITY): c_ = 0                    # 'Increased Green' = post-fire greening, not a disturbance
+        if str(r.SEVERITY).strip() in ('Water', 'Nodata/Non-processing mask'): c_ = 0   # water / unmapped pixels inside a fire perimeter: no disturbance
         # event calendar year: the 2024 / 2025 products are fiscal-year files whose codes carry CALENDAR_YR (Oct-Dec belong to the previous year); otherwise the
         # file year — NOT DIST_YEAR: the 2008 table labels 135 of 215 codes 2009, but their pixels carry Hansen loss in 2008 (25.5 %), not 2009 (1.8 %)
         ey = int(r.CALENDAR_YR) if pd.notna(getattr(r, 'CALENDAR_YR', np.nan)) else int(r.year)
-        lut[(int(r.year), int(r.VALUE))] = (c_, SEV.get(str(r.SEVERITY).strip(), 1.0), ey)
+        sv_ = 'No Severity' if pd.isna(r.SEVERITY) else str(r.SEVERITY).strip()   # (the 2008 codes 910-1080 carry no severity: neutral, as 'No Severity')
+        if c_ > 0 and sv_ not in SEV: raise ValueError(f'LANDFIRE {r.year} code {r.VALUE} ({typ}): unmapped severity {sv_!r}')
+        lut[(int(r.year), int(r.VALUE))] = (c_, SEV.get(sv_, 0.0), ey)
     if AEF90:
         _S.update(lut=lut, land=rasterio.open(land_path()), d={y: rasterio.open(f'{ROOT}/data/r4/dist/dist_{y}.tif') for y in YEARS},
                   h=rasterio.open(f'{ROOT}/data/r4/hansen_lossyear.tif'), a22=rasterio.open(f'{ROOT}/data/aef90/aef90_2022.tif'),
@@ -231,8 +237,11 @@ def fia_records(FE, FV, P, key):
                 if kind and pd.notna(yr) and 2000 <= yr <= 2025 and k_ in pidk: evs.setdefault(pidk[k_], set()).add((kind, int(yr)))
     for k_, g_ in FV.sort_values('md').groupby(key):
         if k_ not in pidk: continue
-        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []
+        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []; fs_ = g_.f1s.values
         for j in range(len(yrs)):
+            # a forest -> non-forest (or non-sampled) conversion of >= 1/4 of the plot since the previous forested visit carries no TRT / DSTRB code
+            # (codes live on forested conditions only): it can hide a clearing, so it blocks like a hiding code (audit r7 M1)
+            if j > 0 and fs_[j - 1] - fs_[j] >= 0.25: blocked.add((k_, pd.Timestamp(mds[j])))
             if (k_, pd.Timestamp(mds[j])) in blocked: continue
             # the visit's codes cover the period since FIA's PREVIOUS measurement (PREV_PLT_CN, any status): a non-forest / non-sampled visit in between
             # shortens it (audit r6 M1); the later of that and the previous forested visit is used

@@ -67,6 +67,16 @@ check('T1e token N / QMD / H equal (rtol 1e-6)', np.allclose(b.N, b.N_ind, rtol=
       f'max rel N {np.max(np.abs(b.N / b.N_ind - 1)):.2e} QMD {np.max(np.abs(b.QMD / b.QMD_ind - 1)):.2e}')
 emp = set(samp.vid) - set(live.vid); tkv = set(TK[TK.vid.isin(samp.vid)].vid)
 check('T1f visits without qualifying live trees have no tokens (and are kept)', not (emp & tkv) and emp <= set(V.vid), f'empty in sample {len(emp)}')
+# T1k (audit r7 M2: T1f is circular): every table visit WITHOUT cohort tokens has no live FIADB tree (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on a forested
+# condition — else the curated table lost live trees and the "bare" visit is a false clear-cut target
+_lv = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, count(*) n
+                      from TREE t join PLOT p on p.CN = t.PLT_CN join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID
+                      where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df()
+LIVE = {(int(a), int(b), int(c_), int(d), int(k)): int(n) for a, b, c_, d, k, n in zip(_lv.st, _lv.u, _lv.c, _lv.p, _lv.vk, _lv.n) if pd.notna(k)}
+_bare = V[~V.vid.isin(set(TK[TK.N > 0].vid.astype(int)))]; _md = pd.to_datetime(_bare.md)
+_nl = np.array([LIVE.get((int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)), 0) for a, b, c_, d, m in zip(_bare.st, _bare.u, _bare.c, _bare.p, _md)])
+check('T1k bare table visits (no cohort tokens) have no live FIADB trees on their forested conditions (<= 1 %)', len(_nl) == 0 or (_nl > 0).mean() <= 0.01,
+      f'{len(_nl)} bare visits, with FIADB live trees {int((_nl > 0).sum())} ({(_nl > 0).mean() if len(_nl) else 0:.3f}), median live trees there {int(np.median(_nl[_nl > 0])) if (_nl > 0).any() else 0}')
 ba_ind = live.groupby('vid').apply(lambda x: (x.tpa / x.share * 0.005454154 * x.dia ** 2).sum() * 0.229568, include_groups=False)
 tt = TK[TK.vid.isin(ba_ind.index)]; ba_tok = tt.groupby('vid').apply(lambda x: (x.N * math.pi / 4 * (x.QMD / 100) ** 2).sum(), include_groups=False)
 check('T1g plot BA per forested area (FIA formula ft2/ac -> m2/ha) = BA from tokens', np.allclose(ba_ind.sort_index(), ba_tok.reindex(ba_ind.index).values, rtol=1e-6), f'n {len(ba_ind)}')
@@ -148,24 +158,29 @@ codes['desc'] = (codes.DESCRIPTION.fillna('') + ' ' + codes.DESCRIPTIO.fillna(''
 codes['ey'] = codes.CALENDAR_YR.fillna(codes.year).astype(int)
 def cls_of(r):
     t = str(r.DIST_TYPE).strip()
-    if 'Green' in str(r.SEVERITY): return None
+    if 'Green' in str(r.SEVERITY) or str(r.SEVERITY).strip() in ('Water', 'Nodata/Non-processing mask'): return None
     if t == 'Unknown' and any(p in r.desc for p in ('indicates burned', 'burn probability is 95% or greater', 'most likely fire')): t = 'Wildfire'
     return next((i for i, k in enumerate(CLS) if t in cmap[k]), None)
+# severity 1-3 of the LANDFIRE labels (Medium = Moderate in the 2013-14 / 2024-25 products; no rating = neutral 2)
+SEVS = {'Low': 1, 'Unburned/Low': 1, 'Low-Medium': 1.5, 'Medium-Low': 1.5, 'Low-Moderate': 1.5, 'Moderate-Low': 1.5, 'Medium': 2, 'Moderate': 2, 'No Severity': 2,
+        'Medium-High': 2.5, 'High-Medium': 2.5, 'Moderate-High': 2.5, 'High-Moderate': 2.5, 'High': 3}
+_sv = lambda r: SEVS['No Severity'] if pd.isna(r.SEVERITY) else SEVS[str(r.SEVERITY).strip()]
 lk = {(int(r.year), int(r.VALUE)): (cls_of(r), int(r.ey)) for r in codes.itertuples()}
+lks = {(int(r.year), int(r.VALUE)): _sv(r) for r in codes.itertuples() if cls_of(r) is not None}
 print(f"   (fiscal-year codes placed in the previous calendar year: {sum(1 for (fy, _), (c_, ey) in lk.items() if c_ is not None and ey != fy)})")
 hl = rasterio.open(HANSP); LF = {yr: rasterio.open(DISTP(yr)) for yr in YEARS}; bad = 0; nev = 0; nh = 0; maxd = 0
 for (r, c), xrow in zip(zip(sub.row[:150], sub.col[:150]), X[:150]):
-    per = xrow[128:128 + NY * (NC + 2)].reshape(NY, NC + 2); hw = hl.read(1, window=Window(c - 1, r - 1, 3, 3)); exp = np.zeros((NY, NC))
+    per = xrow[128:128 + NY * (NC + 2)].reshape(NY, NC + 2); hw = hl.read(1, window=Window(c - 1, r - 1, 3, 3)); exp = np.zeros((NY, NC)); esv = np.zeros(NY)
     for yr in YEARS:
         win = LF[yr].read(1, window=Window(c - 1, r - 1, 3, 3))
         for code in win.ravel():
             if code > 0:
                 c_, ey = lk.get((yr, int(code)), (None, yr))
-                if c_ is not None and YEARS[0] <= ey <= YEARS[-1]: exp[ey - YEARS[0], c_] += 1 / 9
+                if c_ is not None and YEARS[0] <= ey <= YEARS[-1]: exp[ey - YEARS[0], c_] += 1 / 9; esv[ey - YEARS[0]] = max(esv[ey - YEARS[0]], lks[(yr, int(code))])
     exp = np.minimum(exp, 1); he = np.array([((hw == yr - 2000) & (hw > 0)).sum() / 9 for yr in YEARS])
-    dd_ = max(np.abs(per[:, :NC] - exp).max(), np.abs(per[:, NC + 1] - he).max()); maxd = max(maxd, dd_); bad += int(dd_ > 2e-3)
+    dd_ = max(np.abs(per[:, :NC] - exp).max(), np.abs(per[:, NC + 1] - he).max(), np.abs(per[:, NC] - esv).max() / 3); maxd = max(maxd, dd_); bad += int(dd_ > 2e-3)
     nev += int((exp > 0).sum()); nh += int((he > 0).sum())
-check('T3e disturbance fractions (3x3) at the event calendar year (LANDFIRE) and Hansen fractions = direct raster lookups', bad == 0,
+check('T3e disturbance fractions (3x3) and severity (max) at the event calendar year (LANDFIRE) and Hansen fractions = direct raster lookups', bad == 0,
       f'150 candidates x {NY} years, class-years with evidence {nev}, Hansen-years {nh}, max |Δ| {maxd:.1e}, candidates off {bad}')
 # --- prior: re-implemented from the SPECIFICATION (not the code): FIADB COND events by type, records of one physical event (years chaining within 2 yr)
 #     merged into one cluster (union of evidence and windows, max likelihood ratio, ×2 for a cut matched by a harvest class); negative periods per FIA
@@ -191,6 +206,16 @@ evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
 _pm = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk
                       from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
 PREVK = {(int(a), int(b), int(c), int(d), int(k)): (int(q) if pd.notna(q) else None) for a, b, c, d, k, q in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.pvk)}
+# forest -> non-forest conversion: the forested share of the plot (COND_STATUS_CD 1 SUBPPROP_UNADJ) fell by >= 0.25 since the previous forested visit —
+# no TRT / DSTRB code can record it (codes are on forested conditions), so the visit hides possible clearing
+_fs = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
+                             sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1
+                      from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()
+_fs = _fs[_fs.f1 > 0].sort_values(['st', 'u', 'c', 'p', 'vk']); CONV = set()
+for k4, g4 in _fs.groupby(['st', 'u', 'c', 'p']):
+    f_, v_ = g4.f1.values, g4.vk.values
+    for j in range(1, len(f_)):
+        if f_[j - 1] - f_[j] >= 0.25: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
 ratios, nneg, ncl = [], 0, 0; REC = {}
 for pid, g in Cs.groupby('pid'):
     k_ = tuple(int(v) for v in Pi.loc[pid][key]); e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]
@@ -202,6 +227,7 @@ for pid, g in Cs.groupby('pid'):
             if pd.isna(cd) or cd <= 0: continue
             if t_ == 'T' or int(cd) not in HARMLESS: hiding.add(r.vk)
             if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025: recs.add((int(yr), t_, int(cd)))
+        if pd.notna(r.vk) and k_ + (int(r.vk),) in CONV: hiding.add(r.vk)
     cl = []                                       # chain records by year (gap <= 2)
     for yr, t_, cd in sorted(recs):
         cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if k == 'H' else ix[k] for k in cols_}
@@ -322,6 +348,8 @@ with torch.no_grad():
     dm = torch.zeros(1, NY, NC + 2); dm[0, 2014 - 2000, 0] = 1; zm = torch.zeros(1, Dz); sm = torch.zeros(1, ns_['SOIL'].shape[1]); T_, F_ = torch.tensor([True]), torch.tensor([False])
     e_no = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]))[2014]; e_re = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]), re=T_)[2014]
     s_no = flow(zm, torch.tensor([2014.2]), [2014], dm, sm)[2014]; s_rs = flow(zm, torch.tensor([2014.2]), [2014], dm, sm, rs=T_)[2014]
+    s_ra = flow(zm, torch.tensor([2014.7]), [2014], dm, sm, ra=T_)[2014]; s_late = flow(zm, torch.tensor([2014.7]), [2014], dm, sm)[2014]
+    s_0b = flow(zm, torch.tensor([2014.7]), [2014], torch.zeros_like(dm), sm)[2014]
     s_0 = flow(zm, torch.tensor([2014.2]), [2014], torch.zeros_like(dm), sm)[2014]; e_0 = flow(zm, torch.tensor([2010.2]), [2014], torch.zeros_like(dm), sm, end=torch.tensor([2014.3]))[2014]
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1                    # the same rule with the production switches (the clock dimension excluded)
 fP = type(ns_['flow'])()
@@ -333,7 +361,7 @@ with torch.no_grad():
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = False, False, ns_['D_Z']
 prod_ok = (q_no - q_0).abs().max() < 1e-7 and abs((q_re - q_0).abs().mean().item() - math.tanh(1.0)) < 1e-5
 check('T4m flow visit-year rule (base and production switches): re applies the end visit\'s own-year event before a first-half end; rs suppresses the start visit\'s recorded own-year event',
-      prod_ok and
+      prod_ok and (s_late - s_0b).abs().max() < 1e-7 and abs((s_ra - s_0b).abs().mean().item() - math.tanh(1.0)) < 1e-5 and
       (e_no - e_0).abs().max() < 1e-7 and abs((e_re - e_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and abs((s_no - s_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and (s_rs - s_0).abs().max() < 1e-7)
 # T4k site attractor (SITE_ATTR) and age clock (AGE_CH): an independently-built flow with both switches on (module globals of the exec'd g03b)
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1
@@ -391,7 +419,7 @@ check('T6a stand footprints lie in their stand (stands.tif)', (sid_chk == ssub.s
 dR6, dC6 = G2.stand_offset(sraster)          # (AEF90: the feature grid is grid_r4)
 e25s = np.stack([aef_fp(a25, r + dR6, c + dC6) for r, c in zip(ssub.row, ssub.col)])
 check('T6b stand footprint AlphaEarth 2025 = mosaic 3x3 mean' + (' (AEF90: the 90 m pixel)' if AEF90 else ''), np.abs(e25s - Xs[:, 64:128]).max() < 2e-3, f'max abs err {np.abs(e25s - Xs[:, 64:128]).max():.2e}')
-check('T6c unit conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', abs(1 / 0.229568 - 4.356) < 1e-3 and abs(2.47105 - 2.471) < 1e-3)
+# (T6c removed, audit r7 M3: it compared two constants; the FE conversions are tested on the written layer by T11)
 # ======================= T7 downstream keys (pid is a row number of THIS table)
 LS = pd.read_parquet(f'{D}/localisation.parquet'); jl = LS.join(P.set_index('pid')[key], rsuffix='_t')
 check('T7a localisation rows carry the same FIA plot identity as plots.parquet', all((jl[k] == jl[k + '_t']).all() for k in key) and len(LS) == C.pid.nunique(), f'{len(LS)} plots')
@@ -427,7 +455,7 @@ def pair_spec(v1, v2, span):
     typed, hid = [], False
     seq_ = [v1] + list(span)                       # a visit whose FIA previous measurement is not the previous table visit: its codes do not cover the pair
     for u_prev, u in zip(seq_[:-1], seq_[1:]):
-        if PREVK.get(k_ + (_vkey(u),)) != _vkey(u_prev): hid = True
+        if PREVK.get(k_ + (_vkey(u),)) != _vkey(u_prev) or k_ + (_vkey(u),) in CONV: hid = True
     for r in e.itertuples():
         for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
             cd, yr = getattr(r, a_), getattr(r, b_)
@@ -437,7 +465,8 @@ def pair_spec(v1, v2, span):
     old = {(KIND8(t_, cd), yr) for vk, t_, cd, yr in typed if vk <= vk1}
     recs = sorted({(yr, t_, cd) for vk, t_, cd, yr in typed if vk in vks and (KIND8(t_, cd), yr) not in old})
     rs = any(vk == vk1 and yr == math.floor(y1) for vk, _, _, yr in typed); re_ = any(vk == vk2 and yr == math.floor(y2) for vk, _, _, yr in typed)
-    f1, f2 = math.floor(y1), math.floor(y2); a = f1 if (y1 <= f1 + 0.5 and not rs) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
+    ra = any(yr == math.floor(y1) for yr, _, _ in recs)       # a new record of the interval dated in v1's year: the event lies after v1
+    f1, f2 = math.floor(y1), math.floor(y2); a = f1 if ((y1 <= f1 + 0.5 and not rs) or ra) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
     cl = []
     for yr, t_, cd in recs:
         cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}
@@ -489,7 +518,7 @@ check('T8e first-half visits that recorded an event of their own year: the inter
 bad8f = 0; n8f = 0
 for v1 in rng8.choice(list(PC), 400, replace=False):
     v2 = ns_['vpair'][v1]; q = pair_spec(v1, v2, [v2]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
-    ya, yb = ns_['act_span'](y1, y2, bool(ns_['VREC'][v1]), bool(ns_['VREC'][v2])); pc_ = ns_['pair_clusters'](int(V.pid.values[v1]), y1, y2, ya, yb)
+    ya, yb = ns_['act_span'](y1, y2, bool(ns_['VREC'][v1]), bool(ns_['VREC'][v2]), ns_['pair_ra'](v1, v2)); pc_ = ns_['pair_clusters'](int(V.pid.values[v1]), y1, y2, ya, yb)
     mine = sorted((c[1], c[2], c[3], tuple(sorted(c[0]))) for c in q['cl']); theirs = sorted((c['lo'], c['hi'], int(c['lr']), tuple(sorted(c['cols']))) for c in pc_)
     n8f += 1; bad8f += (ya, yb) != (q['a'], q['b']) or mine != theirs
 check('T8f g03b act_span / recs_in / pair_clusters (acting years, clipped event clusters of the interval) = the independent spec', bad8f == 0, f'{n8f} pairs, mismatches {bad8f}')
@@ -546,7 +575,7 @@ if ns_.get('PAIR_ALL'):
         nd += 1; okd += set(np.asarray(cs2).tolist()) <= strong
         if nd >= 300: break
     check('T8d multi-horizon severity: spans whose BA fell below 0.3 of v1 at an intermediate visit (regrown by the end) use only stand-replacing candidates',
-          okd == nd, f'{nd} regrown stand-replacing spans checked, violations {nd - okd}' + ('' if nd else ' (none in this table: vacuous)'))
+          okd == nd and nd > 0, f'{nd} regrown stand-replacing spans checked, violations {nd - okd}' + ('' if nd else ' (none in this table: vacuous)'))
 else: print('SKIP  T8d PAIR_ALL off')
 # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
 if os.path.exists(f'{D}/cand_prior.parquet'):
@@ -607,9 +636,9 @@ if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
 # T11c g05 maps with the start year g04 GATED (bayes_eval.json map_y0), and a non-2021 year only with a passed pre-registered gate
 if os.path.exists(f'{D}/bayes_eval.json'):
     be = json.load(open(f'{D}/bayes_eval.json')); y0b = be.get('map_y0', 2021.0); gt = be.get('map_y0_gate', {})
-    g5 = open(f'{ROOT}/scripts/g05_map_stands.py').read()
-    check('T11c mapping start year: g05 reads bayes_eval.json map_y0; a year other than 2021 only if the g04 gate passed',
-          "json.load(open(f'{D}/bayes_eval.json')).get('map_y0', 2021.0)" in g5 and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, gate {gt}')
+    _svp = f'{D}/stand_veg_v3.parquet'; _sy = pd.read_parquet(_svp, columns=['map_y0']).map_y0.unique().tolist() if os.path.exists(_svp) and 'map_y0' in pd.read_parquet(_svp).columns else None
+    check('T11c mapping start year: the production stand map (g05) was mapped from the start year g04 gated; a year other than 2021 only if the gate passed',
+          _sy == [y0b] and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, stand map {_sy}, gate passed {gt.get("passed")}')
 # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
 if os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')

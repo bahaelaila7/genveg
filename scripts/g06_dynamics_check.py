@@ -41,8 +41,8 @@ with torch.no_grad():
             g_ = C0[C0.pid == vpid[v1]]
             if EVAL_LOC == 'public': cid, pr = g_.cid.values[[int(np.argmin(g_.dist_m.values))]], np.ones(1)       # pinned at the public coordinate
             else: cid, pr = g_.cid.values, g_.incl_w.values / g_.incl_w.values.sum()                                # uniform over the disk's footprints
-        ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); y2 = vyear[v2]; yy = int(math.floor(float(y2)))
-        st = flow(enc(torch.tensor([v1]), vyear[[v1]]).repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=y2.repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16))
+        ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); y2 = vyear[v2]; yy = min(int(math.floor(float(y2))), YEARS[-1])   # (a 2026 visit: the state is the end-2025 one, as g03b; r7 B2)
+        st = flow(enc(torch.tensor([v1]), vyear[[v1]]).repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=y2.repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16), ra=torch.tensor([pair_ra(v1, v2)]).repeat(16))
         s = summaries(*dec(st[yy])); s0 = summaries(*dec(enc(torch.tensor([v1]), vyear[[v1]])))           # s0: v1 decoded without flow (reconstruction)
         pred[(v1, v2)] = (float(torch.exp(torch.log(s[1] + 1e-3).median())), float(torch.exp(torch.log(s[0] + 1e-3).median())), float(s0[1][0]))
     o1 = obs_summ(torch.tensor([r[0] for r in rows])); o2 = obs_summ(torch.tensor([r[1] for r in rows]))
@@ -75,8 +75,8 @@ with torch.no_grad():
             if blk_[mid].any() or [c for c in G2.clusters(recs_in(vpid[v1], y1, y2)) if c['lr'] >= 4]: continue
             ob1, ob2 = float(obs_summ(torch.tensor([v1]))[1][0]), float(obs_summ(torch.tensor([v2]))[1][0])
             if ob1 < 1.0: continue
-            ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = int(math.floor(y2)); z0 = enc(torch.tensor([v1]), vyear[[v1]])
-            st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
+            ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = min(int(math.floor(y2)), YEARS[-1]); z0 = enc(torch.tensor([v1]), vyear[[v1]])
+            st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16), ra=torch.tensor([pair_ra(v1, v2)]).repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
             p0 = float(summaries(*dec(z0))[1][0])
             def dec_age(zz):    # decoded BA-weighted mean age of the expected slots (age-class midpoints)
                 lp_, val_ = dec(zz); pr_ = torch.sigmoid(calibrated(lp_)); w_ = torch.exp(val_[..., 0].clamp(max=12)) * pr_ * torch.exp(val_[..., 1].clamp(max=math.log(150.0))) ** 2

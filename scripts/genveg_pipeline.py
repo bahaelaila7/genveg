@@ -122,28 +122,33 @@ def main():
                                                    **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {}), **({'inputs': inh} if st in INPUT_STAGES else {})),
                                               sort_keys=True, default=str).encode()).hexdigest()[:12]
     rehash()
-    def outputs_since(t0):
-        """Fingerprint + list of the files a stage wrote in the data dir (name, size, mtime; logs and the pipeline state excluded)."""
-        h = hashlib.sha256(); files = {}
+    def snap():
+        """(size, mtime) of every file in the data dir (logs and the pipeline state excluded)"""
+        out = {}
         for root, _, fs in os.walk(D):
             if os.path.abspath(root).startswith(os.path.abspath(LOGD)): continue
-            for f in sorted(fs):
-                fp = os.path.join(root, f); st_ = os.stat(fp)
-                if f != 'pipeline_state.json' and st_.st_mtime >= t0 - 1:
-                    h.update(f'{os.path.relpath(fp, D)}:{st_.st_size}:{st_.st_mtime_ns}'.encode()); files[os.path.relpath(fp, D)] = [st_.st_size, st_.st_mtime_ns]
-        return h.hexdigest()[:12], files
+            for f in fs:
+                if f == 'pipeline_state.json': continue
+                fp = os.path.join(root, f); st_ = os.stat(fp); out[os.path.relpath(fp, D)] = [st_.st_size, st_.st_mtime_ns]
+        return out
+    def outputs_of(before):
+        """the files a stage run created or changed (snapshot diff: no time slack, nothing of the previous stage attributed to it): fingerprint + list"""
+        files = {k: v for k, v in snap().items() if before.get(k) != v}
+        return hashlib.sha256(json.dumps(sorted(files.items())).encode()).hexdigest()[:12], files
+    W = state.setdefault('_writers', {})                                     # file -> [the stage that last wrote it, size, mtime]
     def files_ok(st):
-        """a stage is current only if the files its run wrote are still those files (a manual re-run / edit of an output is seen: audit r6 M3);
-        adopted stages carry no file list (the --adopt contract)"""
+        """a stage is current only if the files its run wrote are unchanged — or were rewritten by a stage that ran later (g02e rewrites visits.parquet,
+        g02g localisation.parquet: intended) and still are as that stage left them (audit r6 M3 / r7 B1). Adopted stages carry no file list."""
         e = state.get(st, {})
         if e.get('how') == 'adopted': return True
         fl = e.get('files')
         if fl is None: return False
-        for rel, (sz, mt) in fl.items():
-            fp = os.path.join(D, rel)
-            if not os.path.exists(fp): return False
-            s_ = os.stat(fp)
-            if s_.st_size != sz or s_.st_mtime_ns != mt: return False
+        for rel, rec in fl.items():
+            fp = os.path.join(D, rel); cur = [os.stat(fp).st_size, os.stat(fp).st_mtime_ns] if os.path.exists(fp) else None
+            w = W.get(rel)
+            if w and w[0] != st:                                             # a later stage's rewrite: must still be that stage's version
+                if cur != w[1:]: return False
+            elif cur != list(rec): return False
         return True
     py = [sys.executable, '-I']
     tenv = {k: str(v) for k, v in cfg['train']['env'].items()}
@@ -193,12 +198,14 @@ def main():
         if stale: sys.exit(f'!! {st}: upstream stage(s) {stale} not current — run them first')
         if st in ('downscale', 'map', 'verify'): shutil.copy(f'{D}/{model}', f'{D}/model.pt')      # tools that read the default model see the chosen one
         state.pop(st, None); json.dump(state, open(stf, 'w'), indent=1)      # running = not current: a failed (forced) re-run leaves no stale 'current' mark (audit r3 I4)
-        t0 = time.time(); print(f'== {st}: running (log {os.path.relpath(LOGD, ROOT)}/{st}.log)', flush=True)
+        before = snap(); t0 = time.time(); print(f'== {st}: running (log {os.path.relpath(LOGD, ROOT)}/{st}.log)', flush=True)
         rc = sh(st, cmds_of(st))
         tail = open(f'{LOGD}/{st}.log').read().strip().splitlines()[-1:] or ['']
         if rc != 0:
             print(f'!! {st} FAILED (exit {rc}): {tail[0][:300]}'); json.dump(state, open(stf, 'w'), indent=1); sys.exit(1)
-        oh, ofl = outputs_since(t0); state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s', out=oh, files=ofl); json.dump(state, open(stf, 'w'), indent=1)
+        oh, ofl = outputs_of(before); state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s', out=oh, files=ofl)
+        for rel, rec in ofl.items(): W[rel] = [st, *rec]
+        json.dump(state, open(stf, 'w'), indent=1)
         rehash()                                                                            # downstream hashes now see this run's outputs
         print(f'   {tail[0][:300]}', flush=True)
     json.dump(state, open(stf, 'w'), indent=1)

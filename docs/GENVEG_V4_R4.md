@@ -185,3 +185,27 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
   2 of 60 plots). Both are rebuilt from the fixed curation (slim_r4_v2) before any training. Smoke: training step, untrained-checkpoint g06 (validation
   acceptance enforced: exit 3), g04 and g05 end to end (scratch outputs deleted). While smoke-testing, an r6 edit had put `n_ = …` inside a comment in
   g04.fwd_dist (the B1 bug class again) — fixed; a scan of every stage for code after `;` in comments finds none.
+
+## J. Audit round 7 (2026-10-26, fresh independent Opus review of 64db7c8); findings reproduced before fixing
+* **B1** the r6 file-level currency could never finish (stages that intentionally rewrite an upstream file — g02e visits.parquet, g02g localisation.parquet
+  — invalidated it; a 1-s time slack attributed the previous stage's outputs to the next; the driver's model.pt copy was attributed to stages). → each run's
+  outputs are a SNAPSHOT DIFF (before / after); a file rewritten by a later stage is checked against that stage's version (`_writers`). Tested on the
+  auditor's stub root: a full run, then a second call all current; an edited fia_events.parquet re-runs records and its dependants only, then all current.
+* **B2** g06 used floor(visit year) as a flow stop without clamping: a 2026 visit (6 KY plots in R4) raised KeyError → clamped to YEARS[-1] (as g03b);
+  g04's mapping path too.
+* **I1** LANDFIRE severity labels of the 2013-14 / 2024-25 products ('Moderate' & co., 'No Severity', 'Unburned/Low') fell back to Low (36-39 % of the
+  2024-25 disturbed pixels) → mapped (Moderate = Medium 2; mixed = 1.5 / 2.5; no rating = neutral 2; NaN = no rating); water / no-data pixels inside fire
+  perimeters are no disturbance; a classed code with an unknown label now raises. gv_verify T3e checks the severity channel (an independent label table);
+  the new code matches it on 400 freshly computed footprints (14 / 400 differ from the stale table → rebuilt with the table).
+* **I2** a new record made at v2 dated in v1's calendar year (the event is after v1) was never applied for a second-half v1 / a v1 that recorded another
+  own-year event → Flow `ra` (and `act_span(..., ra)`, `pair_ra`, `VRA` for MIL / Q / B flows from a visit); gv_verify pair_spec and T4m cover it.
+* **M1** forest -> non-forest / non-sampled conversion (forested share drop >= 0.25 since the previous forested visit) carries no FIA code → blocks like a
+  hiding code (g02b.fia_records; gv_verify spec CONV). gafl_v4: blocked visits 10,636 → 11,041.
+* **M2** bare visits were never checked against FIADB (22 % of gafl_v4's bare visits have live FIADB trees, from the old curation) → gv_verify T1k (FAILS on
+  the stale table by design; must pass after the slim_r4_v2 rebuild).
+* **M3** vacuous checks: T6c removed (T11 tests the conversions on the written layer); T8d requires > 0 regrown spans; T11c reads the start year g05
+  recorded in the production map (`map_y0` column) instead of g05's source text.
+* Verification of r7 on gafl_v4 (table predates r6/r7 g02b): gv_verify 48 / 52; the 4 failures are the stale table only — T1k (old curation: 305 / 1,363
+  bare visits with FIADB live trees), T3e (stored severity of the old label table: max Δ 1/3 = one severity step), T3f / T10 (old NONBLOCK / periods).
+  New code vs the independent severity spec on 400 freshly computed footprints: 0 mismatches. Smoke: train step, g06 (val acceptance enforced, exit 3),
+  g04, g05 (stand map records map_y0 = bayes_eval map_y0) end to end; scratch outputs deleted. Required after the slim_r4_v2 rebuild: 52 / 52.

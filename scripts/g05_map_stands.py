@@ -96,7 +96,7 @@ with torch.no_grad():
         # GEN_QMD = the QMD of the calibrated TPH / BA (consistent with the cohort table; the median of the samples' QMDs was not: audit F10)
         rows.append(dict(stand_id=int(sid), node=int(j), tph=tph_m, ba=ba_m, qmd=100 * math.sqrt(ba_m / (tph_m * math.pi / 4)) if tph_m > 0 else 0.0,
                          ba_sd=float(s_[1].std()), dom=dom_, draw=i_))
-out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3_B{int(USE_B)}.parquet')   # (the pipeline promotes the production use_b to stand_veg_v3.parquet: r6 M2)
+out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out['map_y0'] = MAP_Y0; out.to_parquet(f'{D}/stand_veg_v3_B{int(USE_B)}.parquet')   # (the pipeline promotes the production use_b to stand_veg_v3.parquet: r6 M2)
 C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3_B{int(USE_B)}.parquet')
 _t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()
 _fnd = np.array(fND); print(f'medoid-draw factors fN q05/q50/q95 {np.nanquantile(_fnd[:, 0], [.05, .5, .95]).round(3)}, fD {np.nanquantile(_fnd[:, 1], [.05, .5, .95]).round(3)}', flush=True)

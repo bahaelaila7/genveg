@@ -86,16 +86,16 @@ for p_ in enc.parameters(): p_.requires_grad_(False)
 # B = a COPY of the v2 flow + heads, fine-tuned for the AlphaEarth likelihood only; the v2 flow stays the vegetation dynamics the decoder was trained on
 import copy; flowB, h22B, h25B = copy.deepcopy(flow), copy.deepcopy(h22), copy.deepcopy(h25)
 fparams = [*flowB.parameters(), *h22B.parameters(), *h25B.parameters()]; of = torch.optim.AdamW(fparams, lr=5e-4, weight_decay=1e-4)
-def fwd_dist(z, start, cid, rs=None):
+def fwd_dist(z, start, cid, rs=None, ra=None):
     """squared AlphaEarth distance of the B-flowed latent at 2022 / 2025 for footprints cid (z broadcast to each), mean over the targets after the visit."""
-    st = flowB(z, start, [2022, 2025], DIST[cid], SOIL[cid], rs=rs); d = torch.zeros(len(cid)); n_ = torch.zeros(len(cid))   # (rs: the visit's recorded own-year event, as MIL; r6 M6)
+    st = flowB(z, start, [2022, 2025], DIST[cid], SOIL[cid], rs=rs, ra=ra); d = torch.zeros(len(cid)); n_ = torch.zeros(len(cid))   # (rs: the visit's recorded own-year event, as MIL; r6 M6)
     for yr, head, sl in ((2022, h22B, A22), (2025, h25B, A25)):
         ok = (start <= yr + 1).float(); d = d + ok * ((head(st[yr]) - AEF[cid][:, sl]) ** 2).sum(-1); n_ = n_ + ok
     return d / n_.clamp(min=1), st
 for ep in range(int(os.environ.get('EPB', 8))):
     tl = 0
     for v in np.random.permutation(trB):
-        cid, pr = hi_cands(vpid[v]); z = ZV[[v]].repeat(len(cid), 1); d, _ = fwd_dist(z, vyear[[v]].repeat(len(cid)), torch.tensor(cid), rs=VREC[[v]].repeat(len(cid)))
+        cid, pr = hi_cands(vpid[v]); z = ZV[[v]].repeat(len(cid), 1); d, _ = fwd_dist(z, vyear[[v]].repeat(len(cid)), torch.tensor(cid), rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))
         l = -(torch.logsumexp(-d / TEMP + torch.log(torch.tensor(pr)), 0)) * TEMP; of.zero_grad(); l.backward(); of.step(); tl += float(l)
     print(f'B epoch {ep+1} loss {tl/len(trB):.4f} ({time.time()-t0:.0f}s)', flush=True)
 torch.save(dict(mdn=mdn.state_dict(), flowB=flowB.state_dict(), h22B=h22B.state_dict(), h25B=h25B.state_dict(), xmu=xmu, xsd=xsd), f'{D}/bayes_models.pt')
@@ -109,7 +109,7 @@ with torch.no_grad():
     loc = []
     for v in teB[:500]:
         cid, pr = cand_of[vpid[v]]; iw_, hi = cand_iw[vpid[v]]
-        d, _ = fwd_dist(ZV[[v]].repeat(len(cid), 1), vyear[[v]].repeat(len(cid)), torch.tensor(cid), rs=VREC[[v]].repeat(len(cid)))
+        d, _ = fwd_dist(ZV[[v]].repeat(len(cid), 1), vyear[[v]].repeat(len(cid)), torch.tensor(cid), rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))
         post = torch.softmax(-d / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()     # uniform over the disk's footprints
         loc.append((post[hi].sum(), iw_[hi].sum() / iw_.sum()))
     a = np.array(loc); ev['B_localisation'] = {'visits': len(a), 'posterior_mass_on_pinned_footprints': float(a[:, 0].mean()), 'their_share': float(a[:, 1].mean())}
@@ -161,7 +161,7 @@ with torch.no_grad():
             yv = float(vyear[v])
             if yv > 2025.5: continue
             cid, pr = hi_cands(vpid[v]); zs = mdn.sample(Xv[[vi[v]]], torch.tensor([yv]), MS)[0]
-            Dm = torch.stack([fwd_dist(zs, torch.full((MS,), yv), torch.tensor([c_] * MS), rs=VREC[[v]].repeat(MS))[0] for c_ in cid])     # [footprints, MS]
+            Dm = torch.stack([fwd_dist(zs, torch.full((MS,), yv), torch.tensor([c_] * MS), rs=VREC[[v]].repeat(MS), ra=VRA[[v]].repeat(MS))[0] for c_ in cid])     # [footprints, MS]
             lw = torch.logsumexp(-Dm / TEMP + torch.log(torch.tensor(pr, dtype=torch.float32)).unsqueeze(1), 0)    # log Σ_c p_c exp(-d_c(z)/T): location mixture
             w = torch.softmax(lw, 0); idx = torch.multinomial(w, 32, replacement=True); ess.append(float(1 / (w ** 2).sum()))
             sA = summ(zs); sB = summ(zs[idx]); used.append(v)
@@ -186,7 +186,7 @@ with torch.no_grad():
         for q_, v in enumerate(vs):
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
             xv = Xv[[vi[v]]] if X is None else X[q_:q_ + 1]
-            zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = int(math.floor(float(yv)))
+            zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = min(int(math.floor(float(yv))), YEARS[-1])
             st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms)); s_ = summ(st[yy])
             out_.append([torch.exp(torch.log(s_[i] + 1e-3).median()) for i in range(3)] + [s_[4].mean(0)])
         return out_

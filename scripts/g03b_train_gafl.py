@@ -139,13 +139,15 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         o = s.J(torch.cat([z, ev], -1)); jd = torch.tanh(o[:, :D_Z])
         if not AGE_CH: return jd
         r = torch.sigmoid(o[:, D_Z:D_Z + 1]); return torch.cat([r * (-AGE_C / AGE_S - z[:, :1]) + 0.25 * jd[:, :1], jd[:, 1:]], 1)
-    def forward(s, z, start, stop, dist, soil, end=None, rs=None, re=None):
+    def forward(s, z, start, stop, dist, soil, end=None, rs=None, re=None, ra=None):
         """z [n, D_Z] at time `start` [n] (decimal year) → state at the end of each year (or at `end` [n], after which it is frozen), recorded at `stop`
         years; dist [n, NY, NC+2]. An event of year y applies iff mid-year y lies in [start, end] — except in a VISIT's own calendar year when that visit
-        recorded an FIA event of that year (rs / re [n] bool: the start / end visit did): the year's evidence then lies BEFORE that visit (audit r5 I3).
+        recorded an FIA event of that year (rs / re [n] bool: the start / end visit did): the year's evidence then lies BEFORE that visit (audit r5 I3);
+        and ra [n] bool: a LATER visit recorded a new event dated in the start visit's year, which therefore lies AFTER the start (audit r7 I2).
         Returns dict stop->state."""
         end = torch.full_like(start, 1e9) if end is None else end
         rs = torch.zeros_like(start, dtype=torch.bool) if rs is None else rs; re = torch.zeros_like(start, dtype=torch.bool) if re is None else re
+        ra = torch.zeros_like(start, dtype=torch.bool) if ra is None else ra
         fs_, fe_ = torch.floor(start), torch.floor(end)
         y0 = int(math.floor(start.min().item())); out = {st: z for st in stop if st < max(y0, YEARS[0])}   # stops before the run: initial state (masked by the caller)
         Aa = s.A + s.Am(soil) if SITE_ATTR else s.A                          # (SITE_ATTR: the site's attractor; soil is constant along the run)
@@ -156,7 +158,7 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
             lam = 1 / torch.exp(s.ltau) + g; zs = g * 3 * torch.tanh(Aa) / lam   # exact (exponential) integration over dt; attractor bounded (|A| ≤ 3)
             zn = zs + (z - zs) * torch.exp(-lam * dt)
             z = torch.cat([z[:, :1] + dt * torch.exp(s.lrho) / AGE_S, zn[:, 1:]], 1) if AGE_CH else zn    # (AGE_CH: dimension 0 is the age clock)
-            act = (((start <= y + 0.5) & ~(rs & (fs_ == y))) & ((end >= y + 0.5) | (re & (fe_ == y)))).float().unsqueeze(-1)   # visit-year rule (docstring)
+            act = ((((start <= y + 0.5) & ~(rs & (fs_ == y))) | (ra & (fs_ == y))) & ((end >= y + 0.5) | (re & (fe_ == y)))).float().unsqueeze(-1)   # visit-year rule
             ev = dist[:, jj]; has = (ev[:, :NC].sum(-1, keepdim=True) + ev[:, NC + 1:NC + 2] > 0).float() * act
             if s.sparse_j:                                                  # (v4) the jump network only on the rows with an event: same result, ~1/20 of the cost
                 ix = has.squeeze(-1).nonzero(as_tuple=True)[0]
@@ -296,10 +298,15 @@ def recs_in(p_, y1, y2):
     visit); a re-report of an event already recorded at a visit <= y1 is dropped (audit r5 I3: the mid-year rule misassigned 3 % of records)."""
     ev = ev_of.get(p_, []); old = {(k, y) for k, y, ry in ev if ry <= y1 + 1e-9}
     return sorted({(k, y) for k, y, ry in ev if y1 + 1e-9 < ry <= y2 + 1e-9 and (k, y) not in old}, key=lambda e: (e[1], e[0]))
-def act_span(y1, y2, rs, re):
+def act_span(y1, y2, rs, re, ra=False):
     """first / last calendar year whose events the flow applies between visits at y1 and y2 (Flow's visit-year rule; b < a: none)"""
     f1, f2 = int(math.floor(y1)), int(math.floor(y2))
-    return (f1 if (y1 <= f1 + 0.5 and not rs) else f1 + 1), (f2 if (y2 >= f2 + 0.5 or re) else f2 - 1)
+    return (f1 if ((y1 <= f1 + 0.5 and not rs) or ra) else f1 + 1), (f2 if (y2 >= f2 + 0.5 or re) else f2 - 1)
+def pair_ra(v1, v2):
+    """a record of the interval (v1, v2] dated in v1's calendar year: that event lies after v1 (Flow ra; audit r7 I2)"""
+    f1 = int(math.floor(vyr[v1])); return any(y == f1 for _, y in recs_in(vpid[v1], float(vyr[v1]), float(vyr[v2])))
+# the same for a flow from a visit with no end visit (MIL, Q, B): any later visit's new record dated in the visit's year
+VRA = torch.tensor([any(y == int(math.floor(vyr[v])) for _, y in recs_in(vpid[v], float(vyr[v]), 1e9)) for v in range(nv)], dtype=torch.bool)
 def pair_clusters(p_, y1, y2, a, b):
     """event clusters of the interval with their windows clipped to the years the flow applies ([a, b]); a record whose window falls outside them (FIA
     year before the previous visit) is clamped to the nearest applied year — FIA says it happened in the interval"""
@@ -328,7 +335,7 @@ def pair_set(v1, v2, blk=None, span=None):
     if p_ not in cand_of: return None
     if PAIR == 'plot': return cand_of[p_]
     cid, pr = cand_of[p_]; y1, y2 = float(vyr[v1]), float(vyr[v2]); per = DIST[cid].numpy(); m = np.ones(len(cid), bool)
-    ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2])); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
+    ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2]), pair_ra(v1, v2)); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
     pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if c['lr'] >= 4]; sk0 = nanch.get('event_skipped', 0)
     for c in cl_:                                       # each detectable FIA event cluster of the period: compatible evidence in its window
         lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
@@ -393,7 +400,7 @@ for ep in range(EP):
         v = torch.tensor(perm[b:b + B]); pids = vpid[v.numpy()]; nseen += len(v)
         z = enc(v, vyear[v]); ci = sample_cands(pids, K)                                                  # [B, K]
         cz = z.repeat_interleave(K, 0); cst = vyear[v].repeat_interleave(K); cidx = torch.tensor(ci.ravel())
-        crs = VREC[v].repeat_interleave(K); st = flow(cz, cst, [2022, 2025], DIST[cidx], SOIL[cidx], rs=crs)
+        crs = VREC[v].repeat_interleave(K); cra = VRA[v].repeat_interleave(K); st = flow(cz, cst, [2022, 2025], DIST[cidx], SOIL[cidx], rs=crs, ra=cra)
         d = torch.zeros(len(cidx)); n_t = torch.zeros(len(cidx))
         for yr, head, sl in ((2022, h22, A22), (2025, h25, A25)):
             ok = (cst <= yr + 1).float(); pred = head(st[yr]); d = d + ok * ((pred - AEF[cidx][:, sl]) ** 2).sum(-1); n_t = n_t + ok
@@ -410,7 +417,8 @@ for ep in range(EP):
             d2 = DIST[c2]   # FIA-consistent histories
             yy = torch.floor(y2).long().clamp(YEARS[0], YEARS[-1]); outs = []
             stp = sorted(set(yy.tolist())); st2 = flow(zz, vyear[v[sel]].repeat_interleave(K), stp, d2, SOIL[c2], end=y2.repeat_interleave(K),
-                                                rs=VREC[v[sel]].repeat_interleave(K), re=VREC[v2].repeat_interleave(K))   # state AT v2's date
+                                                rs=VREC[v[sel]].repeat_interleave(K), re=VREC[v2].repeat_interleave(K),
+                                                ra=torch.tensor([pair_ra(v[i].item(), t_) for i, t_ in zip(has2, tgt2)]).repeat_interleave(K))   # state AT v2's date
             fz = torch.stack([st2[int(yy[i // K])][i] for i in range(len(c2))]).view(len(has2), K, D_Z)
             # one of the K candidate histories is the plot's: a MIXTURE over them (soft-min, as the MIL), not their average — averaging trained the flow toward
             # the history-mean outcome (22 % of the pairs mix stand-replacing and other histories; audit 2026-10-26 F6); the decoding of the flowed state is
@@ -434,7 +442,8 @@ for ep in range(EP):
         wy = (torch.abs(vyear[v] - 2026.0) <= QD_WIN).float()                # visits contemporaneous with z(2025) = the END-2025 state (2026.0)
         dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
         yrs_ = (torch.arange(NY) + YEARS[0]).float().unsqueeze(0)
-        after = (evy & (cst.unsqueeze(-1) <= yrs_ + 0.5) & ~(crs.unsqueeze(-1) & (torch.floor(cst).unsqueeze(-1) == yrs_))).any(1).view(-1, K)   # = the flow's rule
+        fcs_ = torch.floor(cst).unsqueeze(-1) == yrs_
+        after = (evy & ((((cst.unsqueeze(-1) <= yrs_ + 0.5) & ~(crs.unsqueeze(-1) & fcs_))) | (cra.unsqueeze(-1) & fcs_))).any(1).view(-1, K)   # = the flow's rule
         pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
         wy = wy * okv.float(); lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)
         ldec = dec_loss(z, v); zr = z[:, 1:] if AGE_CH else z                          # (the age clock is supervised, not regularised toward N(0, 1))
@@ -500,7 +509,7 @@ with torch.no_grad():
     for v in te_v[:400]:
         p = vpid[v]; cid, pr = cand_of[p]; iw_, hi_ = cand_iw[p]
         if not hi_.any() or hi_.all(): continue                                 # no event information for this plot
-        z = enc(torch.tensor([v]), vyear[[v]]).repeat(len(cid), 1); st = flow(z, vyear[[v]].repeat(len(cid)), [2022, 2025], DIST[cid], SOIL[cid], rs=VREC[[v]].repeat(len(cid)))
+        z = enc(torch.tensor([v]), vyear[[v]]).repeat(len(cid), 1); st = flow(z, vyear[[v]].repeat(len(cid)), [2022, 2025], DIST[cid], SOIL[cid], rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))
         nh_ = sum(float(vyear[v] <= y + 1) for y in (2022, 2025))
         dd_ = sum(((hh(st[y]) - AEF[cid][:, sl]) ** 2).sum(-1) * float(vyear[v] <= y + 1) for y, hh, sl in ((2022, h22, A22), (2025, h25, A25))) / max(nh_, 1)   # mean over heads, as in training
         post = torch.softmax(-dd_ / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()   # uniform over the DISK (candidates x footprints they stand for)
