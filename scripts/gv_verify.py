@@ -235,8 +235,11 @@ post = [v[1] for y, v in tabL.items() if y in (2023, 2024) and v[1] is not None]
 check('T3i time axes: LANDFIRE harvest/unknown (calendar year) and Hansen events of 2023-24 lower the AlphaEarth 2022->2025 cosine; events <= 2021 do not',
       len(post) > 0 and len(pre) > 0 and max(post) < min(pre) and max(post) < c_clean - 0.05,
       f'no disturbance since 2015: {c_clean:.3f}; LANDFIRE {{yr: (n, cos)}} {tabL}; Hansen {tabH}')
-hok = [((g.prior / g.incl_w)[g.hi].min() >= (g.prior / g.incl_w)[~g.hi].max() * (1 - 1e-4)) for _, g in Cs.groupby('pid') if g.hi.any() and (~g.hi).any()]
-check('T3h hi flag = a per-footprint prior threshold (monotone)', all(hok), f'{len(hok)} plots with both classes')
+def _ev(g):    # the evidence part of the prior: prior / (incl_w x radial location weight) — hi is a threshold of the evidence alone (audit r3 B3)
+    rp_ = float(M.get('radial_p', 0.9)); rad = np.where(g.dist_m.values <= 804.672, rp_ / (np.pi * 804.672 ** 2), (1 - rp_) / (np.pi * (1600.0 ** 2 - 804.672 ** 2)))
+    return pd.Series(g.prior.values / (g.incl_w.values * rad), index=g.index)
+hok = [(_ev(g)[g.hi].min() >= _ev(g)[~g.hi].max() * (1 - 1e-4)) for _, g in Cs.groupby('pid') if g.hi.any() and (~g.hi).any()]
+check('T3h hi flag = a threshold of the prior\'s evidence part (prior / (incl_w x radial weight), monotone)', all(hok), f'{len(hok)} plots with both classes')
 sys.path.insert(0, f'{ROOT}/scripts'); import g02b_build_gafl as G2; G2.init()
 cnt_err = []
 for pid, g in Cs.groupby('pid'):

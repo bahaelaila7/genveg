@@ -326,7 +326,7 @@ for ep in range(EP):
         # older visit's cohorts are out of date and would teach the decoder 'flowed-2025 latent -> younger stand' (audit 2026-10-26 M2)
         lpq, valq = torch.func.functional_call(dec, {k_: p_.detach() for k_, p_ in dec.named_parameters()}, (qm,)); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
         dq = bce(lpq, tpq, reduction='none').mean(-1) + (((valq - tvq) ** 2 * tmq).sum((-1, -2)) / tmq.sum((-1, -2)).clamp(min=1)) + W_SUM * summ_err(lpq, valq, v.repeat_interleave(K)) + 0.1 * absent_reg(valq, v.repeat_interleave(K))
-        wy = (torch.abs(vyear[v] - 2025.0) <= QD_WIN).float()                # visits contemporaneous with the 2025 state only
+        wy = (torch.abs(vyear[v] - 2026.0) <= QD_WIN).float()                # visits contemporaneous with z(2025) = the END-2025 state (2026.0)
         dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
         after = (evy & (torch.arange(NY) + YEARS[0] >= torch.floor(cst).unsqueeze(-1))).any(1).view(-1, K)
         pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
@@ -338,7 +338,7 @@ for ep in range(EP):
 os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
 # ---------------- evaluation on held-out plots (last visit of each plot): vegetation summaries from satellite features
 def summaries(lp, val):
-    """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), share of the dominant key; presence by probability > 0.5 (expected values)."""
+    """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), the dominant key, BA shares by key — EXPECTED values (slot density × calibrated presence probability)."""
     pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=math.log(150.0)))
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)

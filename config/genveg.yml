@@ -18,7 +18,7 @@ dynamics:                       # g06_dynamics_check: held-out disturbance-respo
 downscale:                      # g04_bayes_downscale: landscape prior A (MDN) + likelihood B + mapping-path calibration
   env: {NT: 7, EPB: 6, MDN_EP: 60}
 map:                            # g05_map_stands: stand vegetation; one output per USE_B (stand_veg_v3_B<b>.parquet); the LAST one is stand_veg_v3.parquet
-  use_b: [0, 1]
+  use_b: [1, 0]                 # the LAST one is the production map: B0 (prior A only, validated); B1 unvalidated (audit F4 / r3 B4)
   env: {NT: 7}
 fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
   area: data/derived/baker_county.gpkg

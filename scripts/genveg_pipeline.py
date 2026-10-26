@@ -31,7 +31,7 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize']),
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
     'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history'], stands=[]),
-    'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py'], cfg=['dynamics', 'train'], up=['train'], stands=[]),
+    'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train'], up=['train'], stands=[]),
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train'], stands=[]),
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),
     'fe':           dict(code=['24_export_fe.py', 'g07_fe_attach.py'], cfg=['fe'], up=['map'], stands=['finalize']),
@@ -154,6 +154,7 @@ def main():
         stale = [u for u in STAGES[st]['up'] if state.get(u, {}).get('hash') != H[u]]
         if stale: sys.exit(f'!! {st}: upstream stage(s) {stale} not current — run them first')
         if st in ('downscale', 'map', 'verify'): shutil.copy(f'{D}/{model}', f'{D}/model.pt')      # tools that read the default model see the chosen one
+        state.pop(st, None); json.dump(state, open(stf, 'w'), indent=1)      # running = not current: a failed (forced) re-run leaves no stale 'current' mark (audit r3 I4)
         t0 = time.time(); print(f'== {st}: running (log {os.path.relpath(LOGD, ROOT)}/{st}.log)', flush=True)
         rc = sh(st, cmds_of(st))
         tail = open(f'{LOGD}/{st}.log').read().strip().splitlines()[-1:] or ['']

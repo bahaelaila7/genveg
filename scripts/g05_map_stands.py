@@ -48,14 +48,15 @@ print(f'stand landscapes {len(XLs)} of {len(sids)} stands ({len(FR)} footprints 
 order = [int(x) for x in sids if int(x) in XLs]; node_of = {sid: k for k, sid in enumerate(order)}
 np.savez(f'{D}/stand_nodes.npz', nodes=np.array([ctr[list(sids).index(sid)] for sid in order]), XL=np.stack([XLs[sid] for sid in order]))   # for gv_verify_upstream (U8)
 USE_B = os.environ.get('USE_B') == '1'; Mz = 64; rows = []; ESS = []; crows = []; fND = []
-CAL_N, CAL_D = math.exp(CAL[0]), math.exp((CAL[1] - CAL[0]) / 2)        # cohort calibration: densities by the TPH factor, diameters so that BA gets the BA factor
+# (cohorts are scaled to the calibrated median summary below; no separate cohort calibration)
+_CAL_UNUSED = None        # cohort calibration: densities by the TPH factor, diameters so that BA gets the BA factor
 NA_ = 16
 keys_ = json.load(open(f'{D}/meta.json'))['keys']
 with torch.no_grad():
     for sid, g in S.groupby('stand_id'):
         fp = g.index.values
         if int(sid) not in XLs: continue
-        j = node_of[int(sid)]; xl = nx(XLs[int(sid)]).unsqueeze(0)
+        j = node_of[int(sid)]; xl = nx(XLs[int(sid)]).unsqueeze(0); torch.manual_seed(int(sid))     # a stand's draws depend on its id only (not on the stand set / order)
         zs = mdn.sample(xl, torch.tensor([2021.0]), Mz)[0]
         w = torch.ones(Mz)
         if USE_B:     # every footprint of the stand observes the SAME vegetation: tempered joint evidence = mean distance over the footprints
