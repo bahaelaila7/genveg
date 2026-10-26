@@ -507,6 +507,14 @@ with torch.no_grad():
     bk_set = set(map(tuple, pd.read_parquet(f'{ROOT}/data/proto/baker/plots.parquet')[['st', 'u', 'c', 'p']].values))
     Pk = P.set_index('pid'); mk_b = torch.tensor([tuple(Pk.loc[vpid[v], ['st', 'u', 'c', 'p']]) in bk_set for v in te_last])
     ev = {'all_heldout': metrics(torch.ones(len(te_last), dtype=torch.bool)), 'baker_50km_heldout': metrics(mk_b) if mk_b.sum() > 5 else None}
+    # the same metrics on the VALIDATION plots (VAL_SPLIT): model choices (v3 vs v4, seeds) are made here, the test block above is the report (r9)
+    va_last = last[last.pid.isin(val_pid & have)].vid.values if VAL_SPLIT else np.array([], dtype=int)
+    if len(va_last) > 5:
+        Xte = torch.stack([plot_feat(vpid[v]) for v in va_last]); pp = [pred_plot(vpid[v]) for v in va_last]
+        m_t = [torch.stack([p_[i] for p_ in pp]) for i in range(5)]; o_t = obs_summ(torch.tensor(va_last))
+        nn5 = torch.cdist((Xte - mu) / sc, (Xtr - mu) / sc).topk(5, largest=False).indices
+        k_t = [o_tr[i][nn5].float().median(1).values for i in range(3)] + [None, o_tr[4][nn5].mean(1)]; k_t[3] = k_t[4].argmax(1)
+        ev['validation'] = metrics(torch.ones(len(va_last), dtype=torch.bool))
     # localisation check: plots with dated FIA events — posterior mass (uniform prior) on prior-favoured (event-matching) candidates vs their share
     loc = []
     for v in te_v[:400]:

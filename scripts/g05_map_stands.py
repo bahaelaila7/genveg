@@ -20,7 +20,7 @@ sys.path.insert(0, _HERE); import g02b_build_gafl as G2
 from stand_runs import stands_run
 BM = torch.load(f'{D}/bayes_models.pt', weights_only=False); km = pickle.load(open(f'{D}/bayes_kmeans.pkl', 'rb'))
 XLm = np.zeros((1, len(BM['xmu'])))                                                 # descriptor width for the MDN constructor
-import copy; flowB, h22B, h25B = copy.deepcopy(flow), copy.deepcopy(h22), copy.deepcopy(h25)       # flow / h22 / h25 = v2 (model.pt): vegetation dynamics
+import copy; flowB, h22B, h25B = copy.deepcopy(flow), copy.deepcopy(h22), copy.deepcopy(h25)       # flow, h22, h25: the v2 model (model.pt), vegetation dynamics
 mdn = MDN(); mdn.load_state_dict(BM['mdn']); flowB.load_state_dict(BM['flowB']); h22B.load_state_dict(BM['h22B']); h25B.load_state_dict(BM['h25B'])   # B: likelihood only
 xmu, xsd = BM['xmu'], BM['xsd']; nx = lambda x: torch.tensor((x - xmu) / xsd, dtype=torch.float32)
 CAL = json.load(open(f'{D}/bayes_eval.json'))['calibration_log_factors_mapping_path']

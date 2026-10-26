@@ -228,6 +228,13 @@ with torch.no_grad():
                          'heldout_err_2021': res[2021.0][3], 'heldout_err_requested': res[MAP_Y0][3]})     # (held-out: reported, not used)
         y0u = MAP_Y0 if gate.get('passed') else 2021.0; CALF, pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
+        # VALIDATION metrics of the chosen mapping path (cross-fitted on the calibration = validation plots: factors from one half, errors on the other) —
+        # model choices (v3 vs v4, seeds) are made on these; the held-out block below is the test report (r9)
+        hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]; xv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD')}
+        for ca, cb in ((hA, hB), (hB, hA)):
+            r_ = evaluate(y0u, ca, cb)
+            for k in xv_: xv_[k] += r_[3][k] / 2
+        ev['mapping_path_validation_crossfit'] = {'map_y0': y0u, 'n': len(cal_m), 'median_abs_log_err': xv_, 'set': 'validation plots' if VAL_SPLIT else 'calibration blocks (training)'}
         nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]
         ev['calibration_log_factors_mapping_path'] = CALF
         ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,

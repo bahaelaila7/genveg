@@ -1,6 +1,6 @@
 # Generative-vegetation pipeline — one place to run, document and check the model
 
-Driver: `scripts/genveg_pipeline.py`. Configuration: `config/genveg.yml`, which holds every switch of every stage; `--set key=value` overrides one,
+Driver: `scripts/genveg_pipeline.py`. Configuration: `config/genveg_v3b.yml` (default; `config/genveg.yml` is the frozen pre-audit v3 config, see docs/DECISIONS.md G13), which holds every switch of every stage; `--set key=value` overrides one,
 and unknown keys are refused. Method and audit history: `docs/GENERATIVE_VEG_PLAN.md`. The stands it maps come from a run of the stand-delineation
 pipeline (`docs/STANDS_PIPELINE.md`), named by `stands_run`.
 

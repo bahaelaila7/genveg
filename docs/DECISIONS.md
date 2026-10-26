@@ -66,3 +66,31 @@ recommendations, but document the decision point and the different options"). Th
 - **Context:** five instances.
 - **Options:** careful editing; **a static guard** (scripts/check_comments.py, in the driver before any stage and as gv_verify T0).
 - **Chosen:** the guard.
+
+## G13 — Legacy v3 config (r9 M-3, agent)
+- **Context:** config/genveg.yml has no validation split, so the enforced acceptance (G7) cannot be decided for it.
+- **Options:**
+  - (a) add VAL_SPLIT, which changes the live v3 product's split and forces a retrain;
+  - (b) **freeze it**: the driver refuses it, its outputs are kept, and v3b is the default config;
+  - (c) exempt legacy configs from enforcement.
+- **Chosen:** (b). (c) would reopen a test-set decision path.
+- **To reverse:** remove `frozen:` from the config.
+
+## G14 — Stocked-visit density check thresholds (r9 I-1, agent)
+- **Options:** report only; **median TPH and BA ratio to FIADB within 1 ± 0.02, and < 2 % of visits below 0.9**; a per-state test.
+- **Chosen:** the middle option, pre-registered before the rebuild. Expansion factors are identical by construction, so the residual should be about 0.
+
+## G15 — Files written into the data dir during a stage (r9 I-2, agent)
+- **Options:**
+  - (a) declare each stage's outputs explicitly;
+  - (b) **exclude the driver's own stdout / stderr targets**, and document that no other process may write there during a stage;
+  - (c) exclude all `*.out` files.
+- **Chosen:** (b). It is the smallest rule that is not ad hoc.
+
+## G16 — gafl_pipe production map (r9 M-2, agent)
+- **Options:** leave the B1 copy; **restore the 2026-10-23 B0 files**, which the live FE layer was built from; re-run map.
+- **Chosen:** restore, with no re-run (runs are halted). It is reversible, because the _B1 files are kept.
+
+## G17 — Where model choices are made (r9, agent)
+- **Options:** the test block, as the old §A said; **validation**: g03b `validation`, g04 `mapping_path_validation_crossfit`, g06 acceptance.
+- **Chosen:** validation. Test is reported only.

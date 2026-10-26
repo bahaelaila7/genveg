@@ -1,4 +1,5 @@
 # Generative-vegetation pipeline (scripts/genveg_pipeline.py; docs/GENVEG_PIPELINE.md) — every switch of every stage lives here.
+frozen: 'legacy v3 (pre-audit, no validation split): its outputs are kept, but it cannot run under the audited rules — use config/genveg_v3b.yml (docs/DECISIONS.md G13)'
 name: gafl_v3
 data: gafl                      # data/proto/<data>
 stands_run: gafl_pilot          # stand-delineation run (data/derived/runs/<name>, scripts/stands_pipeline.py): forest mask of the candidates + the mapped stands

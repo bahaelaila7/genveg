@@ -1,5 +1,5 @@
-"""Generative-vegetation pipeline driver — every stage in order, one configuration (config/genveg.yml; docs/GENVEG_PIPELINE.md).
-  .venv/bin/python -I scripts/genveg_pipeline.py [--config config/genveg.yml] [--set key=value ...] [--force stage,...] [--adopt stage,...] [stage ...]
+"""Generative-vegetation pipeline driver — every stage in order, one configuration (default config/genveg_v3b.yml; docs/GENVEG_PIPELINE.md).
+  .venv/bin/python -I scripts/genveg_pipeline.py [--config config/genveg_v3b.yml] [--set key=value ...] [--force stage,...] [--adopt stage,...] [stage ...]
 Stages (default all, in order):
   table         g02b_build_gafl.py       visits, cohort tokens, footprint candidates + location prior (forest mask = the stand run's land_clean)
   localisation  g02d_localisation.py     per-plot localisation numbers keyed by FIA plot identity
@@ -100,13 +100,14 @@ def code_hash(files):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--config', default=os.path.join(ROOT, 'config', 'genveg.yml')); ap.add_argument('--set', action='append', default=[], dest='sets')
+    ap.add_argument('--config', default=os.path.join(ROOT, 'config', 'genveg_v3b.yml')); ap.add_argument('--set', action='append', default=[], dest='sets')
     ap.add_argument('--force', default=''); ap.add_argument('--adopt', default=''); ap.add_argument('stages', nargs='*')
     a = ap.parse_args(); force = set(filter(None, a.force.split(','))); adopt = set(filter(None, a.adopt.split(',')))
     from check_comments import swallowed                                     # refuse to run code that a comment swallowed (r5-r8: 4 such bugs)
     hits = [(f, ln, fr) for f in sorted({c for d in STAGES.values() for c in d['code']} | set(LIB)) for ln, fr in swallowed(os.path.join(SCR, f))]
     if hits: sys.exit('code inside comments:\n' + '\n'.join(f'  {f}:{ln}: {fr}' for f, ln, fr in hits))
     cfg = apply_overrides(yaml.safe_load(open(a.config)), a.sets)
+    if cfg.get('frozen'): sys.exit(f'config {a.config} is frozen: {cfg["frozen"]}')
     D = os.path.join(ROOT, 'data', 'proto', cfg['data']); LOGD = os.path.join(D, 'pipeline_logs'); os.makedirs(LOGD, exist_ok=True)
     SR = os.path.join(ROOT, 'data', 'derived', 'runs', cfg['stands_run'])
     if not os.path.exists(f'{SR}/summary.json'): sys.exit(f'stand run {SR} missing: run scripts/stands_pipeline.py --name {cfg["stands_run"]} first')
@@ -125,14 +126,23 @@ def main():
                                                    **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {}), **({'inputs': inh} if st in INPUT_STAGES else {})),
                                               sort_keys=True, default=str).encode()).hexdigest()[:12]
     rehash()
+    OWN = set()                                                               # the driver's own stdout / stderr when redirected into the data dir (r9 I-2)
+    for fd in (1, 2):
+        try:
+            tgt = os.path.realpath(os.readlink(f'/proc/self/fd/{fd}'))
+            if tgt.startswith(os.path.realpath(D) + os.sep): OWN.add(os.path.relpath(tgt, os.path.realpath(D)))
+        except OSError: pass
     def snap():
-        """(size, mtime) of every file in the data dir (logs and the pipeline state excluded)"""
+        """(size, mtime) of every file in the data dir (logs, the pipeline state and the driver's own redirected output excluded). Other processes must
+        not write into the data dir while a stage runs: their files would be attributed to the stage."""
         out = {}
         for root, _, fs in os.walk(D):
             if os.path.abspath(root).startswith(os.path.abspath(LOGD)): continue
             for f in fs:
                 if f == 'pipeline_state.json': continue
-                fp = os.path.join(root, f); st_ = os.stat(fp); out[os.path.relpath(fp, D)] = [st_.st_size, st_.st_mtime_ns]
+                fp = os.path.join(root, f); rel = os.path.relpath(fp, D)
+                if rel in OWN: continue
+                st_ = os.stat(fp); out[rel] = [st_.st_size, st_.st_mtime_ns]
         return out
     def outputs_of(before):
         """the files a stage run created or changed (snapshot diff: no time slack, nothing of the previous stage attributed to it): fingerprint + list"""

@@ -80,6 +80,26 @@ _bare = V[~V.vid.isin(set(TK[TK.N > 0].vid.astype(int)))]; _md = pd.to_datetime(
 _nl = np.array([LIVE.get((int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)), 0) for a, b, c_, d, m in zip(_bare.st, _bare.u, _bare.c, _bare.p, _md)])
 check('T1k bare table visits (no cohort tokens) have no live FIADB trees on their forested conditions (<= 1 %)', len(_nl) == 0 or (_nl > 0).mean() <= 0.01,
       f'{len(_nl)} bare visits, with FIADB live trees {int((_nl > 0).sum())} ({(_nl > 0).mean() if len(_nl) else 0:.3f}), median live trees there {int(np.median(_nl[_nl > 0])) if (_nl > 0).any() else 0}')
+# T1l (audit r9 I-1: the T1 / T4 token checks recompute from curated_trees, i.e. the table against its own source): STOCKED visits' token TPH and BA
+# = FIADB live trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on forested conditions per forested area (shares from FIADB COND: SUBPPROP_UNADJ for trees
+# >= 5 in, MICRPROP_UNADJ for saplings, of COND_STATUS_CD 1) — catches live trees lost by the curation on visits that still have some
+_ft = _fx.execute(f"""with sh as (select PLT_CN, sum(case when COND_STATUS_CD = 1 then SUBPPROP_UNADJ else 0 end) fs, sum(case when COND_STATUS_CD = 1 then MICRPROP_UNADJ else 0 end) fm
+                                 from COND group by PLT_CN)
+                      select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
+                             sum(t.TPA_UNADJ * 2.47105 / case when t.DIA < 5 then nullif(sh.fm, 0) else nullif(sh.fs, 0) end) tph,
+                             sum(t.TPA_UNADJ * 2.47105 * pi() / 4 * power(t.DIA * 0.0254, 2) / case when t.DIA < 5 then nullif(sh.fm, 0) else nullif(sh.fs, 0) end) ba
+                      from TREE t join PLOT p on p.CN = t.PLT_CN join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID join sh on sh.PLT_CN = p.CN
+                      where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df()
+FT = {(int(a), int(b), int(c_), int(d), int(k)): (x, y) for a, b, c_, d, k, x, y in zip(_ft.st, _ft.u, _ft.c, _ft.p, _ft.vk, _ft.tph, _ft.ba) if pd.notna(k)}
+_tk = TK[TK.N > 0].assign(ba=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').agg(tph=('N', 'sum'), ba=('ba', 'sum'))
+_sv = V[V.vid.isin(_tk.index)].sample(min(1500, len(_tk)), random_state=12); _md = pd.to_datetime(_sv.md); rt, rb = [], []
+for (a, b, c_, d, m, vid) in zip(_sv.st, _sv.u, _sv.c, _sv.p, _md, _sv.vid):
+    f_ = FT.get((int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)))
+    if f_ and f_[0] and f_[0] > 0: rt.append(_tk.tph[vid] / f_[0]); rb.append(_tk.ba[vid] / f_[1])
+rt, rb = np.array(rt), np.array(rb)
+check('T1l stocked visits: token TPH / BA = FIADB live trees per forested area (median ratio within 1 ± 0.02, < 2 % of visits below 0.9)',
+      len(rt) > 100 and abs(np.median(rt) - 1) <= 0.02 and abs(np.median(rb) - 1) <= 0.02 and (rt < 0.9).mean() < 0.02 and (rb < 0.9).mean() < 0.02,
+      f'{len(rt)} visits; TPH ratio q10 / q50 {np.quantile(rt, 0.1):.3f} / {np.median(rt):.3f}, < 0.9: {(rt < 0.9).mean():.3f}; BA q10 / q50 {np.quantile(rb, 0.1):.3f} / {np.median(rb):.3f}, < 0.9: {(rb < 0.9).mean():.3f}')
 ba_ind = live.groupby('vid').apply(lambda x: (x.tpa / x.share * 0.005454154 * x.dia ** 2).sum() * 0.229568, include_groups=False)
 tt = TK[TK.vid.isin(ba_ind.index)]; ba_tok = tt.groupby('vid').apply(lambda x: (x.N * math.pi / 4 * (x.QMD / 100) ** 2).sum(), include_groups=False)
 check('T1g plot BA per forested area (FIA formula ft2/ac -> m2/ha) = BA from tokens', np.allclose(ba_ind.sort_index(), ba_tok.reindex(ba_ind.index).values, rtol=1e-6), f'n {len(ba_ind)}')

@@ -16,7 +16,7 @@ apply that to the current GA+FL data (30 m), and expand the model to EPA Region 
 | inverse encoder Q | MLP 256/128 | unchanged |
 Rationale for keeping a linear skip in the heads: the MIL localisation compares predicted with candidate AlphaEarth embeddings; the linear path keeps
 the latent's geometry tied to satellite space, the MLP removes the 16/32→64 linear bottleneck.
-Comparison: v3 vs v4 on the same table and held-out 10-km blocks (g03b direct predictor for every seed; g04 mapping path for model_seed only; null and kNN baselines).
+Comparison: v3 vs v4 on the same table and held-out 10-km blocks (g03b direct predictor for every seed; g04 mapping path for model_seed only; null and kNN baselines) — DECIDED on the validation metrics (g03b `validation`, g04 `mapping_path_validation_crossfit`, g06 acceptance); the test block is reported only (r9).
 GA+FL run: data dir `gafl_v4` (the `gafl_pipe` table, stand footprints and stage outputs adopted, model retrained); FE outputs stay in data/proto
 until the comparison is reviewed (the live Forest Explorer layer is not replaced).
 
@@ -228,6 +228,22 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * **M8** g06's synthetic section used all 2019-20 visits → held-out (test ∪ validation) visits only. Selection between v3 and v4 is to be made on the
   validation metrics (g04 gate errors on the validation plots, g06 acceptance); g03b's held-out block stays the test report.
 * While smoke-testing r8 two more of my edits had put code inside an inline comment (g06 synthetic set, gv_verify T4i) — the 4th / 5th instance of that
-  bug class → `scripts/check_comments.py` (a tokenizer + ast scan; catches all earlier instances, none left) runs in the driver before any stage
+  bug class → `scripts/check_comments.py` (a tokenizer + ast scan; since r9 also plain-call assignments of names the code reads but never binds — it now catches all five earlier instances, none left) runs in the driver before any stage
   (refuses to start) and as gv_verify T0. Verification of r8 on gafl_v4: gv_verify 49 / 53 (T1k / T3e / T3f / T10 = the stale table, by design);
   smoke: train step, g06 (val acceptance enforced: exit 3; not enforced: 0), g04 (calibration on the 676 validation plots), g05; scratch deleted.
+
+## L. Audit round 9 (2026-10-26, fresh independent Opus review of ca57292); no blocker, findings reproduced before fixing
+* **I-1** no check compared a STOCKED visit's tokens with FIADB (T1 / T4 recompute from curated_trees; T1k covers bare visits only); on the stale table
+  36 % of gafl_v4 visits (GA 50 %) and 42 % of r4_v4 visits have TPH < 0.9 × FIADB → gv_verify T1l (token TPH / BA vs FIADB live trees per forested
+  area, shares from FIADB COND; median within 1 ± 0.02, < 2 % of visits below 0.9). Fails on the stale table by design; must pass after the rebuild.
+* **I-2** the driver's own stdout redirected into the data dir (the documented `> data/proto/<data>/pipeline.out` practice) was attributed to the
+  running stage and broke its currency → the driver excludes its own stdout / stderr targets from the snapshots.
+* **M-1** check_comments missed plain-call assignments (the first instance, `trp_ = set(...)`) → also flags an assignment of a name the file's code
+  reads but never binds; catches all five historical instances; g05's one prose comment that looked like code reworded.
+* **M-2** data/proto/gafl_pipe's production stand map was the unvalidated B1 output of an interrupted pre-r6 run → restored to the B0 files of
+  2026-10-23 (byte-equal to the _B1 copies before; the live FE layer was built from B0).
+* **M-3** config/genveg.yml (no validation split) can no longer pass the enforced acceptance → frozen (the driver refuses it); default config v3b.
+* Process: validation metrics are now reported by g03b (`validation`) and g04 (`mapping_path_validation_crossfit`), so v3 vs v4 is chosen on them.
+* Verification of r9 on gafl_v4: gv_verify 49 / 54 — T1k / T1l / T3e / T3f / T10 = the stale table (T1l: TPH ratio q10 0.289, 35.7 % of stocked visits
+  below 0.9, as the auditor measured); smoke train / g06 / g04 / g05 OK; g03b `validation` (633 plots) and g04 `mapping_path_validation_crossfit` reported;
+  the driver with stdout redirected into the data dir: full run, then all current (stub root). Required after the slim_r4_v2 rebuild: 54 / 54.
