@@ -181,11 +181,16 @@ for cd in (30, 31): SPEC[('D', cd)] = (['fire'], (-1, 1), 2)
 SPEC[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
 for cd in range(50, 55): SPEC[('D', cd)] = (['weather'], (-1, 1), 2)
 SPEC[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
-HARMLESS = {12, 22, 31, 40, 41, 42, 43, 44, 45, 46, 60}
+HARMLESS = {11, 21, 31, 40, 41, 42, 43, 44, 45, 46, 60}   # FIADB v9.4 DSTRBCD: 11 / 21 insect / disease damage to UNDERSTORY vegetation (12 / 22 = to trees),
+# 31 ground fire, 40-46 animal, 60 vegetation — the EVALIDATOR variable library's labels (audit r6 I1: the old set had 12 / 22)
 evr = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy,
                     c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
                     from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
 evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
+# FIA's previous measurement of every visit (PREV_PLT_CN, any plot status): the period a visit's codes describe starts there
+_pm = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk
+                      from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+PREVK = {(int(a), int(b), int(c), int(d), int(k)): (int(q) if pd.notna(q) else None) for a, b, c, d, k, q in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.pvk)}
 ratios, nneg, ncl = [], 0, 0; REC = {}
 for pid, g in Cs.groupby('pid'):
     k_ = tuple(int(v) for v in Pi.loc[pid][key]); e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]
@@ -211,8 +216,9 @@ for pid, g in Cs.groupby('pid'):
     vv = e.groupby('vk').agg(my=('my', 'first'), pmy=('pmy', 'first')).sort_index(); srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5; per_ = []
     for j in range(len(vv)):
         if vv.index[j] in hiding: continue
-        if j > 0: per_.append((int(vv.my.iloc[j - 1]) + 1, int(vv.my.iloc[j]) - 1))
-        elif pd.notna(vv.pmy.iloc[0]): per_.append((int(vv.pmy.iloc[0]) + 1, int(vv.my.iloc[0]) - 1))
+        # spec: a visit's codes cover the period since FIA's previous measurement (PREV_PLT_CN), or since the previous forested visit if that is later
+        if pd.notna(vv.pmy.iloc[j]): per_.append((max(int(vv.pmy.iloc[j]), int(vv.my.iloc[j - 1]) if j > 0 else -9999) + 1, int(vv.my.iloc[j]) - 1))
+        elif j > 0: per_.append((int(vv.my.iloc[j - 1]) + 1, int(vv.my.iloc[j]) - 1))
         else: per_.append((int(vv.my.iloc[0]) - 5, int(vv.my.iloc[0]) - 1))
     for a, b in per_:
         a, b = max(a - 2000, 0), min(b - 2000, NY - 1)
@@ -265,7 +271,16 @@ NK, NA = len(KEYS), 16; v_ = torch.tensor(tv[:50]); lp_perfect = torch.where(ns_
 s_pred = ns_['summaries'](lp_perfect, ns_['slot_v'][v_]); o2 = ns_['obs_summ'](v_)
 check('T4c decoder summaries on perfect slots (with calibration) = observed summaries', all(np.allclose(s_pred[i].numpy(), o2[i].numpy(), rtol=1e-4, atol=1e-5) for i in range(3)))
 tr_p = set(ns_['vpid'][ns_['tr_v']]); te_p = set(ns_['vpid'][ns_['te_v']])
-check('T4d train / test plots disjoint (spatial blocks)', not (tr_p & te_p), f'train plots {len(tr_p)} test plots {len(te_p)}')
+from scipy.spatial import cKDTree as _KDv
+_xy = Pi[['x', 'y']] if 'x' in Pi.columns else None
+va_p = set(ns_['vpid'][ns_['va_v']]) if len(ns_['va_v']) else set()
+if _xy is not None:
+    _d_te = _KDv(_xy.loc[sorted(te_p)].values).query(_xy.loc[sorted(tr_p)].values)[0].min()
+    _d_va = _KDv(_xy.loc[sorted(va_p)].values).query(_xy.loc[sorted(tr_p)].values)[0].min() if va_p else np.inf
+else: _d_te = _d_va = np.nan
+check('T4d train / test / validation plots disjoint and every training plot >= 3.2 km from every test and validation plot (no overlapping 1.6 km disks)',
+      not (tr_p & te_p) and not (tr_p & va_p) and not (va_p & te_p) and _d_te >= 3200 and _d_va >= 3200,
+      f'train {len(tr_p)} test {len(te_p)} val {len(va_p)} plots; min train-test distance {_d_te:.0f} m, train-val {_d_va:.0f} m')
 _sw0 = (ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ']); ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = False, False, ns_['D_Z']   # T4e-j: the base flow
 flow = type(ns_['flow'])(); Dz = ns_['D_Z']; z0 = torch.zeros(3, Dz); dist = torch.zeros(3, NY, NC + 2); dist[1, 2010 - 2000, 0] = 1; soil = torch.zeros(3, ns_['SOIL'].shape[1])
 with torch.no_grad():
@@ -308,7 +323,17 @@ with torch.no_grad():
     e_no = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]))[2014]; e_re = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]), re=T_)[2014]
     s_no = flow(zm, torch.tensor([2014.2]), [2014], dm, sm)[2014]; s_rs = flow(zm, torch.tensor([2014.2]), [2014], dm, sm, rs=T_)[2014]
     s_0 = flow(zm, torch.tensor([2014.2]), [2014], torch.zeros_like(dm), sm)[2014]; e_0 = flow(zm, torch.tensor([2010.2]), [2014], torch.zeros_like(dm), sm, end=torch.tensor([2014.3]))[2014]
-check('T4m flow visit-year rule: re applies the end visit\'s own-year event before a first-half end; rs suppresses the start visit\'s recorded own-year event',
+ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1                    # the same rule with the production switches (the clock dimension excluded)
+fP = type(ns_['flow'])()
+with torch.no_grad():
+    for p_ in fP.J.parameters(): p_.fill_(0.0)
+    fP.J[-1].bias.fill_(1.0)
+    q_no = fP(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]))[2014][:, 1:]; q_re = fP(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]), re=T_)[2014][:, 1:]
+    q_0 = fP(zm, torch.tensor([2010.2]), [2014], torch.zeros_like(dm), sm, end=torch.tensor([2014.3]))[2014][:, 1:]
+ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = False, False, ns_['D_Z']
+prod_ok = (q_no - q_0).abs().max() < 1e-7 and abs((q_re - q_0).abs().mean().item() - math.tanh(1.0)) < 1e-5
+check('T4m flow visit-year rule (base and production switches): re applies the end visit\'s own-year event before a first-half end; rs suppresses the start visit\'s recorded own-year event',
+      prod_ok and
       (e_no - e_0).abs().max() < 1e-7 and abs((e_re - e_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and abs((s_no - s_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and (s_rs - s_0).abs().max() < 1e-7)
 # T4k site attractor (SITE_ATTR) and age clock (AGE_CH): an independently-built flow with both switches on (module globals of the exec'd g03b)
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1
@@ -332,9 +357,11 @@ try:
           e_fix < 1e-4 and e_soil > 1e-2 and abs(ck12 - 13 * 0.8 / AS) < 1e-5 and abs(ck25 - 26 * 0.8 / AS) < 1e-5 and abs(ck15e - post) < 1e-5 and abs(sR - (-AC / AS + 0.25 * math.tanh(1.0))) < 1e-5,
           f'|z - fixed point| {e_fix:.1e}, soil spread {e_soil:.3f}, clock 2012 {ck12:.4f} (13·0.8/40 = 0.26), after the 2015 event {ck15e:.4f} (expected {post:.4f}), cut 100-yr stand -> age {sR * AS + AC:.1f} yr')
 finally: ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = _sw0
-TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; vv = int(TKp.vid.values[0]); tv_ = TKp[TKp.vid == vv]; w_ = tv_.N * tv_.QMD ** 2
-check('T4l age-clock target AGE_OBS = BA-weighted mean cohort age of the visit (independent); bare visits 0',
-      abs(float(ao[vv]) - float((w_ * tv_.A).sum() / w_.sum())) < 1e-3 and float(ao[torch.tensor(sorted(set(range(len(V))) - set(TKp.vid.astype(int).unique())))].abs().max() if len(set(range(len(V))) - set(TKp.vid.astype(int).unique())) else 0) == 0)
+TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; _vs4 = np.random.default_rng(41).choice(TKp.vid.unique(), 300, replace=False); _e4 = 0.0
+for vv in _vs4:
+    tv_ = TKp[TKp.vid == vv]; w_ = tv_.N * tv_.QMD ** 2; _e4 = max(_e4, abs(float(ao[int(vv)]) - float((w_ * tv_.A).sum() / w_.sum())))
+check('T4l age-clock target AGE_OBS = BA-weighted mean cohort age of the visit (independent, 300 visits); bare visits 0',
+      _e4 < 1e-3 and float(ao[torch.tensor(sorted(set(range(len(V))) - set(TKp.vid.astype(int).unique())))].abs().max() if len(set(range(len(V))) - set(TKp.vid.astype(int).unique())) else 0) == 0)
 zn = torch.randn(4096, Dz); zs = zn * 3
 check('T4g SIGReg: ~0 for N(0, I), large for a scaled cloud', ns_['sigreg'](zn).item() < 0.2 * ns_['sigreg'](zs).item(), f'{ns_["sigreg"](zn).item():.4f} vs {ns_["sigreg"](zs).item():.4f}')
 # ======================= T5 landscape descriptors: inclusion-weighted subsample vs the full disk
@@ -398,6 +425,9 @@ def pair_spec(v1, v2, span):
     pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
     e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; vk1, vk2 = _vkey(v1), _vkey(v2); vks = {_vkey(u) for u in span}
     typed, hid = [], False
+    seq_ = [v1] + list(span)                       # a visit whose FIA previous measurement is not the previous table visit: its codes do not cover the pair
+    for u_prev, u in zip(seq_[:-1], seq_[1:]):
+        if PREVK.get(k_ + (_vkey(u),)) != _vkey(u_prev): hid = True
     for r in e.itertuples():
         for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
             cd, yr = getattr(r, a_), getattr(r, b_)
@@ -455,6 +485,14 @@ for v1 in list(PC)[:4000]:
         q = pair_spec(v1, v2, [v2]); n8e += 1
         if not (q['b'] == math.floor(y2) and q['cl']): n8e = -10 ** 9; break
 check('T8e first-half visits that recorded an event of their own year: the interval (v1, v2] holds the record and acts through v2\'s year', n8e > 0, f'{max(n8e, 0)} such pairs among the first 4000')
+# T8f g03b's record assignment and acting years (recs_in / act_span / pair_clusters, used by every stage) = the spec (pair_spec), pair by pair
+bad8f = 0; n8f = 0
+for v1 in rng8.choice(list(PC), 400, replace=False):
+    v2 = ns_['vpair'][v1]; q = pair_spec(v1, v2, [v2]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+    ya, yb = ns_['act_span'](y1, y2, bool(ns_['VREC'][v1]), bool(ns_['VREC'][v2])); pc_ = ns_['pair_clusters'](int(V.pid.values[v1]), y1, y2, ya, yb)
+    mine = sorted((c[1], c[2], c[3], tuple(sorted(c[0]))) for c in q['cl']); theirs = sorted((c['lo'], c['hi'], int(c['lr']), tuple(sorted(c['cols']))) for c in pc_)
+    n8f += 1; bad8f += (ya, yb) != (q['a'], q['b']) or mine != theirs
+check('T8f g03b act_span / recs_in / pair_clusters (acting years, clipped event clusters of the interval) = the independent spec', bad8f == 0, f'{n8f} pairs, mismatches {bad8f}')
 # T8c multi-horizon pairs (PAIR_ALL): the same independent recomputation over the span (a hiding code at ANY visit in between blocks the undisturbed rules)
 PC2 = ns_.get('pair_cand2', {}); multi = [k for k in PC2 if k[0] in ns_['vpair'] and ns_['vpair'][k[0]] != k[1]]
 vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()

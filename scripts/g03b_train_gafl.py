@@ -92,10 +92,19 @@ test_pid = set(P.pid[P.blk.isin(test_blk)]); have = set(cand_of)
 from scipy.spatial import cKDTree as _KD
 _te = P[P.pid.isin(test_pid)]; _dn, _ = _KD(_te[['x', 'y']].values).query(P[['x', 'y']].values)
 buffer_pid = set(P.pid[(_dn < 3200) & ~P.pid.isin(test_pid)])   # training plots whose 1.6 km disk could overlap a test plot's disk: excluded from training
+# VAL_SPLIT = 1 (audit r6 I2): 10 % of the remaining blocks are a VALIDATION set (+ its own 3.2 km buffer), excluded from training — the pre-registered
+# dynamics acceptance (g06) and other selection decisions use it, so the test blocks stay a pure held-out report. Default 0 keeps the older splits.
+VAL_SPLIT = os.environ.get('VAL_SPLIT', '0') == '1'; val_pid, vbuf_pid = set(), set()
+if VAL_SPLIT:
+    _rest = sorted(set(blks) - test_blk); val_blk = set(np.random.default_rng(3).choice(_rest, max(1, int(0.1 * len(_rest))), replace=False))
+    val_pid = set(P.pid[P.blk.isin(val_blk)]) - buffer_pid
+    _va = P[P.pid.isin(val_pid)]; _dv, _ = _KD(_va[['x', 'y']].values).query(P[['x', 'y']].values)
+    vbuf_pid = set(P.pid[(_dv < 3200) & ~P.pid.isin(val_pid) & ~P.pid.isin(test_pid)])
 MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9 % of
 fs_ok = (V.fsub.values >= MIN_FS) if 'fsub' in V.columns else np.ones(nv, bool)   # visits with forest share 0.10-0.25 have BA > 60 m2/ha vs 0.5 % when fully forested)
-tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
-print(f'visits train {len(tr_v)} test {len(te_v)} | plots test {len(test_pid & have)} | buffer plots excluded {len(buffer_pid & have)} | tokens/visit max {maxT}', flush=True)
+tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and vpid[v] not in val_pid and vpid[v] not in vbuf_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
+va_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in val_pid and fs_ok[v]], dtype=int)
+print(f'visits train {len(tr_v)} test {len(te_v)} val {len(va_v)} | plots test {len(test_pid & have)} val {len(val_pid & have)} | buffer plots excluded {len((buffer_pid | vbuf_pid) & have)} | tokens/visit max {maxT}', flush=True)
 pos = slot_p[tr_v].mean(0).clamp(min=1e-4); POSW = ((1 - pos) / pos).sqrt().clamp(max=30)   # per-slot positive weight from TRAINING visits (rare species × age classes count more)
 # ---- model
 class Enc(nn.Module):
@@ -267,13 +276,14 @@ vpair = {a: b for a, b in zip(PR.v1.values, PR.v2.values) if fs_ok[a] and fs_ok[
 # ---- FIA-anchored remeasurement pairs: the plot's own COND.TRT* / COND.DSTRB* records (true location, g02e) select the candidate histories the flow may
 # take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, g02b.EVK / clusters) must be matched by compatible
 # LANDFIRE / Hansen evidence in its window; if v2 carries no code that could hide a stand-replacing event, the history must have none in between
-# (harvest class or Hansen loss on >= half the footprint). Candidates are then drawn from the prior restricted to that set, weighted uniformly.
+# (harvest class or Hansen loss on >= half the footprint). Candidates are then drawn from the location prior restricted to that set.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_build_gafl as G2
 FEV = pd.read_parquet(f'{D}/fia_events.parquet')
 if 'rmd' not in FEV.columns: sys.exit('fia_events.parquet has no recording visit (rmd): rerun g02e_fia_records.py (audit r5 I3)')
 _rmd = pd.to_datetime(FEV.rmd); FEV['ry'] = _rmd.dt.year + (_rmd.dt.dayofyear - 0.5) / np.where(_rmd.dt.is_leap_year, 366.0, 365.0)   # = visits.year of that date
 ev_of = {p: list(zip(g.kind, g.year.astype(int), g.ry)) for p, g in FEV.groupby('pid')}      # (kind, event year, decimal year of the RECORDING visit)
 vblk = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool); vyr = V.year.values
+if 'fia_gap' in V.columns: vblk = vblk | V.fia_gap.values    # FIA's previous measurement is not the previous table visit: the codes do not cover the pair (r6 M1)
 # a visit that recorded an FIA event of its OWN calendar year: that year's evidence lies before the visit (Flow rs / re; audit r5 I3)
 _day = lambda x: pd.to_datetime(x).values.astype('datetime64[D]').astype(np.int64)                 # date -> day number (unit-safe key)
 _vk = dict(zip(zip(V.pid.values, _day(V.md)), range(nv))) if 'md' in V.columns else {}
@@ -496,7 +506,7 @@ with torch.no_grad():
         post = torch.softmax(-dd_ / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()   # uniform over the DISK (candidates x footprints they stand for)
         loc.append((post[hi_].sum(), iw_[hi_].sum() / iw_.sum()))
     if loc:
-        a = np.array(loc); ev['localisation'] = {'plots': len(a), 'posterior_mass_on_event_matching_candidates': float(a[:, 0].mean()), 'their_share_of_candidates': float(a[:, 1].mean())}
+        a = np.array(loc); ev['localisation'] = {'visits': len(a), 'posterior_mass_on_event_matching_candidates': float(a[:, 0].mean()), 'their_share_of_candidates': float(a[:, 1].mean())}
 _mstem = os.path.splitext(os.environ.get('MODEL', 'model.pt'))[0]                      # per-model outputs (every seed wrote eval.json: audit F5a)
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/eval_{_mstem}.json', 'w'), indent=1)
 # ---------------- map Baker stands: K_S samples per footprint → cohort slots → stand summaries (mean of footprints)

@@ -65,27 +65,32 @@ with torch.no_grad():
     # 3 LONG-HORIZON undisturbed growth (audit r3 I1: the no-event flow shrank stands ~2.4 %/yr over long horizons; FIA undisturbed pairs grow):
     #   held-out pairs of every horizon (g03b.pair_cand2: PAIR_ALL) with no detectable FIA event in the span and no hiding code at any visit in between —
     #   predicted vs observed BA log change per year, by horizon
-    blk_ = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool)     # (no column: every visit counts as blocked, as g03b)
+    blk_ = vblk                                                                            # (g03b: hiding codes | gaps in FIA's measurement chain)
     vs_of = V.assign(vid=np.arange(nv)).sort_values('year').groupby('pid').vid.apply(list).to_dict()   # (audit r5 B1: this assignment sat inside the comment)
-    lh = []
-    for (v1, v2), (cid, pr) in pair_cand2.items():
-        if vpid[v1] not in test_pid: continue
-        y1, y2 = float(vyear[v1]), float(vyear[v2]); seq = vs_of[vpid[v1]]; mid = seq[seq.index(v1) + 1:seq.index(v2) + 1]
-        if blk_[mid].any() or [c for c in G2.clusters(recs_in(vpid[v1], y1, y2)) if c['lr'] >= 4]: continue
-        ob1, ob2 = float(obs_summ(torch.tensor([v1]))[1][0]), float(obs_summ(torch.tensor([v2]))[1][0])
-        if ob1 < 1.0: continue
-        ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = int(math.floor(y2)); z0 = enc(torch.tensor([v1]), vyear[[v1]])
-        st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
-        p0 = float(summaries(*dec(z0))[1][0])
-        def dec_age(zz):    # decoded BA-weighted mean age of the expected slots (age-class midpoints)
-            lp_, val_ = dec(zz); pr_ = torch.sigmoid(calibrated(lp_)); w_ = torch.exp(val_[..., 0].clamp(max=12)) * pr_ * torch.exp(val_[..., 1].clamp(max=math.log(150.0))) ** 2
-            mid = (torch.arange(NK * NA) % NA).float() * 10 + 5; return float(((w_ * mid).sum(-1) / w_.sum(-1).clamp(min=1e-9)).median())
-        lh.append((y2 - y1, math.log((pb + 0.5) / (p0 + 0.5)) / (y2 - y1), math.log((ob2 + 0.5) / (ob1 + 0.5)) / (y2 - y1),
-                   (dec_age(st[yy]) - dec_age(z0)) / (y2 - y1), float(AGE_OBS[v2] - AGE_OBS[v1]) / (y2 - y1)))
-    for lo_, hi_ in ((0, 8), (8, 15), (15, 99)):
-        r_ = [x for x in lh if lo_ <= x[0] < hi_]
-        if r_: out[f'undisturbed_h{lo_}_{hi_}'] = {'n': len(r_), 'median_pred_logchange_per_yr': float(np.median([x[1] for x in r_])), 'median_obs_logchange_per_yr': float(np.median([x[2] for x in r_])),
-                                                   'median_pred_age_per_yr': float(np.median([x[3] for x in r_])), 'median_obs_age_per_yr': float(np.median([x[4] for x in r_]))}
+    def long_horizon(pset, prefix):
+        lh = []
+        for (v1, v2), (cid, pr) in pair_cand2.items():
+            if vpid[v1] not in pset: continue
+            y1, y2 = float(vyear[v1]), float(vyear[v2]); seq = vs_of[vpid[v1]]; mid = seq[seq.index(v1) + 1:seq.index(v2) + 1]
+            if blk_[mid].any() or [c for c in G2.clusters(recs_in(vpid[v1], y1, y2)) if c['lr'] >= 4]: continue
+            ob1, ob2 = float(obs_summ(torch.tensor([v1]))[1][0]), float(obs_summ(torch.tensor([v2]))[1][0])
+            if ob1 < 1.0: continue
+            ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = int(math.floor(y2)); z0 = enc(torch.tensor([v1]), vyear[[v1]])
+            st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
+            p0 = float(summaries(*dec(z0))[1][0])
+            def dec_age(zz):    # decoded BA-weighted mean age of the expected slots (age-class midpoints)
+                lp_, val_ = dec(zz); pr_ = torch.sigmoid(calibrated(lp_)); w_ = torch.exp(val_[..., 0].clamp(max=12)) * pr_ * torch.exp(val_[..., 1].clamp(max=math.log(150.0))) ** 2
+                mid = (torch.arange(NK * NA) % NA).float() * 10 + 5; return float(((w_ * mid).sum(-1) / w_.sum(-1).clamp(min=1e-9)).median())
+            lh.append((y2 - y1, math.log((pb + 0.5) / (p0 + 0.5)) / (y2 - y1), math.log((ob2 + 0.5) / (ob1 + 0.5)) / (y2 - y1),
+                       (dec_age(st[yy]) - dec_age(z0)) / (y2 - y1), float(AGE_OBS[v2] - AGE_OBS[v1]) / (y2 - y1)))
+        for lo_, hi_ in ((0, 8), (8, 15), (15, 99)):
+            r_ = [x for x in lh if lo_ <= x[0] < hi_]
+            if r_: out[f'{prefix}h{lo_}_{hi_}'] = {'n': len(r_), 'median_pred_logchange_per_yr': float(np.median([x[1] for x in r_])), 'median_obs_logchange_per_yr': float(np.median([x[2] for x in r_])),
+                                                       'median_pred_age_per_yr': float(np.median([x[3] for x in r_])), 'median_obs_age_per_yr': float(np.median([x[4] for x in r_]))}
+    # acceptance on the VALIDATION plots when the model has them (VAL_SPLIT: audit r6 I2); the test plots are reported only
+    ACC_SET = 'val' if VAL_SPLIT else 'test'
+    long_horizon(val_pid if VAL_SPLIT else test_pid, 'undisturbed_')
+    if VAL_SPLIT: long_horizon(test_pid, 'test_undisturbed_')
     # PRE-REGISTERED acceptance of the undisturbed dynamics (audit r4): per horizon bin, BA log change within ±0.01 / yr of the observed, and the decoded age
     # advancing 0.7–1.3 x the observed age progression
     acc = {}
@@ -93,8 +98,10 @@ with torch.no_grad():
         if k_.startswith('undisturbed_h') and d_['n'] >= 20:
             acc[k_] = {'BA_change_ok': abs(d_['median_pred_logchange_per_yr'] - d_['median_obs_logchange_per_yr']) <= 0.01,
                        'age_ok': d_['median_obs_age_per_yr'] > 0 and 0.7 <= d_['median_pred_age_per_yr'] / d_['median_obs_age_per_yr'] <= 1.3}
-    out['undisturbed_acceptance'] = {'bins': acc, 'passed': bool(acc) and all(all(v.values()) for v in acc.values())}
+    out['undisturbed_acceptance'] = {'set': ACC_SET, 'bins': acc, 'passed': bool(acc) and all(all(v.values()) for v in acc.values())}
 print(json.dumps(out, indent=1)); json.dump(out, open(f'{D}/dynamics_check_{out["tag"] or "run"}.json', 'w'), indent=1)
 # the acceptance is ENFORCED (audit r5 I5): a model whose undisturbed dynamics fail it is not mapped (the pipeline's downscale / map depend on this stage)
-if EVAL_LOC == 'history' and not out['undisturbed_acceptance']['passed']:   # (the location ablations are reports only)
+# enforced only for the production seed's history evaluation (G06_ENFORCE=1, set by the pipeline) and only on a validation set (never on test)
+if os.environ.get('G06_ENFORCE', '0') == '1' and EVAL_LOC == 'history' and not out['undisturbed_acceptance']['passed']:
+    if not VAL_SPLIT: print('ACCEPTANCE cannot be decided: no validation set (VAL_SPLIT=0) and the test plots are never used for it', flush=True); sys.exit(4)
     print(f"ACCEPTANCE FAILED: {out['undisturbed_acceptance']}", flush=True); sys.exit(3)

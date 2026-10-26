@@ -131,7 +131,8 @@ EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),   
        # ground fire is weak: prescribed burns recur every 2-3 yr, the fire class passes ~17 % of footprints, lift 1.85 -> never a hard constraint
        'Dins': ([IX['insdis']], (-1, 1), 2.0), 'Dwx': ([IX['weather']], (-1, 1), 2.0),
        'Dhum': ([IX['harvest'], IX['dev']], (-1, 1), 2.0)}                                                       # 'unknown' (70): not matched
-NONBLOCK = {12, 22, 31, 40, 41, 42, 43, 44, 45, 46, 60}   # DSTRBCD that cannot hide stand-replacing evidence (understory insects / disease, ground fire, animal, vegetation)
+NONBLOCK = {11, 21, 31, 40, 41, 42, 43, 44, 45, 46, 60}   # DSTRBCD that cannot hide stand-replacing evidence: insect / disease damage to UNDERSTORY vegetation (11 / 21;
+# 12 / 22 are damage to TREES and can — FIADB v9.4 / EVALIDATOR library, audit r6 I1), ground fire, animal, vegetation
 def ev_kind(trt, code):
     c = int(code)
     if trt: return {10: 'T10', 20: 'T20', 30: 'T30', 40: 'T40', 50: 'T50'}.get(c)
@@ -233,8 +234,10 @@ def fia_records(FE, FV, P, key):
         yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []
         for j in range(len(yrs)):
             if (k_, pd.Timestamp(mds[j])) in blocked: continue
-            if j > 0: nl.append((yrs[j - 1] + 1, yrs[j] - 1))
-            elif pd.notna(pm[0]): nl.append((int(pm[0]) + 1, yrs[0] - 1))
+            # the visit's codes cover the period since FIA's PREVIOUS measurement (PREV_PLT_CN, any status): a non-forest / non-sampled visit in between
+            # shortens it (audit r6 M1); the later of that and the previous forested visit is used
+            if pd.notna(pm[j]): nl.append((max(int(pm[j]), yrs[j - 1] if j > 0 else -9999) + 1, yrs[j] - 1))
+            elif j > 0: nl.append((yrs[j - 1] + 1, yrs[j] - 1))
             else: nl.append((yrs[0] - 5, yrs[0] - 1))
         negs[pidk[k_]] = nl
     return evs, negs, blocked

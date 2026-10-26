@@ -30,7 +30,7 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'history':      dict(code=['g02g_history_consistency.py', 'g02b_build_gafl.py'], cfg=[], up=['records', 'localisation'], stands=[]),
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize']),
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
-    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history'], stands=[]),
+    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history', 'stands_fp'], stands=[]),   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
     'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train'], up=['train'], stands=[]),
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train', 'dynamics'], stands=[]),   # (dynamics: its acceptance gates mapping, audit r5 I5)
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),
@@ -42,7 +42,7 @@ ORDER = list(STAGES)
 STAND_FILES = dict(clean='clean/land_clean.tif', land='land/land.tif', finalize='finalize/stands.tif')
 # every switch a stage script reads from its environment: never inherited from the shell (an exported AEF90 / REGION / ARCH … would otherwise build or
 # train another region / architecture under this config's hash; audit 2026-10-26 P1) — only the config (top-level env, stage env) sets them
-STAGE_SWITCHES = {'GV_CURATED_DB', 'GV_FIADB', 'AEF90', 'ARCH', 'RADIAL_P', 'T_PAIR', 'SITE_ATTR', 'PAIR_ALL', 'PAIR_HMAX', 'MAP_Y0', 'AGE_CH', 'W_AGE', 'SMOKE_BATCHES', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
+STAGE_SWITCHES = {'GV_CURATED_DB', 'GV_FIADB', 'VAL_SPLIT', 'G06_ENFORCE', 'AEF90', 'ARCH', 'RADIAL_P', 'T_PAIR', 'SITE_ATTR', 'PAIR_ALL', 'PAIR_HMAX', 'MAP_Y0', 'AGE_CH', 'W_AGE', 'SMOKE_BATCHES', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
                   'GV_SKIP_U8', 'KC', 'LOAD', 'LOC', 'LR', 'MDN_EP', 'MIN_FSHARE', 'MODEL', 'NCAND', 'NPROC', 'NT', 'PAIR_ANCHOR', 'QD_WIN', 'RAD_M', 'REGION',
                   'SEED', 'SEVERITY_ANCHOR', 'STANDS_RUN', 'TAG', 'TOPK', 'USE_B', 'WRITE_LOC', 'W_COMP', 'W_SUM'}
 # Region 4 (AEF90) inputs the table / stand-footprint stages read instead of the stand run's rasters (audit P2): fingerprinted by size + mtime (the
@@ -61,10 +61,11 @@ def r4_fingerprint():
     return h.hexdigest()[:16]
 # GA+FL (30 m) inputs of the table / records / stand-footprint / verify stages, and the FIA databases (config `inputs`): fingerprinted by path + size + mtime
 # (audit r5 I4: only the stand run's pixels and the R4 inputs were hashed — a rebuilt curated table or new rasters passed as current)
+COMMON_INPUTS = ['data/proto/baker/plots.parquet', 'data/landfire/dist/dist_codes.csv', 'data/derived/baker_county.gpkg']   # read in both regions (r6 M4)
 GAFL_INPUTS = ['data/aef/aef_2022.tif', 'data/aef/aef_2025.tif', 'data/landfire/dist/dist_*.tif', 'data/landfire/dist/dist_codes.csv', 'data/hansen/lossyear.tif',
                'data/soils/*.tif']
-INPUT_STAGES = ('table', 'records', 'history', 'stands_fp', 'verify')
-def inputs_fingerprint(cfg, r4):
+INPUT_STAGES = ('table', 'records', 'history', 'stands_fp', 'train', 'verify')
+def inputs_fingerprint(cfg, r4, sr):
     import glob
     h = hashlib.sha256(); inp = cfg.get('inputs', {})
     dbs = {'curated_db': inp.get('curated_db', 'landis_region4/data_r4/slim_r4.duckdb'), 'fiadb': inp.get('fiadb', 'FIA/FIASQLITE2PGSQL/FIADB.duckdb')}
@@ -72,7 +73,9 @@ def inputs_fingerprint(cfg, r4):
         f = os.path.join(WS, rel)
         if not os.path.exists(f): sys.exit(f'input database missing: {k} = {f}')
         st = os.stat(os.path.realpath(f)); h.update(f'{k}:{os.path.realpath(f)}:{st.st_size}:{st.st_mtime_ns}'.encode())
-    for pat in ([] if r4 else GAFL_INPUTS):
+    for f in (f'{sr}/finalize/stands.gpkg',):                                 # the stand run's polygons (g02j, fe)
+        st = os.stat(f); h.update(f'stand_gpkg:{st.st_size}:{st.st_mtime_ns}'.encode())
+    for pat in COMMON_INPUTS + ([] if r4 else GAFL_INPUTS):
         fs = sorted(glob.glob(os.path.join(ROOT, pat)))
         if not fs: sys.exit(f'GA+FL input missing: {pat}')
         for f in fs: st = os.stat(f); h.update(f'{os.path.relpath(f, ROOT)}:{st.st_size}:{st.st_mtime_ns}'.encode())
@@ -107,7 +110,7 @@ def main():
     srh = {k: pixel_hash(os.path.join(SR, f)) for k, f in STAND_FILES.items()}          # CONTENT of the stand run's outputs genveg reads
     stf = f'{D}/pipeline_state.json'; state = json.load(open(stf)) if os.path.exists(stf) else {}
     r4h = r4_fingerprint() if str(cfg.get('env', {}).get('AEF90', '0')) == '1' else None
-    inh, dbs = inputs_fingerprint(cfg, r4h is not None)
+    inh, dbs = inputs_fingerprint(cfg, r4h is not None, SR)
     # stage hash = its config sections, code, region switches and inputs, and per upstream stage its hash AND the fingerprint of the outputs that run wrote
     # (state[u]['out']): a re-run or --force of a stage (e.g. a non-deterministic retrain) makes every downstream stage stale (audit 2026-10-26 F11)
     H = {}
@@ -120,14 +123,28 @@ def main():
                                               sort_keys=True, default=str).encode()).hexdigest()[:12]
     rehash()
     def outputs_since(t0):
-        """Fingerprint of the files a stage wrote in the data dir (name, size, mtime; logs and the pipeline state excluded)."""
-        h = hashlib.sha256()
+        """Fingerprint + list of the files a stage wrote in the data dir (name, size, mtime; logs and the pipeline state excluded)."""
+        h = hashlib.sha256(); files = {}
         for root, _, fs in os.walk(D):
             if os.path.abspath(root).startswith(os.path.abspath(LOGD)): continue
             for f in sorted(fs):
                 fp = os.path.join(root, f); st_ = os.stat(fp)
-                if f != 'pipeline_state.json' and st_.st_mtime >= t0 - 1: h.update(f'{os.path.relpath(fp, D)}:{st_.st_size}:{st_.st_mtime_ns}'.encode())
-        return h.hexdigest()[:12]
+                if f != 'pipeline_state.json' and st_.st_mtime >= t0 - 1:
+                    h.update(f'{os.path.relpath(fp, D)}:{st_.st_size}:{st_.st_mtime_ns}'.encode()); files[os.path.relpath(fp, D)] = [st_.st_size, st_.st_mtime_ns]
+        return h.hexdigest()[:12], files
+    def files_ok(st):
+        """a stage is current only if the files its run wrote are still those files (a manual re-run / edit of an output is seen: audit r6 M3);
+        adopted stages carry no file list (the --adopt contract)"""
+        e = state.get(st, {})
+        if e.get('how') == 'adopted': return True
+        fl = e.get('files')
+        if fl is None: return False
+        for rel, (sz, mt) in fl.items():
+            fp = os.path.join(D, rel)
+            if not os.path.exists(fp): return False
+            s_ = os.stat(fp)
+            if s_.st_size != sz or s_.st_mtime_ns != mt: return False
+        return True
     py = [sys.executable, '-I']
     tenv = {k: str(v) for k, v in cfg['train']['env'].items()}
     base_env = dict({k: v for k, v in os.environ.items() if k not in STAGE_SWITCHES}, GV_CURATED_DB=dbs['curated_db'], GV_FIADB=dbs['fiadb'], STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']), **{k: str(v) for k, v in cfg.get('env', {}).items()})
@@ -150,14 +167,16 @@ def main():
         if st == 'train': return [(S('g03b_train_gafl.py'), dict(tenv, SEED=str(s), MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt")) for s in cfg['train']['seeds']]
         if st == 'dynamics':
             return [(S('g06_dynamics_check.py'), dict(tenv, **{k: str(v) for k, v in cfg['dynamics']['env'].items()}, MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt",
-                                                       EVAL_LOC=L, TAG=f"{cfg['name']}_{L}_s{s}")) for s in cfg['train']['seeds'] for L in cfg['dynamics']['eval_loc']]
+                                                       EVAL_LOC=L, TAG=f"{cfg['name']}_{L}_s{s}", G06_ENFORCE='1' if s == cfg['model_seed'] else '0'))
+                    for s in cfg['train']['seeds'] for L in cfg['dynamics']['eval_loc']]   # (only the production seed's acceptance gates mapping: r6 I2)
         if st == 'downscale': return [(S('g04_bayes_downscale.py'), dict(tenv, **{k: str(v) for k, v in cfg['downscale']['env'].items()}, MODEL=model))]
         if st == 'map':
             out = []
             for b in cfg['map']['use_b']:
                 out.append((S('g05_map_stands.py'), dict(tenv, **{k: str(v) for k, v in cfg['map']['env'].items()}, MODEL=model, USE_B=str(b))))
-                out.append((['cp', f'{D}/stand_veg_v3.parquet', f'{D}/stand_veg_v3_B{b}.parquet'], {}))
-                out.append((['cp', f'{D}/stand_cohorts_v3.parquet', f'{D}/stand_cohorts_v3_B{b}.parquet'], {}))
+            b = cfg['map']['use_b'][-1]                                       # the production map: written under its own name only after every run (r6 M2)
+            out.append((['cp', f'{D}/stand_veg_v3_B{b}.parquet', f'{D}/stand_veg_v3.parquet'], {}))
+            out.append((['cp', f'{D}/stand_cohorts_v3_B{b}.parquet', f'{D}/stand_cohorts_v3.parquet'], {}))
             return out
         if st == 'fe':
             gj = os.path.join(WS, cfg['fe']['geojson'])
@@ -168,9 +187,9 @@ def main():
         if st in adopt:
             state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how='adopted', out=state.get(st, {}).get('out')); rehash()
             print(f'== {st}: ADOPTED existing outputs as current ({H[st]})'); continue
-        if state.get(st, {}).get('hash') == H[st] and st not in force:
+        if state.get(st, {}).get('hash') == H[st] and files_ok(st) and st not in force:
             print(f'== {st}: current ({state[st]["how"]} {state[st]["at"]})'); continue
-        stale = [u for u in STAGES[st]['up'] if state.get(u, {}).get('hash') != H[u]]
+        stale = [u for u in STAGES[st]['up'] if state.get(u, {}).get('hash') != H[u] or not files_ok(u)]
         if stale: sys.exit(f'!! {st}: upstream stage(s) {stale} not current — run them first')
         if st in ('downscale', 'map', 'verify'): shutil.copy(f'{D}/{model}', f'{D}/model.pt')      # tools that read the default model see the chosen one
         state.pop(st, None); json.dump(state, open(stf, 'w'), indent=1)      # running = not current: a failed (forced) re-run leaves no stale 'current' mark (audit r3 I4)
@@ -179,7 +198,7 @@ def main():
         tail = open(f'{LOGD}/{st}.log').read().strip().splitlines()[-1:] or ['']
         if rc != 0:
             print(f'!! {st} FAILED (exit {rc}): {tail[0][:300]}'); json.dump(state, open(stf, 'w'), indent=1); sys.exit(1)
-        state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s', out=outputs_since(t0)); json.dump(state, open(stf, 'w'), indent=1)
+        oh, ofl = outputs_since(t0); state[st] = dict(hash=H[st], at=time.strftime('%F %T'), how=f'ran {time.time()-t0:.0f}s', out=oh, files=ofl); json.dump(state, open(stf, 'w'), indent=1)
         rehash()                                                                            # downstream hashes now see this run's outputs
         print(f'   {tail[0][:300]}', flush=True)
     json.dump(state, open(stf, 'w'), indent=1)

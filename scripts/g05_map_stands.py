@@ -2,10 +2,11 @@
 and were not comparable with the plots' disks). Per stand, its OWN landscape: the forest footprints (3x3, stride 3) within 1.6 km of the stand's centroid, the
 a uniform 256-subsample (seed = stand id; the plots' descriptors are inclusion-weighted estimates from their NCAND stratified candidates —
 both estimate the full-disk descriptor, with different noise), the same descriptor (g04.landscape). (Until 2026-10-22 every stand took the descriptor of the
-nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, MAP_Y0) (env MAP_Y0, as g04's mapping path) (MDN, saved by g04);
+nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand variance and drew 1 km squares on the map.) z ~ p(z | X_L, map_y0) (bayes_eval.json map_y0: the start year g04 gated) (MDN, saved by g04);
 optional likelihood weighting (USE_B=1, B's flow + heads saved by g04 — likelihood only; joint evidence of the stand's footprints = mean AlphaEarth distance); flow to 2025
 through the footprints' disturbance histories with the v2 flow (decoder-consistent; samples spread over the footprints); decode;
-the mapping-path calibration factors of g04 (validated there on held-out plots). Writes data/proto/gafl/stand_veg_v3.parquet and prints diagnostics (by status, correlation with TreeMap)."""
+the mapping-path calibration factors of g04 (validated there on held-out plots). Writes data/proto/<data>/stand_veg_v3_B<USE_B>.parquet + stand_cohorts_v3_B<USE_B>.parquet (genveg_pipeline promotes the production one to
+stand_veg_v3.parquet / stand_cohorts_v3.parquet) and prints diagnostics (by status, correlation with TreeMap)."""
 import os, sys, json, math, pickle, numpy as np, pandas as pd, torch, rasterio, geopandas as gpd
 os.environ.setdefault('DATA', 'gafl'); os.environ['LOAD'] = '1'; os.environ['EPOCHS'] = '0'
 _argv = sys.argv; sys.argv = ['g03b']
@@ -95,8 +96,8 @@ with torch.no_grad():
         # GEN_QMD = the QMD of the calibrated TPH / BA (consistent with the cohort table; the median of the samples' QMDs was not: audit F10)
         rows.append(dict(stand_id=int(sid), node=int(j), tph=tph_m, ba=ba_m, qmd=100 * math.sqrt(ba_m / (tph_m * math.pi / 4)) if tph_m > 0 else 0.0,
                          ba_sd=float(s_[1].std()), dom=dom_, draw=i_))
-out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3.parquet')
-C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3.parquet')
+out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3_B{int(USE_B)}.parquet')   # (the pipeline promotes the production use_b to stand_veg_v3.parquet: r6 M2)
+C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3_B{int(USE_B)}.parquet')
 _t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()
 _fnd = np.array(fND); print(f'medoid-draw factors fN q05/q50/q95 {np.nanquantile(_fnd[:, 0], [.05, .5, .95]).round(3)}, fD {np.nanquantile(_fnd[:, 1], [.05, .5, .95]).round(3)}', flush=True)
 _o = out.set_index('stand_id'); print(f'stand cohorts: {len(C_)} rows for {C_.stand_id.nunique()} stands (median {int(C_.groupby("stand_id").size().median())} per stand); '

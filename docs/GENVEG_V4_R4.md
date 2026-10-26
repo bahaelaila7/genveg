@@ -16,7 +16,7 @@ apply that to the current GA+FL data (30 m), and expand the model to EPA Region 
 | inverse encoder Q | MLP 256/128 | unchanged |
 Rationale for keeping a linear skip in the heads: the MIL localisation compares predicted with candidate AlphaEarth embeddings; the linear path keeps
 the latent's geometry tied to satellite space, the MLP removes the 16/32→64 linear bottleneck.
-Comparison: v3 vs v4 on the same table and held-out 10-km blocks (g03b direct predictor; g04 mapping path; null and kNN baselines), 2 seeds each.
+Comparison: v3 vs v4 on the same table and held-out 10-km blocks (g03b direct predictor for every seed; g04 mapping path for model_seed only; null and kNN baselines).
 GA+FL run: data dir `gafl_v4` (the `gafl_pipe` table, stand footprints and stage outputs adopted, model retrained); FE outputs stay in data/proto
 until the comparison is reviewed (the live Forest Explorer layer is not replaced).
 
@@ -44,7 +44,7 @@ until the comparison is reviewed (the live Forest Explorer layer is not replaced
   route vs the GA+FL 30 m mosaic, T13 skipped without g02c windows), gv_verify_upstream (U1r grids, U6r forest-land rules re-derived with CONUS
   TreeMap / EVT read by coordinates, U8 with 90 m footprints). GA+FL defaults: byte-identical (old vs new g02b `plot_job` on 40 plots + FIADB queries).
 * Table: `NCAND` 128 (GA+FL 256; ~3.5× the plots: ~30k plots, ~115k visits in curated_trees since 2000), `TOPK` 24 (GA+FL 16; Region 4 is more diverse).
-* Train v4 on Region 4; evaluate on held-out 10-km blocks across Region 4 (per state too); downscale; map the Baker stands (the GA+FL stand run
+* Train v4 on Region 4; evaluate on held-out 10-km blocks across Region 4 (per-state breakdown NOT implemented yet: a TODO, audit r6 M8); downscale; map the Baker stands (the GA+FL stand run
   `gafl_pilot`, features from the Region 4 rasters), outputs in `data/proto/r4_v4` (not the live FE layer).
 
 ## C. Run (resumable; every step skips finished work)
@@ -157,3 +157,31 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
   the other); held-out errors of both paths are reported only.
 * **M4** g02b docstring: the stand age at the first visit is not used as negative evidence (corrected). **M6** the epoch log divides by the visits seen.
 * M5 (verifier scope) addressed by the independent `pair_spec`; T8 still runs the period rule (T8b covers PAIR=both + severity).
+
+## I. Audit round 6 (2026-10-26, fresh independent Opus review of e5992ef); findings reproduced before fixing
+* **I1** FIA DSTRBCD 11 / 12 and 21 / 22 were swapped in the "cannot hide a stand-replacing event" set (g02b.NONBLOCK, gv_verify HARMLESS): per the
+  FIADB library, 11 / 21 = insect / disease damage to UNDERSTORY vegetation, 12 / 22 = damage to TREES (e.g. southern pine beetle). → {11, 21, 31, 40–46,
+  60}. gafl_v4: visits with a hiding code 9,521 → 10,636; negative-evidence periods 25,009 → 23,891 (the location prior / history sets change at the next
+  table rebuild).
+* **I2** the g06 acceptance was decided on the held-out TEST plots (and every seed had to pass) → `VAL_SPLIT` (train env; the v4 / r4 / v3b configs set
+  it): 10 % of the non-test blocks (minus the test buffer) are a validation set with its own 3.2 km buffer, excluded from training; g06 decides the
+  acceptance on the validation plots (test reported as `test_undisturbed_*`) and enforces it only for `model_seed` (pipeline sets G06_ENFORCE); without a
+  validation set the acceptance cannot pass (exit 4). gv_verify T4d checks the three sets are disjoint and ≥ 3.2 km apart.
+* **M1** a pair spanning an FIA measurement missing from the table (non-forest / non-sampled visit) was read as undisturbed → g02e writes
+  `visits.fia_gap` (FIA's PREV_PLT_CN measurement is not the previous table visit; 125 visits), g03b / g06 treat it as blocking; the negative-evidence
+  period of a visit starts at the later of PREV_PLT_CN's measurement and the previous forested visit (g02b.fia_records). gv_verify re-derives both.
+* **M2** the map stage wrote the unvalidated B1 map under the production name first → g05 writes `_B<b>` files only; the pipeline promotes the last
+  `use_b` (B0) to stand_veg_v3.parquet / stand_cohorts_v3.parquet after all runs.
+* **M3** stage currency by hash only → the state records each run's output files (size, mtime) and a stage is current only if they are unchanged.
+* **M4** inputs no stage hashed → train depends on stands_fp; baker plots, dist_codes.csv (both regions), the Baker county and stand-run polygons are
+  fingerprinted.
+* **M5** verifier: T8f compares g03b's own act_span / recs_in / pair_clusters with the spec; T4m also runs with the production switches; T4l on 300 visits;
+  T4d tests the buffers.
+* **M6** g04's B flow ignored the visit's recorded own-year event (rs) → passed. **M7** MDN-fit plots within 3.2 km of a calibration plot are not fitted;
+  the gate's null baseline excludes the plots it judges. **M8** comments / doc corrected (per-state R4 evaluation is a TODO; the mapping path runs
+  model_seed only).
+* Verification of r6 on gafl_v4 (table built by the PRE-r6 g02b / g02g): gv_verify 50 / 52 — the two failures are the expected staleness of the table:
+  T3f (location prior: max ratio spread exactly 4 = the ×0.25 negative-evidence factor of the corrected DSTRBCD set / periods) and T10 (history sets,
+  2 of 60 plots). Both are rebuilt from the fixed curation (slim_r4_v2) before any training. Smoke: training step, untrained-checkpoint g06 (validation
+  acceptance enforced: exit 3), g04 and g05 end to end (scratch outputs deleted). While smoke-testing, an r6 edit had put `n_ = …` inside a comment in
+  g04.fwd_dist (the B1 bug class again) — fixed; a scan of every stage for code after `;` in comments finds none.
