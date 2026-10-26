@@ -468,7 +468,7 @@ def obs_summ(v):
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
 last = V[fs_ok]; last = last.loc[last.groupby('pid').year.idxmax()]; last = last[last.year >= 2019]       # Q predicts the 2025 state: compare with recent visits only (both model and kNN)
-te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(have - test_pid - buffer_pid)].vid.values
+te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(set(vpid[tr_v]))].vid.values   # kNN / null pool: TRAINING plots only (no validation self-matches: r10 I-1)
 def plot_feat(pid):    # prior-weighted mean candidate features (the plot's satellite description under location uncertainty)
     cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); return (X * torch.tensor(pr, dtype=torch.float32).unsqueeze(-1)).sum(0)
 with torch.no_grad():

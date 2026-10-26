@@ -194,13 +194,15 @@ print(f"   (fiscal-year codes placed in the previous calendar year: {sum(1 for (
 hl = rasterio.open(HANSP); LF = {yr: rasterio.open(DISTP(yr)) for yr in YEARS}; bad = 0; nev = 0; nh = 0; maxd = 0
 for (r, c), xrow in zip(zip(sub.row[:150], sub.col[:150]), X[:150]):
     per = xrow[128:128 + NY * (NC + 2)].reshape(NY, NC + 2); hw = hl.read(1, window=Window(c - 1, r - 1, 3, 3)); exp = np.zeros((NY, NC)); esv = np.zeros(NY)
+    hit = set()                                       # spec: a footprint pixel counts once per class and event year (whichever product codes it)
     for yr in YEARS:
         win = LF[yr].read(1, window=Window(c - 1, r - 1, 3, 3))
-        for code in win.ravel():
+        for pix, code in enumerate(win.ravel()):
             if code > 0:
                 c_, ey = lk.get((yr, int(code)), (None, yr))
-                if c_ is not None and YEARS[0] <= ey <= YEARS[-1]: exp[ey - YEARS[0], c_] += 1 / 9; esv[ey - YEARS[0]] = max(esv[ey - YEARS[0]], lks[(yr, int(code))])
-    exp = np.minimum(exp, 1); he = np.array([((hw == yr - 2000) & (hw > 0)).sum() / 9 for yr in YEARS])
+                if c_ is not None and YEARS[0] <= ey <= YEARS[-1]: hit.add((ey, c_, pix)); esv[ey - YEARS[0]] = max(esv[ey - YEARS[0]], lks[(yr, int(code))])
+    for ey, c_, pix in hit: exp[ey - YEARS[0], c_] += 1 / 9
+    he = np.array([((hw == yr - 2000) & (hw > 0)).sum() / 9 for yr in YEARS])
     dd_ = max(np.abs(per[:, :NC] - exp).max(), np.abs(per[:, NC + 1] - he).max(), np.abs(per[:, NC] - esv).max() / 3); maxd = max(maxd, dd_); bad += int(dd_ > 2e-3)
     nev += int((exp > 0).sum()); nh += int((he > 0).sum())
 check('T3e disturbance fractions (3x3) and severity (max) at the event calendar year (LANDFIRE) and Hansen fractions = direct raster lookups', bad == 0,

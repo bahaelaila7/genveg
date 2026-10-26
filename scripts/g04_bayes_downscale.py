@@ -206,25 +206,28 @@ with torch.no_grad():
             # from the calibrated TPH / BA (GEN_QMD), not the samples' median QMD x its own factor (audit r8 M6)
             return CF, pt, P_, {nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
         # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its TPH and BA errors are no worse than the 2021
-        # path's and than the null's, AND the prediction still depends on the stand's landscape (BA predictions with the landscapes shuffled correlate
-        # < 0.5 with the real ones); else 2021. The gate is decided on the CALIBRATION plots (cross-fitted: factors from one half of the plots, errors on
+        # path's and than the null's, AND the prediction still depends on the stand's landscape (at least half the 2021 path's landscape dependence, r10); else 2021. The gate is decided on the CALIBRATION plots (cross-fitted: factors from one half of the plots, errors on
         # the other), never on the held-out plots it then reports (audit r5 M1). The chosen year is recorded; g05 maps with it.
         res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0, 'decided_on': 'calibration plots, 2-fold by plot'}
         if MAP_Y0 != 2021.0:
             res[MAP_Y0] = evaluate(MAP_Y0)
             hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]
-            e0, e1, cs_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, []
+            e0, e1, cs_, cs0_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, [], []
             nulle = {k: 0.0 for k in ('TPH', 'BA')}
             for ca, cb in ((hA, hB), (hB, hA)):              # each half judged with factors from the other
                 r0, r1 = evaluate(2021.0, ca, cb), evaluate(MAP_Y0, ca, cb); ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb], excl=set(vpid[cb]))
                 Xs = Xv[[vi[cb[i]] for i in np.random.default_rng(7).permutation(len(cb))]]
                 ps_ = map_path(cb, MAP_Y0, X=Xs); ba_r = torch.log(torch.stack([r[1] for r in r1[1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
                 cs_.append(float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]))
+                ps0 = map_path(cb, 2021.0, X=Xs); b0r = torch.log(torch.stack([r[1] for r in r0[1]]) + 1e-3); b0s = torch.log(torch.stack([r[1] for r in ps0]) + 1e-3)
+                cs0_.append(float(np.corrcoef(b0r.numpy(), b0s.numpy())[0, 1]))   # the same statistic for the 2021 path (the reference: r10)
                 for i, k in ((0, 'TPH'), (1, 'BA')):
                     e0[k] += r0[3][k] / 2; e1[k] += r1[3][k] / 2; nulle[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2
-            cs = float(np.mean(cs_))
-            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and cs < 0.5
-            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'passed': bool(ok),
+            cs, cs0 = float(np.mean(cs_)), float(np.mean(cs0_))
+            # landscape dependence 1 − corr(real, shuffled-landscape BA): the requested path must keep at least half of the 2021 path's (an absolute
+            # cs < 0.5 can be unpassable for both paths, since the plot's own histories and soils are not shuffled: r10, docs/DECISIONS.md G19)
+            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and (1 - cs) >= 0.5 * (1 - cs0)
+            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'shuffled_landscape_corr_BA_2021': cs0, 'passed': bool(ok),
                          'heldout_err_2021': res[2021.0][3], 'heldout_err_requested': res[MAP_Y0][3]})     # (held-out: reported, not used)
         y0u = MAP_Y0 if gate.get('passed') else 2021.0; CALF, pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate

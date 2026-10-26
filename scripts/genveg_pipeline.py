@@ -30,7 +30,7 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'history':      dict(code=['g02g_history_consistency.py', 'g02b_build_gafl.py'], cfg=[], up=['records', 'localisation'], stands=[]),
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize']),
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
-    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history', 'stands_fp'], stands=[]),   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
+    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history', 'stands_fp', 'vup'], stands=[]),   # (vup: the upstream checks gate the modelling chain, r10 M-1)   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
     'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train', 'model_seed'], up=['train'], stands=[]),   # (model_seed: whose acceptance is enforced; r8 I1)
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train', 'dynamics'], stands=[]),   # (dynamics: its acceptance gates mapping, audit r5 I5)
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),

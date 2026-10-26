@@ -94,3 +94,26 @@ recommendations, but document the decision point and the different options"). Th
 ## G17 — Where model choices are made (r9, agent)
 - **Options:** the test block, as the old §A said; **validation**: g03b `validation`, g04 `mapping_path_validation_crossfit`, g06 acceptance.
 - **Chosen:** validation. Test is reported only.
+
+## G18 — The upstream checks gate the modelling chain (r10 M-1, agent)
+- **Options:**
+  - (a) leave vup ungated;
+  - (b) **make train depend on vup** (so dynamics, downscale, map and fe follow);
+  - (c) move fe after verify via a staging and publish step.
+- **Chosen:** (b). fe stays before verify: the v4 / r4 / v3b configs write their FE layer to the data dir, not to the live layer, until verified (fe.geojson).
+- **To reverse:** remove 'vup' from STAGES['train']['up'].
+
+## G19 — Landscape-dependence part of the start-year gate (r10, agent; amends G5)
+- **Evidence:** only the landscape descriptor is shuffled; the plot's own histories and soils are not. On a small model the 2021 path itself had cs 0.85, so the absolute cs < 0.5 can be unpassable for both paths.
+- **Options:**
+  - (a) keep cs < 0.5;
+  - (b) **relative**: (1 − cs_requested) ≥ 0.5 × (1 − cs_2021);
+  - (c) drop the criterion.
+- **Chosen:** (b), pre-registered before any trained model. Both cs values are recorded in bayes_eval.json.
+
+## G20 — LANDFIRE fiscal / calendar overlap (r10 M-2, agent)
+- **Options:**
+  - (a) sum per file (a pixel coded in two products counts 2/9);
+  - (b) **count a pixel once per class and event year**;
+  - (c) drop the fiscal products' previous-calendar-year codes.
+- **Chosen:** (b). It keeps every pixel's evidence and counts it once. gv_verify T3e states the same rule.

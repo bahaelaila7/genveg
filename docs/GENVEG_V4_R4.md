@@ -247,3 +247,13 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * Verification of r9 on gafl_v4: gv_verify 49 / 54 — T1k / T1l / T3e / T3f / T10 = the stale table (T1l: TPH ratio q10 0.289, 35.7 % of stocked visits
   below 0.9, as the auditor measured); smoke train / g06 / g04 / g05 OK; g03b `validation` (633 plots) and g04 `mapping_path_validation_crossfit` reported;
   the driver with stdout redirected into the data dir: full run, then all current (stub root). Required after the slim_r4_v2 rebuild: 54 / 54.
+
+## M. Audit round 10 (2026-10-26, fresh independent Opus review of d065407); no blocker, findings reproduced before fixing
+* **I-1** g03b's kNN / null pool held the validation plots themselves (100 % self-matches; validation kNN BA error 0.233 vs 0.425 without them) → the
+  pool is the training plots only (test and validation).
+* **M-1** the upstream checks (vup) gated nothing → train depends on vup (G18).
+* **M-2** LANDFIRE pixels coded by both a calendar-year and the next fiscal-year product counted 2/9 → once per class and event year (G20); T3e too.
+* Suspected gate issue: the absolute shuffled-landscape criterion may be unpassable → relative to the 2021 path (G19).
+* Verification of r10: gv_verify 49 / 54 (the same 5 stale-table checks); new g02b fractions = the once-per-pixel rule on 300 fresh footprints (0
+  mismatches; 69 / 300 differ from the stale table); smoke train / g06 / g04 / g05 OK; validation kNN bias no longer exactly 0 (self-matches gone); the
+  gate records both shuffled-landscape correlations.

@@ -103,14 +103,16 @@ def feats(r0, c0, h, w, keep_all=False):
         F = [m3n(A2), m3n(A5)]; n = len(rr); br, bc = rr, cc
     OH = np.zeros((n, len(YEARS), NC), np.float32); SV = np.zeros((n, len(YEARS)), np.float32)
     # disturbance evidence = FRACTION of the footprint's 3x3 pixels (90 m, as for AlphaEarth) per class and event calendar year; severity = max
+    # a pixel counts ONCE per class and event year: the fiscal-year products (2024 / 2025) repeat Oct-Dec of the previous calendar year that the
+    # previous file also codes (r10 M-2: 8-10 % of those pixels counted 2/9)
+    PX = np.zeros((n, len(YEARS), NC, 9), bool)
     for j, y in enumerate(YEARS):                                    # file years; events land at their calendar year
-        for dr in (-1, 0, 1):
-            for dc in (-1, 0, 1):
-                code = DS[j, rr + dr, cc + dc]
-                for k in np.flatnonzero(code > 0):
-                    cl, sv, ey = s['lut'].get((y, int(code[k])), (0, 0, y))
-                    if cl > 0 and YEARS[0] <= ey <= YEARS[-1]: OH[k, ey - YEARS[0], cl - 1] += 1 / 9; SV[k, ey - YEARS[0]] = max(SV[k, ey - YEARS[0]], sv)
-    OH = np.minimum(OH, 1.0)                                         # (fiscal-year duplicates of the same pixel)
+        for q_, (dr, dc) in enumerate((a_, b_) for a_ in (-1, 0, 1) for b_ in (-1, 0, 1)):
+            code = DS[j, rr + dr, cc + dc]
+            for k in np.flatnonzero(code > 0):
+                cl, sv, ey = s['lut'].get((y, int(code[k])), (0, 0, y))
+                if cl > 0 and YEARS[0] <= ey <= YEARS[-1]: PX[k, ey - YEARS[0], cl - 1, q_] = True; SV[k, ey - YEARS[0]] = max(SV[k, ey - YEARS[0]], sv)
+    OH = PX.sum(-1).astype(np.float32) / 9
     HF = np.stack([sum(((HL[rr + dr, cc + dc] == y - 2000) & (HL[rr + dr, cc + dc] > 0)).astype(np.float32) for dr in (-1, 0, 1) for dc in (-1, 0, 1)) / 9
                    for y in YEARS], 1).astype(np.float32)            # lossyear 0 = no loss
     for j in range(len(YEARS)): F += [OH[:, j], SV[:, j:j + 1], HF[:, j:j + 1]]
