@@ -69,13 +69,16 @@ with torch.no_grad():
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]
         tph_m, ba_m = float(s_[0].median()), float(s_[1].median())
         # stand cohorts (TreeMap-independent initial state for the simulation engines): ONE plausible stand — the posterior draw closest to the calibrated
-        # median summary (medoid in log TPH / BA / QMD) with its present slots (calibrated presence ≥ 0.5; else its largest slot) — not the ensemble mean
+        # median summary (medoid in log TPH / BA / QMD) with its present slots (sampled with the calibrated presence; else its largest slot) — not the ensemble mean
         # of the 16 draws, which spread every stand over ~13 keys and ~48 cohorts (audit F2) and made the mean-share dominant collapse onto the regional
         # mode (F3). Its totals are scaled to the calibrated median TPH / BA (one density and one diameter factor; ages, heights, crowns kept).
         pr_ = torch.sigmoid(calibrated(lp_)); Nr = torch.exp(val_[..., 0].clamp(max=12)); Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
         Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95)
         dist_ = sum((torch.log(s_[i].clamp(min=1e-6)) - math.log(max(float(s_[i].median()), 1e-6))) ** 2 for i in range(3)); i_ = int(dist_.argmin())
-        pres = torch.nonzero(pr_[i_] >= 0.5).flatten().tolist() or [int((pr_[i_] * Nr[i_]).argmax())]
+        # presence SAMPLED per slot (Bernoulli(p), seeded by the stand id): the expected totals are the expected-value summaries the calibration was fitted on
+        # (a p >= 0.5 threshold dropped the many small-p slots' mass: the scaling factors then had median 1.96 for TPH)
+        u_ = torch.rand(pr_.shape[1], generator=torch.Generator().manual_seed(int(sid)))
+        pres = torch.nonzero(u_ < pr_[i_]).flatten().tolist() or [int((pr_[i_] * Nr[i_]).argmax())]
         c0_ = len(crows)
         for j_ in pres:
             crows.append(dict(stand_id=int(sid), key=keys_[j_ // NA_], age_class=j_ % NA_, age=float(j_ % NA_ * 10 + 5), tph=float(Nr[i_, j_]),
