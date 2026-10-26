@@ -57,3 +57,20 @@ for s in hansen_dl hansen dist land soils90 soilfill; do .venv/bin/python -I scr
 ```
 Code changes to g02b / g02j / g05 / gv_verify change the stage code hashes of the GA+FL pipelines too (by design); their outputs are byte-identical
 for the defaults, so an existing GA+FL data dir can re-adopt its stages (`--adopt`) instead of rebuilding.
+
+## D. Audit round 1 (2026-10-26, independent Opus review; findings reproduced before fixing)
+| id | finding | fix |
+|---|---|---|
+| M1 | g05 stand cohort tables (the TreeMap-independent initial state) were the MEAN of 16 samples × CAL, the stand summaries the calibrated MEDIAN: cohort sums 1.41 × TPH, 1.14 × BA (median over 16,214 Baker stands; reproduced) | per stand one density and one diameter factor so the cohorts sum to the calibrated TPH / BA (composition and ages kept); gv_verify T11b |
+| M2 | Q-decode loss trained the DECODER against visit-time cohorts for Q's z(2025) (visits on average ~4 yr before 2025) | decoder frozen in that term (only Q learns), visits within QD_WIN = 1.5 yr of 2025 only |
+| M3 | bare visits (no live tree) had a QMD target of 0 | QMD term masked for bare visits (as composition) |
+| M4 | gv_verify T4e–T4j built the v3 Flow whatever ARCH; forced NT 4 | the configured flow class; NT from the environment |
+| P1 | the shell environment leaked unhashed into every stage (an exported AEF90 / REGION / ARCH … would change a run under the same hash) | stage switches stripped from the inherited environment; meta.json records region / aef90; g02e / g02g / g03b / gv_verify assert them (`scripts/region.py`) |
+| P2 | the AEF90 rasters were not part of any stage hash | size + mtime fingerprint of the Region 4 inputs and the r4_*.py code in the table / stands_fp hashes |
+| R1 | r4_v4 stand footprints from superseded code (1,827 stands without a footprint) | stands_fp re-run with c8e6a9f: 16,214 / 16,214 stands |
+| ops | gv_verify_upstream U6r took 4.8 s per boundless 1-px read of the strip TreeMap CONUS | plain reads in row order (minutes) |
+Verified correct by the audit (independent recomputation): the LTC flow (float64 re-implementation, ≤ 8e-16), sparse vs dense jump, EncV4 masks /
+permutation invariance / bare visits, held-out blocks (3.2 km buffer), the Region 4 rasters vs GA+FL on the overlap, same-plot same-footprint
+features, a direct recomputation of 40 plots outside GA+FL, GA+FL default byte-identity. Not changed (documented): an event's jump applies at the end
+of its year (the event year's AlphaEarth state is post-event); 6 Kentucky pairs after 2025 are cut at the end of 2025.
+The models trained before these fixes (gafl_pipe v3, the first v4 runs) were trained with M2 / M3; v4 GA+FL and Region 4 are retrained.

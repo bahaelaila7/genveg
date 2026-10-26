@@ -11,6 +11,7 @@ Writes data/proto/gafl/cand_hist.parquet (cid, pid, cons) and localisation.parqu
 import os, sys, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
+import json as _json; from region import region_check; region_check(_json.load(open(f"{G2.ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}/meta.json")))
 from features import ROOT
 D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r'); P = pd.read_parquet(f'{D}/plots.parquet').set_index('pid')

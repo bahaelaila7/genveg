@@ -10,7 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.envi
 rng = np.random.default_rng(42); RES = []
 def check(name, ok, detail=''):
     RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
-M = json.load(open(f'{D}/meta.json')); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
+M = json.load(open(f'{D}/meta.json')); from region import region_check; region_check(M); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
 # region switches (as g02b): REGION = FIA STATECDs; AEF90 = Region 4 rasters (AlphaEarth / soils at 90 m: a footprint = one 90 m pixel, centres = 1 mod 3)
 REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({','.join(map(str, REGION))})"; AEF90 = os.environ.get('AEF90', '0') == '1'
 LAND = f'{ROOT}/data/r4/land.tif' if AEF90 else stands_run()['land_clean']
@@ -242,7 +242,7 @@ for pid, g in Cs.groupby('pid'):
     cnt_err.append(abs(g.incl_w.sum() - fl.sum()) / fl.sum())
 check('T3g inclusion weights sum to the full forest-footprint count of the disk', max(cnt_err) < 1e-4, f'max rel err {max(cnt_err):.2e}')
 # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
-os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT='4'); _a = sys.argv; sys.argv = ['g03b']
+os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT=os.environ.get('NT', '4')); _a = sys.argv; sys.argv = ['g03b']
 SRC = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
 exec(compile(SRC, 'g03b', 'exec'), ns_); sys.argv = _a; import torch
 tv = samp.vid.values[:200]
@@ -256,7 +256,7 @@ s_pred = ns_['summaries'](lp_perfect, ns_['slot_v'][v_]); o2 = ns_['obs_summ'](v
 check('T4c decoder summaries on perfect slots (with calibration) = observed summaries', all(np.allclose(s_pred[i].numpy(), o2[i].numpy(), rtol=1e-4, atol=1e-5) for i in range(3)))
 tr_p = set(ns_['vpid'][ns_['tr_v']]); te_p = set(ns_['vpid'][ns_['te_v']])
 check('T4d train / test plots disjoint (spatial blocks)', not (tr_p & te_p), f'train plots {len(tr_p)} test plots {len(te_p)}')
-flow = ns_['Flow'](); Dz = ns_['D_Z']; z0 = torch.zeros(3, Dz); dist = torch.zeros(3, NY, NC + 2); dist[1, 2010 - 2000, 0] = 1; soil = torch.zeros(3, ns_['SOIL'].shape[1])
+flow = type(ns_['flow'])(); Dz = ns_['D_Z']; z0 = torch.zeros(3, Dz); dist = torch.zeros(3, NY, NC + 2); dist[1, 2010 - 2000, 0] = 1; soil = torch.zeros(3, ns_['SOIL'].shape[1])
 with torch.no_grad():
     for p_ in flow.J.parameters(): p_.fill_(0.0)
     flow.J[-1].bias.fill_(1.0); flow.A.fill_(0.5)                                    # jump = tanh(1) on every dim when an event fires; non-zero attractor
@@ -460,6 +460,12 @@ if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
         if p['GEN_DOM'] != r.dom_key: e11.append(99)
     check('T11 Forest Explorer stand layer: GEN_BA / TPA / QMD / BA_SD / DOM = stand map (g05) x conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', n11 > 0 and max(e11) < 0.11,
           f'{n11} stands, max abs diff {max(e11) if e11 else float("nan"):.3f} (rounding 0.05 / 0.005)')
+# ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
+if os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
+    Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
+    ct_ = Cc.groupby('stand_id').tph.sum(); cb_ = (Cc.tph * math.pi / 4 * (Cc.qmd_cm / 100) ** 2).groupby(Cc.stand_id).sum(); jj = Sv[['tph', 'ba']].join(pd.DataFrame({'ct': ct_, 'cb': cb_}), how='inner')
+    jj = jj[(jj.tph > 0) & (jj.ba > 0)]; rt = (jj.ct / jj.tph - 1).abs().max(); rb = (jj.cb / jj.ba - 1).abs().max()
+    check('T11b stand cohort tables sum to the calibrated stand TPH and BA (g05)', rt < 1e-6 and rb < 1e-6, f'{len(jj)} stands; max |ratio - 1| TPH {rt:.1e} BA {rb:.1e}')
 # ======================= T12 summary-reconstruction targets (g03b OBS_*) and the loss at a perfect prediction
 vv12 = torch.tensor(samp.vid.values[:300]); o12 = ns_['obs_summ'](vv12)
 okt = all(np.allclose(ns_[k][vv12].numpy(), o12[i].numpy(), rtol=1e-5, atol=1e-6) for i, k in enumerate(['OBS_T', 'OBS_B', 'OBS_Q']))

@@ -69,12 +69,19 @@ with torch.no_grad():
         # of the expected density p * N, its quadratic-mean diameter, mean height and crown ratio (density-weighted); calibrated as CAL_N / CAL_D
         pr_ = torch.sigmoid(calibrated(lp_)); Nn = torch.exp(val_[..., 0].clamp(max=12)) * pr_; Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
         Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95); Ns = Nn.sum(0)
+        c0_ = len(crows)
         for j_ in torch.nonzero(Ns / 16 * CAL_N >= 1.0).flatten().tolist():
             w_ = Nn[:, j_]; sw = float(w_.sum())
             crows.append(dict(stand_id=int(sid), key=keys_[j_ // NA_], age_class=j_ % NA_, age=float(j_ % NA_ * 10 + 5), tph=sw / 16 * CAL_N,
                               qmd_cm=math.sqrt(float((w_ * Dd[:, j_] ** 2).sum()) / sw) * CAL_D, ht_m=float((w_ * Hh[:, j_]).sum()) / sw, cr=float((w_ * Cr[:, j_]).sum()) / sw))
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]; comp = s_[4].mean(0)
         rows.append(dict(stand_id=int(sid), node=int(j), tph=float(s_[0].median()), ba=float(s_[1].median()), qmd=float(s_[2].median()), ba_sd=float(s_[1].std()), dom=int(comp.argmax())))
+        # the cohort table must carry the CALIBRATED stand summary (validated in g04 for the median-of-samples estimator), not the mean of the samples
+        # (audit 2026-10-26 M1: cohort sums were 1.41 x TPH / 1.14 x BA): one density and one diameter factor per stand, composition and ages unchanged
+        ct = sum(c['tph'] for c in crows[c0_:]); cb = sum(c['tph'] * math.pi / 4 * (c['qmd_cm'] / 100) ** 2 for c in crows[c0_:])
+        if ct > 0 and cb > 0 and rows[-1]['tph'] > 0 and rows[-1]['ba'] > 0:
+            fN = rows[-1]['tph'] / ct; fD = math.sqrt((rows[-1]['ba'] / rows[-1]['tph']) / (cb / ct))
+            for c in crows[c0_:]: c['tph'] *= fN; c['qmd_cm'] *= fD
 out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_v3.parquet')
 C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3.parquet')
 _t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()

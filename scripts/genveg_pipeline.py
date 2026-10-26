@@ -22,7 +22,7 @@ import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stands_stages import apply_overrides
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
-LIB = ['common.py', 'features.py', 'stand_runs.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
+LIB = ['common.py', 'features.py', 'stand_runs.py', 'region.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
 STAGES = {   # stage: scripts (code hash), config sections, upstream stages, stand-run stages it depends on
     'table':        dict(code=['g02b_build_gafl.py'], cfg=['table', 'data'], up=[], stands=['clean']),
     'localisation': dict(code=['g02d_localisation.py'], cfg=[], up=['table'], stands=[]),
@@ -40,6 +40,25 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
 ORDER = list(STAGES)
 
 STAND_FILES = dict(clean='clean/land_clean.tif', land='land/land.tif', finalize='finalize/stands.tif')
+# every switch a stage script reads from its environment: never inherited from the shell (an exported AEF90 / REGION / ARCH … would otherwise build or
+# train another region / architecture under this config's hash; audit 2026-10-26 P1) — only the config (top-level env, stage env) sets them
+STAGE_SWITCHES = {'AEF90', 'ARCH', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
+                  'GV_SKIP_U8', 'KC', 'LOAD', 'LOC', 'LR', 'MDN_EP', 'MIN_FSHARE', 'MODEL', 'NCAND', 'NPROC', 'NT', 'PAIR_ANCHOR', 'QD_WIN', 'RAD_M', 'REGION',
+                  'SEED', 'SEVERITY_ANCHOR', 'STANDS_RUN', 'TAG', 'TOPK', 'USE_B', 'WRITE_LOC', 'W_COMP', 'W_SUM'}
+# Region 4 (AEF90) inputs the table / stand-footprint stages read instead of the stand run's rasters (audit P2): fingerprinted by size + mtime (the
+# 90 m mosaics are GBs; a pixel hash would take minutes) together with the code that built them
+R4_INPUTS = ['data/r4/land.tif', 'data/r4/hansen_lossyear.tif', 'data/r4/dist/dist_*.tif', 'data/r4/soils90/*.tif', 'data/r4/soils90/fill.json',
+             'data/aef90/aef90_2022.tif', 'data/aef90/aef90_2025.tif', 'data/grid/grid_r4.json', 'data/grid/grid_r4_90.json', 'data/grid/aoi_r4_mask90.tif']
+R4_CODE = ['r4_grid.py', 'r4_aef90.py', 'r4_rasters.py']
+def r4_fingerprint():
+    import glob
+    h = hashlib.sha256()
+    for pat in R4_INPUTS:
+        fs = sorted(glob.glob(os.path.join(ROOT, pat)))
+        if not fs: sys.exit(f'AEF90 input missing: {pat}')
+        for f in fs: st = os.stat(f); h.update(f'{os.path.relpath(f, ROOT)}:{st.st_size}:{st.st_mtime_ns}'.encode())
+    for f in R4_CODE: h.update(open(os.path.join(SCR, f), 'rb').read())
+    return h.hexdigest()[:16]
 def pixel_hash(path):
     """Content fingerprint of a raster: its decoded pixels + shape / dtype / transform (byte hashes differ between identical rasters written with
     different tiling / compression). Cached next to the file by (size, mtime)."""
@@ -69,15 +88,16 @@ def main():
     if not os.path.exists(f'{SR}/summary.json'): sys.exit(f'stand run {SR} missing: run scripts/stands_pipeline.py --name {cfg["stands_run"]} first')
     srh = {k: pixel_hash(os.path.join(SR, f)) for k, f in STAND_FILES.items()}          # CONTENT of the stand run's outputs genveg reads
     stf = f'{D}/pipeline_state.json'; state = json.load(open(stf)) if os.path.exists(stf) else {}
+    r4h = r4_fingerprint() if str(cfg.get('env', {}).get('AEF90', '0')) == '1' else None
     H = {}
     for st in ORDER:
         d = STAGES[st]
         H[st] = hashlib.sha256(json.dumps(dict(stage=st, cfg={k: cfg.get(k) for k in d['cfg']}, data=cfg['data'], code=code_hash(d['code']),
-                                               up={u: H[u] for u in d['up']}, stands={s: srh[s] for s in d['stands']}, **({'env': cfg['env']} if 'env' in cfg else {})),
+                                               up={u: H[u] for u in d['up']}, stands={s: srh[s] for s in d['stands']}, **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {})),
                                           sort_keys=True, default=str).encode()).hexdigest()[:12]      # (optional top-level env: region switches for every stage)
     py = [sys.executable, '-I']
     tenv = {k: str(v) for k, v in cfg['train']['env'].items()}
-    base_env = dict(os.environ, STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']), **{k: str(v) for k, v in cfg.get('env', {}).items()})
+    base_env = dict({k: v for k, v in os.environ.items() if k not in STAGE_SWITCHES}, STANDS_RUN=SR, DATA=cfg['data'], WORKSPACE=WS, FE_GEOJSON=os.path.join(WS, cfg['fe']['geojson']), **{k: str(v) for k, v in cfg.get('env', {}).items()})
     model = f"{cfg['train']['model_prefix']}_s{cfg['model_seed']}.pt"
     def sh(stage, cmds):
         with open(f'{LOGD}/{stage}.log', 'w') as lf:

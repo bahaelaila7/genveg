@@ -15,6 +15,7 @@ import os, sys, json, math, time, numpy as np, pandas as pd, torch, torch.nn as 
 SEED = int(os.environ.get('SEED', 0)); torch.manual_seed(SEED); np.random.seed(SEED); torch.set_num_threads(int(os.environ.get('NT', 6)))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
 D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
+sys.path.insert(0, os.path.join(ROOT, 'scripts')); from region import region_check; region_check(M)
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 CF16 = os.environ.get('CF16', '0') == '1'      # keep the candidate features float16 in memory (Region 4: ~4 M candidates), cast to float32 when indexed
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r') if CF16 else np.load(f'{D}/cand_feat.npy').astype(np.float32)
@@ -199,6 +200,7 @@ def sample_cands(pids, K):
 _N = torch.exp(slot_v[..., 0]) * slot_p; _D = torch.exp(slot_v[..., 1])
 OBS_T = _N.sum(1); OBS_B = (_N * math.pi / 4 * (_D / 100) ** 2).sum(1); OBS_Q = torch.sqrt((_N * _D ** 2).sum(1) / OBS_T.clamp(min=1e-6))
 _bko = (_N * _D ** 2).view(-1, NK, NA).sum(-1); OBS_S = _bko / _bko.sum(-1, keepdim=True).clamp(min=1e-9)      # observed BA shares by species key
+QD_WIN = float(os.environ.get('QD_WIN', 1.5))     # Q-decode loss: visits within this many years of 2025 (the state Q predicts)
 W_SUM = float(os.environ.get('W_SUM', 1.0)); W_COMP = float(os.environ.get('W_COMP', 1.0)); LQ_MAX = math.log(150.0)                # QMD of a slot <= 150 cm (physical cap, also in g04.summaries)
 # values of ABSENT slots are otherwise untrained, yet enter the expected summaries through their (small) presence probability: pull them toward the
 # slot's training mean (log N, log QMD, H; CR excluded)
@@ -210,7 +212,8 @@ def summ_err(lp, val, v):
     """per-sample mean squared log error of the decoded summaries (TPH, BA, QMD; differentiable expected values with calibrated presence)"""
     pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=LQ_MAX))
     tph = N.sum(-1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(-1); qmd = torch.sqrt((N * Dq ** 2).sum(-1) / tph.clamp(min=1e-6) + 1e-9)
-    e = ((torch.log1p(tph) - torch.log1p(OBS_T[v])) ** 2 + (torch.log(ba + 0.1) - torch.log(OBS_B[v] + 0.1)) ** 2 + (torch.log1p(qmd) - torch.log1p(OBS_Q[v])) ** 2) / 3
+    # QMD is undefined for a bare visit (OBS_T = 0, OBS_Q = 0 by construction): its QMD term is masked (audit 2026-10-26 M3), as composition is below
+    e = ((torch.log1p(tph) - torch.log1p(OBS_T[v])) ** 2 + (torch.log(ba + 0.1) - torch.log(OBS_B[v] + 0.1)) ** 2 + (torch.log1p(qmd) - torch.log1p(OBS_Q[v])) ** 2 * (OBS_T[v] > 0).float()) / 3
     if W_COMP > 0:      # species composition: Bray-Curtis of the BA shares by species key (stocked visits); the totals loss alone degraded composition
         bk = (N * Dq ** 2).view(*N.shape[:-1], NK, NA).sum(-1); bk = bk / bk.sum(-1, keepdim=True).clamp(min=1e-9)
         e = e + W_COMP * (OBS_S[v] - bk).abs().sum(-1) / 2 * (OBS_B[v] > 0).float()
@@ -314,16 +317,18 @@ for ep in range(EP):
         tgt = st[2025].detach().view(-1, K, D_Z); qx = torch.cat([AEF[cidx], DIST[cidx].flatten(1), SOIL[cidx]], -1)
         qm, qls = qn(qx); nll = (0.5 * ((tgt.reshape(-1, D_Z) - qm) ** 2 / torch.exp(2 * qls)) + qls).sum(-1).view(-1, K)
         lq = (nll * post).sum(1).mean() / D_Z
-        lpq, valq = dec(qm); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
+        # Q's decode: the decoder is FROZEN here (only Q learns from this term) and only visits within QD_WIN yr of 2025 count — Q predicts z(2025), so an
+        # older visit's cohorts are out of date and would teach the decoder 'flowed-2025 latent -> younger stand' (audit 2026-10-26 M2)
+        lpq, valq = torch.func.functional_call(dec, {k_: p_.detach() for k_, p_ in dec.named_parameters()}, (qm,)); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
         dq = bce(lpq, tpq, reduction='none').mean(-1) + (((valq - tvq) ** 2 * tmq).sum((-1, -2)) / tmq.sum((-1, -2)).clamp(min=1)) + W_SUM * summ_err(lpq, valq, v.repeat_interleave(K)) + 0.1 * absent_reg(valq, v.repeat_interleave(K))
-        wy = torch.exp(-torch.abs(vyear[v] - 2023.5) / 4)                    # visits near the AlphaEarth years count most
+        wy = (torch.abs(vyear[v] - 2025.0) <= QD_WIN).float()                # visits contemporaneous with the 2025 state only
         dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
         after = (evy & (torch.arange(NY) + YEARS[0] >= torch.floor(cst).unsqueeze(-1))).any(1).view(-1, K)
         pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
         wy = wy * okv.float(); lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)
-        loss = mil + 0.5 * lpair + dec_loss(z, v) + 0.5 * ldecf + 1.0 * sigreg(z) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd
+        ldec = dec_loss(z, v); loss = mil + 0.5 * lpair + ldec + 0.5 * ldecf + 1.0 * sigreg(z) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
-        for k_, val in (('mil', mil), ('pair', lpair), ('dec', dec_loss(z, v)), ('decflow', ldecf), ('q', lq), ('qdec', lqd)): tot[k_] = tot.get(k_, 0) + float(val) * len(v)
+        for k_, val in (('mil', mil), ('pair', lpair), ('dec', ldec), ('decflow', ldecf), ('q', lq), ('qdec', lqd)): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/len(perm):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
 os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
 # ---------------- evaluation on held-out plots (last visit of each plot): vegetation summaries from satellite features
