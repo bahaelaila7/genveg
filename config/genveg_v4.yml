@@ -12,13 +12,13 @@ train:                          # g03b_train_gafl (the same env is passed to g04
   model_prefix: m_v4            # writes <data>/<model_prefix>_s<seed>.pt
   env: {ARCH: v4, EPOCHS: 14, CURRIC: 4, NT: 1, BATCH: 64, DZ: 32, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
         W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5,
-        SITE_ATTR: 1, PAIR_ALL: 1, PAIR_HMAX: 25, PAIR_SYN: 1, MAP_Y0: 2000}   # dynamics fixes (audit r3 I1 / B1): site attractor, multi-horizon pairs, recorded-undetected events; mapping from 2000
+        SITE_ATTR: 1, PAIR_ALL: 1, PAIR_HMAX: 25, AGE_CH: 1, W_AGE: 1.0}   # dynamics (audit r3 I1, r4 I4): site attractor, multi-horizon pairs, age clock
 model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
 dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
   eval_loc: [history]
   env: {NT: 1, G06_SET: test}
 downscale:                      # g04_bayes_downscale: landscape prior A (MDN) + likelihood B + mapping-path calibration
-  env: {NT: 1, EPB: 6, MDN_EP: 60}
+  env: {NT: 1, EPB: 6, MDN_EP: 60, MAP_Y0: 2000}   # MAP_Y0: the REQUESTED mapping start year; g04 gates it (bayes_eval.json map_y0)
 map:                            # g05_map_stands: stand vegetation; one output per USE_B (stand_veg_v3_B<b>.parquet); the LAST one is stand_veg_v3.parquet
   use_b: [1, 0]                 # the LAST one is the production map: B0 (prior A only) — the validated path; B1 (stand likelihood) is unvalidated (audit F4)
   env: {NT: 1}

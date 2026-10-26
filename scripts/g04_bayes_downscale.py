@@ -32,7 +32,7 @@ t0 = time.time()
 from sklearn.cluster import MiniBatchKMeans
 samp = np.random.choice(len(AEF), 200000, replace=False); km = MiniBatchKMeans(32, random_state=0, n_init=3).fit(AEF[samp][:, 64:].numpy())
 BINS = [(2000, 2009), (2010, 2016), (2017, 2021), (2022, 2025)]
-MAP_Y0 = float(os.environ.get('MAP_Y0', 2021.0))       # the start year of the mapping path (g05 execs this block too)
+MAP_Y0 = float(os.environ.get('MAP_Y0', 2021.0))       # the REQUESTED start year of the mapping path (g04 gates it; g05 maps with bayes_eval.json map_y0)
 def landscape(F_aef, F_dist, F_soil, wt=None):
     """X_L from a set of footprints, weighted by inverse inclusion probability wt (None = uniform sample): mean AEF22/25, AEF25 cluster histogram,
     disturbance class + Hansen fractions per period, mean soils — unbiased whole-disk statistics."""
@@ -177,24 +177,40 @@ with torch.no_grad():
     # the stand's whole 2000-2025 history act — audit r3 B1: from 2021, a stand cut in 2016-20 was mapped as mature)
     # ---- the MAPPING path of g05, validated: z ~ p(z | X_L, MAP_Y0) -> v2 flow (decoder-consistent) through a prior-drawn candidate's history to the visit
     # date -> decode. Calibration factors for THIS path from the calibration plots (visits 2022-2025), errors on held-out plots' visits 2022-2025.
-    def map_path(vs, ms=32):
+    def map_path(vs, y0, ms=32, X=None):
         out_ = []
-        for v in vs:
+        for q_, v in enumerate(vs):
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
-            zs = mdn.sample(Xv[[vi[v]]], torch.tensor([MAP_Y0]), ms)[0]; yy = int(math.floor(float(yv)))
-            st = flow(zs, torch.full((ms,), MAP_Y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms)); s_ = summ(st[yy])
+            xv = Xv[[vi[v]]] if X is None else X[q_:q_ + 1]
+            zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = int(math.floor(float(yv)))
+            st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms)); s_ = summ(st[yy])
             out_.append([torch.exp(torch.log(s_[i] + 1e-3).median()) for i in range(3)] + [s_[4].mean(0)])
         return out_
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]
     cal_m = rec(trs_v); te_m = rec(te_l)
     if cal_m and te_m:
-        pc = map_path(cal_m); oc = obs_summ(torch.tensor(cal_m)); skc = oc[0] > 0
-        CALF = [float(torch.median(torch.log((oc[i][skc] + 1e-3) / torch.stack([r[i] for r in pc])[skc]))) for i in range(3)]
-        pt = map_path(te_m); ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0
-        Pm = [torch.stack([r[i] for r in pt]) * math.exp(CALF[i]) for i in range(3)]; Cm = torch.stack([r[3] for r in pt])
-        nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]; nm_ = null_pred(vyear[te_m])
+        oc = obs_summ(torch.tensor(cal_m)); skc = oc[0] > 0; ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0; nm_ = null_pred(vyear[te_m])
+        def evaluate(y0):
+            pc = map_path(cal_m, y0); CF = [float(torch.median(torch.log((oc[i][skc] + 1e-3) / torch.stack([r[i] for r in pc])[skc]))) for i in range(3)]
+            pt = map_path(te_m, y0); P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]
+            return CF, pt, P_, {nm: err(P_[i][skt], ot[i][skt]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
+        # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its held-out TPH and BA errors are no worse than
+        # the 2021 path's and than the null's, AND the prediction still depends on the stand's landscape (BA predictions with the landscapes shuffled among
+        # the held-out visits correlate < 0.5 with the real ones); else 2021. The chosen year is recorded; g05 maps with it.
+        res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0}
+        if MAP_Y0 != 2021.0:
+            res[MAP_Y0] = evaluate(MAP_Y0)
+            perm_ = np.random.default_rng(7).permutation(len(te_m)); Xs = Xv[[vi[te_m[i]] for i in perm_]]
+            ps_ = map_path(te_m, MAP_Y0, X=Xs); ba_r = torch.log(torch.stack([r[1] for r in res[MAP_Y0][1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
+            cs = float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]); e0, e1 = res[2021.0][3], res[MAP_Y0][3]
+            nulle = {nm: err(nm_[i][skt], ot[i][skt]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
+            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and cs < 0.5
+            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'passed': bool(ok)})
+        y0u = MAP_Y0 if gate.get('passed') else 2021.0; CALF, pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
+        ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
+        nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]
         ev['calibration_log_factors_mapping_path'] = CALF
-        ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m),
+        ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,
             **{nm: {'map_path': err(Pm[i][skt], ot[i][skt]), 'map_bias': bias(Pm[i][skt], ot[i][skt]), 'knn': err(km_[i][skt], ot[i][skt]), 'null': err(nm_[i][skt], ot[i][skt])} for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
             'bray_map': bray(Cm[skt], ot[4][skt]), 'bray_knn': bray(o_tr[4][nnm].mean(1)[skt], ot[4][skt])}
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/bayes_eval.json', 'w'), indent=1)

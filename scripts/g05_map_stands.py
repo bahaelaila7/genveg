@@ -22,7 +22,8 @@ XLm = np.zeros((1, len(BM['xmu'])))                                             
 import copy; flowB, h22B, h25B = copy.deepcopy(flow), copy.deepcopy(h22), copy.deepcopy(h25)       # flow / h22 / h25 = v2 (model.pt): vegetation dynamics
 mdn = MDN(); mdn.load_state_dict(BM['mdn']); flowB.load_state_dict(BM['flowB']); h22B.load_state_dict(BM['h22B']); h25B.load_state_dict(BM['h25B'])   # B: likelihood only
 xmu, xsd = BM['xmu'], BM['xsd']; nx = lambda x: torch.tensor((x - xmu) / xsd, dtype=torch.float32)
-CAL = json.load(open(f'{D}/bayes_eval.json'))['calibration_log_factors_mapping_path']      # calibrated and validated for THIS path in g04
+CAL = json.load(open(f'{D}/bayes_eval.json'))['calibration_log_factors_mapping_path']
+MAP_Y0 = float(json.load(open(f'{D}/bayes_eval.json')).get('map_y0', 2021.0))   # the start year g04 calibrated and gated (not the env's request)      # calibrated and validated for THIS path in g04
 G2.init(); land = G2._S['land']
 S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
 SA = torch.tensor(SF[:, :128]); SD = torch.tensor(SF[:, DS].reshape(-1, NY, NC + 2)); SS = torch.tensor(SF[:, SO])

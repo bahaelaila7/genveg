@@ -104,10 +104,31 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * `SITE_ATTR` — the flow's attractor depends on the site: A + MLP(soil), zero-initialised (one global attractor made every undisturbed stand revert to it).
 * `PAIR_ALL` (`PAIR_HMAX` 25 yr) — every ordered visit pair of a plot trains the flow (multi-horizon; a training visit samples one of its pairs); an
   "undisturbed" span requires no hiding FIA code at ANY visit in between.
-* `PAIR_SYN` — an FIA-recorded event cluster that no candidate's LANDFIRE / Hansen evidence matches is injected into the pair's histories at its FIA year
+* `PAIR_SYN` (REMOVED in round 4, I1) — an FIA-recorded event cluster that no candidate's LANDFIRE / Hansen evidence matches is injected into the pair's histories at its FIA year
   (its classes, severity 2): recorded but undetected disturbances no longer feed the no-event drift.
 * `MAP_Y0` 2000 — the mapping path (g04 calibration and g05) draws z from the landscape prior at 2000 and flows through the footprint's whole 2000–2025 history
   (from 2021, a stand cut in 2016–20 was mapped as mature).
 * g06 reports undisturbed held-out pairs by horizon (< 8, 8–15, > 15 yr): predicted vs observed BA log change per year.
-* Fixed while smoke-testing: the F6 pair-loss tensor was named `ep`, shadowing the epoch counter (broke the curriculum switch and the epoch log).
+* Fixed while smoke-testing: the F6 pair-loss tensor was named `ep`, shadowing the epoch counter. The `for` loop rebinds `ep` every epoch, so the curriculum
+  switch was NOT affected; only the epoch log printed a tensor (round 4 corrected this note).
 * `SMOKE_BATCHES` — a code-path check of the training step (no checkpoint, no evaluation).
+
+## G. Audit round 4 (2026-10-26, fresh independent Opus review of 1ff0178); findings reproduced before fixing
+* **B1** `MAP_Y0` 2000 made the held-out mapping path WORSE for v3 (BA error 0.449 vs 0.405 at 2021; a shuffled-landscape map correlated 0.87 with the real
+  one: the 25-yr flow forgets the landscape prior). → g04 now **gates** the requested start year with a pre-registered rule: it is used only if its held-out
+  TPH and BA errors are ≤ those of the 2021 path and ≤ the null's, and the shuffled-landscape BA correlation is < 0.5; else 2021. `bayes_eval.json` records
+  `map_y0` + `map_y0_gate`, and g05 maps with `map_y0` (not the env). gv_verify T11c.
+* **I1** `PAIR_SYN` injected impossible histories (clear-cuts of severity 2 on stands that kept their BA) → removed; a recorded-undetected event now only
+  excludes the pair from the no-event rules (see I3).
+* **I2** the severity of a multi-horizon pair used only the end-points' BA ratio → the MINIMUM BA ratio over the span's consecutive visits.
+* **I3** undisturbed long pairs could be credited to spurious event histories → with no hiding FIA code in the span and no detectable record, the candidate
+  set is narrowed to event-free histories (where any exist), as for the one-step pairs. gv_verify T8 / **T8c** (multi-horizon) recompute this independently.
+* **I4** the contracting flow cannot age a stand (decoded mean age +0.1 yr / yr on undisturbed pairs vs +0.87 observed) → `AGE_CH`: latent dimension 0 is
+  an **age clock** (BA-weighted mean cohort age, (A − 40) / 40), supervised at every visit (`W_AGE`), advanced by exactly dt / 40 per year by the flow
+  (jumps may reset it), excluded from SIGReg. g06 adds the decoded-age progression and a **pre-registered acceptance**: undisturbed BA change per year
+  within ±0.01 of observed in every horizon bin, decoded / observed age gain 0.7–1.3. gv_verify T4k (site attractor + clock), T4l (age target).
+* **I5** `SMOKE_BATCHES` leaked into evaluation runs → honoured only when EPOCHS > 0 and LOAD = 0; added to the stage switches.
+* **I6** gv_verify did not cover the new logic → T4k, T4l, T8c, T11c. Running it also exposed a round-2 regression in gv_verify itself (the live-tree merge
+  dropped the `fsw` / `fmw` shares): the verifier had not run since 63e8837.
+* Minor: g06 blocked-visit fallback = ones; `_n_consec` counters; Am(soil) computed once per run (soil is constant); stale gafl_v4 outputs of the smoke
+  run (m_v4_s0.pt, eval.json, stand_veg.parquet) deleted so the pipeline cannot adopt them.

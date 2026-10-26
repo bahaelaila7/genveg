@@ -53,7 +53,7 @@ check('T1a visit set = curated forested-condition visits ∪ bare FIADB visits, 
       f'independent {len(EX)} (bare {len(_bare)}) table {len(V)}; non-forest-condition tree records {nT - len(T)}')
 Vs = V.sort_values('vid')
 check('T1c visit ids reproduce (sorted plot, date order)', len(EX) == len(V) and (EX[key].values == Vs[key].values).all() and (np.abs(EX.year.values - Vs.year.values) < 1e-9).all())
-T = T.merge(EX[key + ['ds', 'vid', 'fs', 'fm']], on=key + ['ds']); Ts = T[T.vid.isin(samp.vid)]
+T = T.merge(EX[key + ['ds', 'vid', 'fs', 'fm', 'fsw', 'fmw']], on=key + ['ds']); Ts = T[T.vid.isin(samp.vid)]
 live = Ts[(Ts.status == 1) & (Ts.dia > 0) & (Ts.tpa > 0) & (Ts.age > 0) & (Ts.ht > 0)].copy()
 live['key'] = [KEYS.index(s) if s in top else KEYS.index('_' + (g if g in ('S', 'H') else 'H')) for s, g in zip(live.sym, live.grp)]
 live['share'] = np.where(live.dia < 5, live.fmw, live.fsw)
@@ -300,6 +300,26 @@ with torch.no_grad():
 check('T4j flow end time (pair targets): the state is taken AT the end date (between end-of-2013 and end-of-2014 states), end-year events only if before the end',
       (stE[2014][0] - stE[2014][1]).abs().max() > 0 and (e1 - stE[2014][0]).abs().max() < 1e-6 and abs((e2 - e2n).abs().mean().item() - math.tanh(1.0)) < 1e-5,
       f'Δ(end 2014.3 vs 2014.9) {(stE[2014][0] - stE[2014][1]).abs().max():.3f}; event of 2014 with end 2014.3 ignored, with end 2014.9 applied')
+# T4k site attractor (SITE_ATTR) and age clock (AGE_CH): an independently-built flow with both switches on (module globals of the exec'd g03b)
+_sw = (ns_['SITE_ATTR'], ns_['AGE_CH']); ns_['SITE_ATTR'], ns_['AGE_CH'] = True, True
+try:
+    fk = type(ns_['flow'])(); nso = ns_['SOIL'].shape[1]; torch.manual_seed(4)
+    with torch.no_grad():
+        for p_ in [*fk.g.parameters(), *fk.J.parameters()]: p_.fill_(0.0)
+        fk.g[-1].bias.fill_(2.0); fk.ltau.fill_(0.0); fk.A.fill_(0.3); fk.J[-1].bias.fill_(1.0)
+        for p_ in fk.Am.parameters(): p_.copy_(torch.randn_like(p_))
+        sk = torch.randn(2, nso); dk = torch.zeros(2, NY, NC + 2); dk[1, 2015 - 2000, 0] = 1
+        sK = fk(torch.zeros(2, Dz), torch.tensor([2000.0, 2000.0]), [2012, 2025], dk, sk)
+        gk = torch.sigmoid(torch.tensor(2.0)); lk = 1.0 + gk; zfix = gk * 3 * torch.tanh(fk.A + fk.Am(sk)) / lk     # the fixed point, computed independently
+        e_fix = (sK[2012][0, 1:] - zfix[0, 1:]).abs().max().item(); e_soil = (zfix[0, 1:] - zfix[1, 1:]).abs().max().item()
+        ck12 = sK[2012][0, 0].item(); ck25 = sK[2025][0, 0].item(); ck25e = sK[2025][1, 0].item()
+    check('T4k flow SITE_ATTR + AGE_CH: dims 1.. converge to the soil-specific attractor g·3·tanh(A + Am(soil)) / λ; dim 0 advances by exactly dt / AGE_S; an event jump moves the clock',
+          e_fix < 1e-4 and e_soil > 1e-2 and abs(ck12 - 13 / ns_['AGE_S']) < 1e-5 and abs(ck25 - 26 / ns_['AGE_S']) < 1e-5 and abs(ck25e - ck25 - math.tanh(1.0)) < 1e-5,
+          f'|z - fixed point| {e_fix:.1e}, soil spread {e_soil:.3f}, clock 2012 {ck12:.4f} (13/40 = 0.325), 2025 {ck25:.4f}, jump {ck25e - ck25:.5f}')
+finally: ns_['SITE_ATTR'], ns_['AGE_CH'] = _sw
+TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; vv = int(TKp.vid.values[0]); tv_ = TKp[TKp.vid == vv]; w_ = tv_.N * tv_.QMD ** 2
+check('T4l age-clock target AGE_OBS = BA-weighted mean cohort age of the visit (independent); bare visits 0',
+      abs(float(ao[vv]) - float((w_ * tv_.A).sum() / w_.sum())) < 1e-3 and float(ao[torch.tensor(sorted(set(range(len(V))) - set(TKp.vid.astype(int).unique())))].abs().max() if len(set(range(len(V))) - set(TKp.vid.astype(int).unique())) else 0) == 0)
 zn = torch.randn(4096, Dz); zs = zn * 3
 check('T4g SIGReg: ~0 for N(0, I), large for a scaled cloud', ns_['sigreg'](zn).item() < 0.2 * ns_['sigreg'](zs).item(), f'{ns_["sigreg"](zn).item():.4f} vs {ns_["sigreg"](zs).item():.4f}')
 # ======================= T5 landscape descriptors: inclusion-weighted subsample vs the full disk
@@ -352,16 +372,20 @@ src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_par
 ns_['cand_of'] = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}      # T8 tests the period rule on g02b's candidates
 exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
 PC = ns_['pair_cand']; EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
-for v1 in rng8.choice(list(PC), 300, replace=False):
-    v2 = ns_['vpair'][v1]; pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+def exp_set(v1, v2, span):
+    """Independent recomputation of the candidate set of the history v1 -> v2 (span = the visits in (v1, v2]) from FIADB COND records + the spec:
+    detectable event clusters need compatible evidence; with no hiding code at any visit of the span, no stand-replacing evidence in between, and with
+    no detectable record either, no evidence at all (event-free histories, where any exist)."""
+    pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
     g = C[C.pid == pid]; Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2)
-    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; recs = set(); hid2 = False
-    d2 = EXv.loc[v2].md; vk2 = d2.year * 10000 + d2.month * 100 + d2.day
+    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; recs = set(); hid = False
+    vks = set()
+    for u in span: d_ = EXv.loc[u].md; vks.add(d_.year * 10000 + d_.month * 100 + d_.day)
     for r in e.itertuples():
         for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
             cd, yr = getattr(r, a_), getattr(r, b_)
             if pd.isna(cd) or cd <= 0: continue
-            if r.vk == vk2 and (t_ == 'T' or int(cd) not in HARMLESS): hid2 = True
+            if r.vk in vks and (t_ == 'T' or int(cd) not in HARMLESS): hid = True
             if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025 and y1 <= yr + 0.5 <= y2: recs.add((int(yr), t_, int(cd)))
     cl = []
     for yr, t_, cd in sorted(recs):
@@ -375,14 +399,29 @@ for v1 in rng8.choice(list(PC), 300, replace=False):
         if b0 >= a0:
             nm_ = m & (Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0)
             if nm_.any(): m = nm_
-    nev8 += any(c[3] >= 4 for c in cl)
-    if not hid2:
+    det = any(c[3] >= 4 for c in cl)
+    if not hid:
         a0, b0 = int(math.floor(y1)) + 1 - 2000, int(math.floor(y2)) - 1 - 2000
         if b0 >= max(a0, 0):
             nm_ = m & ~(np.maximum(Xg[:, max(a0, 0):b0 + 1, ix['harvest']], Xg[:, max(a0, 0):b0 + 1, HH]) >= 0.5).any(1)
             if nm_.any(): m = nm_
-    n8 += 1; bad8 += set(g.cid.values[m]) != set(PC[v1][0].tolist())
+            if not det:
+                nm_ = m & ~((Xg[:, max(a0, 0):b0 + 1, :NC].sum(-1) + Xg[:, max(a0, 0):b0 + 1, HH]) > 0).any(1)
+                if nm_.any(): m = nm_
+    return set(g.cid.values[m]), det
+for v1 in rng8.choice(list(PC), 300, replace=False):
+    es, det = exp_set(v1, ns_['vpair'][v1], [ns_['vpair'][v1]]); nev8 += det
+    n8 += 1; bad8 += es != set(PC[v1][0].tolist())
 check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputation from FIADB records + spec', bad8 == 0, f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
+# T8c multi-horizon pairs (PAIR_ALL): the same independent recomputation over the span (a hiding code at ANY visit in between blocks the undisturbed rules)
+PC2 = ns_.get('pair_cand2', {}); multi = [k for k in PC2 if k[0] in ns_['vpair'] and ns_['vpair'][k[0]] != k[1]]
+if multi:
+    vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict(); bad8c = 0; n8c = 0
+    for i8 in rng8.choice(len(multi), min(200, len(multi)), replace=False):
+        v1, v2 = multi[i8]; seq = vs_of8[int(V.pid.values[v1])]; span = seq[seq.index(v1) + 1:seq.index(v2) + 1]
+        es, _ = exp_set(v1, v2, span); n8c += 1; bad8c += es != set(PC2[(v1, v2)][0].tolist())
+    check('T8c multi-horizon pair histories (g03b.pair_cand2) = independent recomputation over the span', bad8c == 0, f'{n8c} pairs, mismatches {bad8c}')
+else: print('SKIP  T8c no multi-horizon pairs (PAIR_ALL off)')
 # T8b (a) evaluation safety: with LOAD=1 the severity rule must be OFF (pair sets = the records-only sets of T8); (b) training (LOAD=0, SEVERITY 1,
 # default PAIR_ANCHOR=both): every stand-replacing pair (detectable FIA event, BA(v2) < 0.3 BA(v1)) whose consistent set CONTAINS a candidate with
 # stand-replacing evidence in the window uses only such candidates (non-vacuous: pairs without any are not counted)
@@ -414,6 +453,31 @@ for v1, v2 in list(ns_['vpair'].items()):
     if nrep >= 300: break
 check('T8b severity anchoring: OFF under LOAD=1 (evaluation sets = records-only sets); ON in training (PAIR=both): stand-replacing pairs use only candidates with stand-replacing evidence',
       off_ok and okr == nrep and nrep > 0, f'evaluation sets unchanged: {off_ok}; {nrep} stand-replacing pairs with strong candidates checked, violations {nrep - okr}')
+# T8d multi-horizon severity (audit r4 I2): a span whose BA fell below 0.3 of v1 at ANY visit in between (even if it regrew by the end) is stand-replacing
+PC2s = ns_.get('pair_cand2', {}); okd = 0; nd = 0
+if ns_.get('PAIR_ALL'):
+    vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()
+    for (v1, v2), (cs2, _) in PC2s.items():
+        if ns_['vpair'].get(v1) == v2 or BAtk.get(v1, 0) <= 1.0: continue
+        seq = vs_of8[int(V.pid.values[v1])]; span = seq[seq.index(v1) + 1:seq.index(v2) + 1]
+        if min(BAtk.get(u, 0.0) for u in span) / BAtk.get(v1) >= 0.3 or BAtk.get(v2, 0.0) / BAtk.get(v1) < 0.3: continue   # only regrown spans: end ratio misleads
+        pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
+        cl_ = [c for c in G2.clusters([(k, y) for k, y in ns_['ev_of'].get(pid, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
+        if not cl_: continue
+        allc = C[C.pid == pid].cid.values; Xp = np.asarray(CF[allc], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(allc), NY, NC + 2); w_ = np.zeros(len(allc), bool); m_ev = np.ones(len(allc), bool)
+        for c in cl_:
+            lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
+            if hi > lo:
+                w_ |= (np.maximum(Xp[:, lo:hi, ix['harvest']], Xp[:, lo:hi, HH]) >= 0.5).any(1)
+                nm_ = m_ev & (Xp[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
+                if nm_.any(): m_ev = nm_
+        strong = set(allc[w_ & m_ev])
+        if not strong: continue
+        nd += 1; okd += set(np.asarray(cs2).tolist()) <= strong
+        if nd >= 300: break
+    check('T8d multi-horizon severity: spans whose BA fell below 0.3 of v1 at an intermediate visit (regrown by the end) use only stand-replacing candidates',
+          okd == nd, f'{nd} regrown stand-replacing spans checked, violations {nd - okd}' + ('' if nd else ' (none in this table: vacuous)'))
+else: print('SKIP  T8d PAIR_ALL off')
 # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
 if os.path.exists(f'{D}/cand_prior.parquet'):
     def bcls(m, iw, inn):      # background per distance class (inner 800 m disk / ring), clipped as specified
@@ -470,6 +534,12 @@ if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
         if p['GEN_DOM'] != r.dom_key: e11.append(99)
     check('T11 Forest Explorer stand layer: GEN_BA / TPA / QMD / BA_SD / DOM = stand map (g05) x conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', n11 > 0 and max(e11) < 0.11,
           f'{n11} stands, max abs diff {max(e11) if e11 else float("nan"):.3f} (rounding 0.05 / 0.005)')
+# T11c g05 maps with the start year g04 GATED (bayes_eval.json map_y0), and a non-2021 year only with a passed pre-registered gate
+if os.path.exists(f'{D}/bayes_eval.json'):
+    be = json.load(open(f'{D}/bayes_eval.json')); y0b = be.get('map_y0', 2021.0); gt = be.get('map_y0_gate', {})
+    g5 = open(f'{ROOT}/scripts/g05_map_stands.py').read()
+    check('T11c mapping start year: g05 reads bayes_eval.json map_y0; a year other than 2021 only if the g04 gate passed',
+          "json.load(open(f'{D}/bayes_eval.json')).get('map_y0', 2021.0)" in g5 and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, gate {gt}')
 # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
 if os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
