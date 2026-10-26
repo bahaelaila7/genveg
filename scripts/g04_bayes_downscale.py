@@ -183,29 +183,40 @@ with torch.no_grad():
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
             xv = Xv[[vi[v]]] if X is None else X[q_:q_ + 1]
             zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = int(math.floor(float(yv)))
-            st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms)); s_ = summ(st[yy])
+            st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms)); s_ = summ(st[yy])
             out_.append([torch.exp(torch.log(s_[i] + 1e-3).median()) for i in range(3)] + [s_[4].mean(0)])
         return out_
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]
     cal_m = rec(trs_v); te_m = rec(te_l)
     if cal_m and te_m:
         oc = obs_summ(torch.tensor(cal_m)); skc = oc[0] > 0; ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0; nm_ = null_pred(vyear[te_m])
-        def evaluate(y0):
-            pc = map_path(cal_m, y0); CF = [float(torch.median(torch.log((oc[i][skc] + 1e-3) / torch.stack([r[i] for r in pc])[skc]))) for i in range(3)]
-            pt = map_path(te_m, y0); P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]
-            return CF, pt, P_, {nm: err(P_[i][skt], ot[i][skt]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
-        # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its held-out TPH and BA errors are no worse than
-        # the 2021 path's and than the null's, AND the prediction still depends on the stand's landscape (BA predictions with the landscapes shuffled among
-        # the held-out visits correlate < 0.5 with the real ones); else 2021. The chosen year is recorded; g05 maps with it.
-        res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0}
+        def evaluate(y0, cal=None, te=None):
+            cal = cal_m if cal is None else cal; te = te_m if te is None else te
+            occ = obs_summ(torch.tensor(cal)); skc_ = occ[0] > 0; ott = obs_summ(torch.tensor(te)); skt_ = ott[0] > 0
+            pc = map_path(cal, y0); CF = [float(torch.median(torch.log((occ[i][skc_] + 1e-3) / torch.stack([r[i] for r in pc])[skc_]))) for i in range(3)]
+            pt = map_path(te, y0); P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]
+            return CF, pt, P_, {nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
+        # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its TPH and BA errors are no worse than the 2021
+        # path's and than the null's, AND the prediction still depends on the stand's landscape (BA predictions with the landscapes shuffled correlate
+        # < 0.5 with the real ones); else 2021. The gate is decided on the CALIBRATION plots (cross-fitted: factors from one half of the plots, errors on
+        # the other), never on the held-out plots it then reports (audit r5 M1). The chosen year is recorded; g05 maps with it.
+        res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0, 'decided_on': 'calibration plots, 2-fold by plot'}
         if MAP_Y0 != 2021.0:
             res[MAP_Y0] = evaluate(MAP_Y0)
-            perm_ = np.random.default_rng(7).permutation(len(te_m)); Xs = Xv[[vi[te_m[i]] for i in perm_]]
-            ps_ = map_path(te_m, MAP_Y0, X=Xs); ba_r = torch.log(torch.stack([r[1] for r in res[MAP_Y0][1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
-            cs = float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]); e0, e1 = res[2021.0][3], res[MAP_Y0][3]
-            nulle = {nm: err(nm_[i][skt], ot[i][skt]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
+            hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]
+            e0, e1, cs_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, []
+            nulle = {k: 0.0 for k in ('TPH', 'BA')}
+            for ca, cb in ((hA, hB), (hB, hA)):              # each half judged with factors from the other
+                r0, r1 = evaluate(2021.0, ca, cb), evaluate(MAP_Y0, ca, cb); ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb])
+                Xs = Xv[[vi[cb[i]] for i in np.random.default_rng(7).permutation(len(cb))]]
+                ps_ = map_path(cb, MAP_Y0, X=Xs); ba_r = torch.log(torch.stack([r[1] for r in r1[1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
+                cs_.append(float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]))
+                for i, k in ((0, 'TPH'), (1, 'BA')):
+                    e0[k] += r0[3][k] / 2; e1[k] += r1[3][k] / 2; nulle[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2
+            cs = float(np.mean(cs_))
             ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and cs < 0.5
-            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'passed': bool(ok)})
+            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'passed': bool(ok),
+                         'heldout_err_2021': res[2021.0][3], 'heldout_err_requested': res[MAP_Y0][3]})     # (held-out: reported, not used)
         y0u = MAP_Y0 if gate.get('passed') else 2021.0; CALF, pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
         nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]

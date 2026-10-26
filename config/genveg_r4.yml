@@ -1,6 +1,9 @@
 # Generative-vegetation pipeline (scripts/genveg_pipeline.py; docs/GENVEG_PIPELINE.md) — every switch of every stage lives here.
 name: r4_v4
 data: r4_v4                     # data/proto/<data>: EPA Region 4 (AL FL GA KY MS NC SC TN) at 90 m, v4 architecture (docs/GENVEG_V4_R4.md §B)
+inputs:                         # FIA databases (read-only; relative to WORKSPACE), fingerprinted into the stage hashes (audit r5 I4)
+  curated_db: landis_region4/data_r4/slim_r4_v2.duckdb   # the curation-fix rebuild (FIA_DATA_PREP branch curation-fix); missing until it is built
+  fiadb: FIA/FIASQLITE2PGSQL/FIADB.duckdb
 stands_run: gafl_pilot          # stand-delineation run: the MAPPED stands (Baker County); the candidates' forest mask is data/r4/land.tif (AEF90)
 env:                            # region switches, passed to every stage
   REGION: '1,12,13,21,28,37,45,47'

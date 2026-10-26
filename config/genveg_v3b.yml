@@ -1,6 +1,9 @@
 # Generative-vegetation pipeline (scripts/genveg_pipeline.py; docs/GENVEG_PIPELINE.md) — every switch of every stage lives here.
 name: gafl_v3b
 data: gafl_v3b                  # data/proto/<data>: v3 architecture on the same table / priors / loss fixes as gafl_v4 (like-for-like comparison)
+inputs:                         # FIA databases (read-only; relative to WORKSPACE), fingerprinted into the stage hashes (audit r5 I4)
+  curated_db: landis_region4/data_r4/slim_r4_v2.duckdb   # the curation-fix rebuild (FIA_DATA_PREP branch curation-fix); missing until it is built
+  fiadb: FIA/FIASQLITE2PGSQL/FIADB.duckdb
 stands_run: gafl_pilot          # stand-delineation run (data/derived/runs/<name>, scripts/stands_pipeline.py): forest mask of the candidates + the mapped stands
 table:                          # g02b_build_gafl: visits, cohort tokens, footprint candidates + location prior (the long stage)
   NCAND: 256                    # candidate footprints kept per plot (stratified, inclusion-weighted)

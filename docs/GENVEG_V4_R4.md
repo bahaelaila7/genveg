@@ -132,3 +132,28 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
   dropped the `fsw` / `fmw` shares): the verifier had not run since 63e8837.
 * Minor: g06 blocked-visit fallback = ones; `_n_consec` counters; Am(soil) computed once per run (soil is constant); stale gafl_v4 outputs of the smoke
   run (m_v4_s0.pt, eval.json, stand_veg.parquet) deleted so the pipeline cannot adopt them.
+
+## H. Audit round 5 (2026-10-26, fresh independent Opus review of 60d03fd); findings reproduced before fixing
+* **B1** g06's long-horizon section crashed (NameError): the `vs_of = …` assignment sat after a `#` on the previous line. Fixed; g06 ran end to end on an
+  untrained scratch checkpoint (deleted afterwards).
+* **I1 / M3** the age clock could not be reset by a disturbance (a bounded jump moves it < 1 = 40 yr; 22.6 % of stand-replacing pairs need more) and its
+  rate was fixed at 1 yr / yr (observed BA-weighted mean age +0.87–0.91 yr / yr). → `Flow.jump`: with `AGE_CH` the jump network has one more output, a
+  reset fraction r: z0 ← z0 + r (−AGE_C / AGE_S − z0) + 0.25 tanh(·) (r starts at sigmoid(−2)); the clock advances by dt · exp(lrho) / AGE_S (learned
+  rate). gv_verify T4k checks the rate, the reset algebra and a full reset of a 100-yr stand.
+* **I2** the r4 "event-free" rule removed FIA-recorded ground fires (and insects): their likelihood ratio is 2 (< 4, not a cluster constraint) and their codes
+  do not block. → the event-free test ignores the evidence of the period's recorded weak events inside their windows (g03b.pair_set; gv_verify T8 spec).
+* **I3** FIA records were assigned to pairs by a mid-year rule on the event year, not by the visit that recorded them (3.3 % of records made at v2 fell out
+  of (v1, v2]; 218 next pairs re-applied a cut after v2). → g02e writes the RECORDING visit (`fia_events.rmd`); `g03b.recs_in` gives a pair the records
+  made at visits in (v1, v2] (re-reports of an event recorded at a visit ≤ v1 dropped); the flow takes `rs` / `re` (the start / end visit recorded an
+  event of its own calendar year: that year's evidence lies before the visit) and every narrowing window is clipped to the years the flow actually applies
+  (`act_span`, which also fixes **M2**, boundary-year jumps leaking into "event-free" histories). Used by g03b (MIL, pairs, Q decode mask, evaluation),
+  g04 (mapping path end visit), g06. gv_verify `pair_spec` re-derives all of it from FIADB COND (T8, T8b, T8c, T8d, new T8e) and T4m tests the flow rule.
+* **I4** the stage hashes did not cover the FIA databases or the GA+FL rasters: a rebuilt curated table would have passed as current. → config `inputs`
+  (curated_db, fiadb; relative to WORKSPACE) passed to every stage as GV_CURATED_DB / GV_FIADB (`common.curated_db()` / `fiadb()`), and fingerprinted
+  (path, size, mtime) with the GA+FL inputs into table / records / history / stands_fp / verify. The v4 / r4 / v3b configs point at
+  `landis_region4/data_r4/slim_r4_v2.duckdb` (the curation-fix rebuild): the driver refuses to run until it exists.
+* **I5** the g06 acceptance was not enforced → g06 exits 3 when it fails (history location), and downscale (hence map / fe) depends on the dynamics stage.
+* **M1** the MAP_Y0 gate selected on the held-out plots it reports → decided on the calibration plots, 2-fold by plot (factors from one half, errors on
+  the other); held-out errors of both paths are reported only.
+* **M4** g02b docstring: the stand age at the first visit is not used as negative evidence (corrected). **M6** the epoch log divides by the visits seen.
+* M5 (verifier scope) addressed by the independent `pair_spec`; T8 still runs the period rule (T8b covers PAIR=both + severity).

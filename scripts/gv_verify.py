@@ -5,7 +5,7 @@ instead of curated_trees for events) and compares. Output: PASS / FAIL lines + n
 import sys, os, json, math, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run; from common import curated_db, fiadb
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NS = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 rng = np.random.default_rng(42); RES = []
 def check(name, ok, detail=''):
@@ -20,7 +20,7 @@ DISTP = (lambda y: f'{ROOT}/data/r4/dist/dist_{y}.tif') if AEF90 else (lambda y:
 HANSP = f'{ROOT}/data/r4/hansen_lossyear.tif' if AEF90 else f'{ROOT}/data/hansen/lossyear.tif'
 key = ['st', 'u', 'c', 'p']; V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 P = pd.read_parquet(f'{D}/plots.parquet'); C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r')
-con = duckdb.connect(f'{WS}/landis_region4/data_r4/slim_r4.duckdb', read_only=True)
+con = duckdb.connect(curated_db(), read_only=True)
 # ======================= T1 visits and cohort tokens (SQL aggregation, independent of the pandas builder)
 top = [r[0] for r in con.execute(f"""select r.SPECIES_SYMBOL from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01'
                                     and t.STATUSCD=1 group by 1 order by count(*) desc, 1 limit {len(KEYS) - 2}""").fetchall()]
@@ -34,7 +34,7 @@ T = con.execute(q).df(); T['md'] = pd.to_datetime(T.md)
 # ---- the visit set, rebuilt independently from FIADB (pandas aggregation of per-condition rows; string dates):
 #      visits with curated trees on a forested condition  ∪  forested FIADB visits of the same plots with no live tree in FIADB TREE;
 #      forested share of the SAMPLED area (non-sampled status 5 excluded) >= 0.1
-_fx = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+_fx = duckdb.connect(fiadb(), read_only=True)
 _cc = _fx.execute(f"""select p.CN pcn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, printf('%04d-%02d-%02d', p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) ds,
         c.CONDID cond, c.COND_STATUS_CD cs, c.SUBPPROP_UNADJ sp, c.MICRPROP_UNADJ mp, c.STDORGCD org from PLOT p join COND c on c.PLT_CN = p.CN
         where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
@@ -74,7 +74,7 @@ pv = V.sort_values(['pid', 'year']); exp_pairs = set(zip(pv.vid.values[:-1], pv.
 check('T1h pairs = consecutive visits of each plot', set(zip(PR.v1, PR.v2)) == exp_pairs, f'{len(PR)} pairs')
 pl_ind = EX.set_index('vid').org.fillna(0) == 1
 check('T1i planted flag = COND STDORGCD 1 (forested conditions) of the visit', (V.set_index('vid').planted.reindex(pl_ind.index) == pl_ind).all(), f'planted share {pl_ind.mean():.3f}')
-fv = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True).execute(f"""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
+fv = duckdb.connect(fiadb(), read_only=True).execute(f"""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
       from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
 ours = V[key].assign(my=V.year.astype(int)).drop_duplicates(); inplots = fv.merge(V[key].drop_duplicates(), on=key)
 miss = inplots.merge(ours, on=key + ['my'], how='left', indicator=True); nm = (miss._merge == 'left_only').sum()
@@ -82,7 +82,7 @@ nplots_f = len(fv[key].drop_duplicates()); nplots_o = len(V[key].drop_duplicates
 check('T1j FIADB forested visits of our plots that are absent from the table (bare visits with no tree record?) < 2 %', nm / len(inplots) < 0.02,
       f'missing {nm} of {len(inplots)}; forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
 # ======================= T2 plot coordinates
-fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+fc = duckdb.connect(fiadb(), read_only=True)
 pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, MEASYEAR my, LAT lat, LON lon from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000").df()
 _sp = pl.groupby(key).agg(la0=('lat', 'min'), la1=('lat', 'max'), lo0=('lon', 'min'), lo1=('lon', 'max')).reset_index()
 check('T2a0 a plot key\'s annual-inventory rows (MEASYEAR >= 2000) agree on the coordinates (< 0.2 km)', ((_sp.la1 - _sp.la0) * 111 < 0.2).mean() > 0.999 and ((_sp.lo1 - _sp.lo0) * 92 < 0.2).mean() > 0.999,
@@ -266,6 +266,7 @@ s_pred = ns_['summaries'](lp_perfect, ns_['slot_v'][v_]); o2 = ns_['obs_summ'](v
 check('T4c decoder summaries on perfect slots (with calibration) = observed summaries', all(np.allclose(s_pred[i].numpy(), o2[i].numpy(), rtol=1e-4, atol=1e-5) for i in range(3)))
 tr_p = set(ns_['vpid'][ns_['tr_v']]); te_p = set(ns_['vpid'][ns_['te_v']])
 check('T4d train / test plots disjoint (spatial blocks)', not (tr_p & te_p), f'train plots {len(tr_p)} test plots {len(te_p)}')
+_sw0 = (ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ']); ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = False, False, ns_['D_Z']   # T4e-j: the base flow
 flow = type(ns_['flow'])(); Dz = ns_['D_Z']; z0 = torch.zeros(3, Dz); dist = torch.zeros(3, NY, NC + 2); dist[1, 2010 - 2000, 0] = 1; soil = torch.zeros(3, ns_['SOIL'].shape[1])
 with torch.no_grad():
     for p_ in flow.J.parameters(): p_.fill_(0.0)
@@ -300,23 +301,37 @@ with torch.no_grad():
 check('T4j flow end time (pair targets): the state is taken AT the end date (between end-of-2013 and end-of-2014 states), end-year events only if before the end',
       (stE[2014][0] - stE[2014][1]).abs().max() > 0 and (e1 - stE[2014][0]).abs().max() < 1e-6 and abs((e2 - e2n).abs().mean().item() - math.tanh(1.0)) < 1e-5,
       f'Δ(end 2014.3 vs 2014.9) {(stE[2014][0] - stE[2014][1]).abs().max():.3f}; event of 2014 with end 2014.3 ignored, with end 2014.9 applied')
+# T4m visit-year rule (audit r5 I3): an event in the END visit's own year is applied before a first-half end only if that visit recorded it (re); an event
+# in the START visit's own year is not applied after a first-half start if the start visit recorded it (rs)
+with torch.no_grad():
+    dm = torch.zeros(1, NY, NC + 2); dm[0, 2014 - 2000, 0] = 1; zm = torch.zeros(1, Dz); sm = torch.zeros(1, ns_['SOIL'].shape[1]); T_, F_ = torch.tensor([True]), torch.tensor([False])
+    e_no = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]))[2014]; e_re = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]), re=T_)[2014]
+    s_no = flow(zm, torch.tensor([2014.2]), [2014], dm, sm)[2014]; s_rs = flow(zm, torch.tensor([2014.2]), [2014], dm, sm, rs=T_)[2014]
+    s_0 = flow(zm, torch.tensor([2014.2]), [2014], torch.zeros_like(dm), sm)[2014]; e_0 = flow(zm, torch.tensor([2010.2]), [2014], torch.zeros_like(dm), sm, end=torch.tensor([2014.3]))[2014]
+check('T4m flow visit-year rule: re applies the end visit\'s own-year event before a first-half end; rs suppresses the start visit\'s recorded own-year event',
+      (e_no - e_0).abs().max() < 1e-7 and abs((e_re - e_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and abs((s_no - s_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and (s_rs - s_0).abs().max() < 1e-7)
 # T4k site attractor (SITE_ATTR) and age clock (AGE_CH): an independently-built flow with both switches on (module globals of the exec'd g03b)
-_sw = (ns_['SITE_ATTR'], ns_['AGE_CH']); ns_['SITE_ATTR'], ns_['AGE_CH'] = True, True
+ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1
 try:
-    fk = type(ns_['flow'])(); nso = ns_['SOIL'].shape[1]; torch.manual_seed(4)
+    fk = type(ns_['flow'])(); nso = ns_['SOIL'].shape[1]; torch.manual_seed(4); AS = ns_['AGE_S']; AC = ns_['AGE_C']
     with torch.no_grad():
         for p_ in [*fk.g.parameters(), *fk.J.parameters()]: p_.fill_(0.0)
-        fk.g[-1].bias.fill_(2.0); fk.ltau.fill_(0.0); fk.A.fill_(0.3); fk.J[-1].bias.fill_(1.0)
+        fk.g[-1].bias.fill_(2.0); fk.ltau.fill_(0.0); fk.A.fill_(0.3); fk.J[-1].bias.fill_(1.0); fk.lrho.fill_(math.log(0.8))
         for p_ in fk.Am.parameters(): p_.copy_(torch.randn_like(p_))
         sk = torch.randn(2, nso); dk = torch.zeros(2, NY, NC + 2); dk[1, 2015 - 2000, 0] = 1
-        sK = fk(torch.zeros(2, Dz), torch.tensor([2000.0, 2000.0]), [2012, 2025], dk, sk)
+        sK = fk(torch.zeros(2, Dz), torch.tensor([2000.0, 2000.0]), [2012, 2015, 2025], dk, sk)
         gk = torch.sigmoid(torch.tensor(2.0)); lk = 1.0 + gk; zfix = gk * 3 * torch.tanh(fk.A + fk.Am(sk)) / lk     # the fixed point, computed independently
         e_fix = (sK[2012][0, 1:] - zfix[0, 1:]).abs().max().item(); e_soil = (zfix[0, 1:] - zfix[1, 1:]).abs().max().item()
-        ck12 = sK[2012][0, 0].item(); ck25 = sK[2025][0, 0].item(); ck25e = sK[2025][1, 0].item()
-    check('T4k flow SITE_ATTR + AGE_CH: dims 1.. converge to the soil-specific attractor g·3·tanh(A + Am(soil)) / λ; dim 0 advances by exactly dt / AGE_S; an event jump moves the clock',
-          e_fix < 1e-4 and e_soil > 1e-2 and abs(ck12 - 13 / ns_['AGE_S']) < 1e-5 and abs(ck25 - 26 / ns_['AGE_S']) < 1e-5 and abs(ck25e - ck25 - math.tanh(1.0)) < 1e-5,
-          f'|z - fixed point| {e_fix:.1e}, soil spread {e_soil:.3f}, clock 2012 {ck12:.4f} (13/40 = 0.325), 2025 {ck25:.4f}, jump {ck25e - ck25:.5f}')
-finally: ns_['SITE_ATTR'], ns_['AGE_CH'] = _sw
+        ck12 = sK[2012][0, 0].item(); ck25 = sK[2025][0, 0].item()
+        pre = 16 * 0.8 / AS; r_ = 1 / (1 + math.exp(-1.0)); post = pre + r_ * (-AC / AS - pre) + 0.25 * math.tanh(1.0)      # the event of 2015 at end-of-year 2015
+        ck15e = sK[2015][1, 0].item()
+        fk.J[-1].bias[Dz:].fill_(30.0)                                                    # full reset: an old stand cut to age ~0
+        zo = torch.zeros(1, Dz); zo[0, 0] = (100 - AC) / AS
+        sR = fk(zo, torch.tensor([2014.9]), [2015], dk[1:], sk[1:])[2015][0, 0].item()
+    check('T4k flow SITE_ATTR + AGE_CH: dims 1.. converge to the soil-specific attractor; dim 0 advances by dt·rho / AGE_S; an event RESETS the clock by the learned fraction (a cut 100-yr stand -> ~0)',
+          e_fix < 1e-4 and e_soil > 1e-2 and abs(ck12 - 13 * 0.8 / AS) < 1e-5 and abs(ck25 - 26 * 0.8 / AS) < 1e-5 and abs(ck15e - post) < 1e-5 and abs(sR - (-AC / AS + 0.25 * math.tanh(1.0))) < 1e-5,
+          f'|z - fixed point| {e_fix:.1e}, soil spread {e_soil:.3f}, clock 2012 {ck12:.4f} (13·0.8/40 = 0.26), after the 2015 event {ck15e:.4f} (expected {post:.4f}), cut 100-yr stand -> age {sR * AS + AC:.1f} yr')
+finally: ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = _sw0
 TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; vv = int(TKp.vid.values[0]); tv_ = TKp[TKp.vid == vv]; w_ = tv_.N * tv_.QMD ** 2
 check('T4l age-clock target AGE_OBS = BA-weighted mean cohort age of the visit (independent); bare visits 0',
       abs(float(ao[vv]) - float((w_ * tv_.A).sum() / w_.sum())) < 1e-3 and float(ao[torch.tensor(sorted(set(range(len(V))) - set(TKp.vid.astype(int).unique())))].abs().max() if len(set(range(len(V))) - set(TKp.vid.astype(int).unique())) else 0) == 0)
@@ -372,51 +387,79 @@ src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_par
 ns_['cand_of'] = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}      # T8 tests the period rule on g02b's candidates
 exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
 PC = ns_['pair_cand']; EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
-def exp_set(v1, v2, span):
-    """Independent recomputation of the candidate set of the history v1 -> v2 (span = the visits in (v1, v2]) from FIADB COND records + the spec:
-    detectable event clusters need compatible evidence; with no hiding code at any visit of the span, no stand-replacing evidence in between, and with
-    no detectable record either, no evidence at all (event-free histories, where any exist)."""
+KIND8 = lambda t_, cd: ('T', cd) if t_ == 'T' else ('ins' if 10 <= cd <= 22 else 'fire' if cd in (30, 31) else 'crown' if cd == 32 else 'wea' if 50 <= cd <= 54 else 'dev' if cd == 80 else None)
+_vkey = lambda u: (lambda d_: d_.year * 10000 + d_.month * 100 + d_.day)(EXv.loc[u].md)
+def pair_spec(v1, v2, span):
+    """The spec of a remeasurement history v1 -> v2 (span = the visits in (v1, v2]), from FIADB COND records — independent of g02b / g03b code:
+    a record describes the interval ending at the visit that RECORDED it (a re-report of an event of the same kind and year recorded at a visit <= v1 is
+    dropped); events of calendar year y act between the visits iff mid-year y lies in [v1, v2], except in a visit's own year when that visit recorded an
+    event of that year (then it lies before the visit); records chaining within 2 yr form one cluster (union of evidence classes / windows, max lift),
+    whose window is clipped to the acting years (clamped to the nearest one if it falls outside)."""
     pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
-    g = C[C.pid == pid]; Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2)
-    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; recs = set(); hid = False
-    vks = set()
-    for u in span: d_ = EXv.loc[u].md; vks.add(d_.year * 10000 + d_.month * 100 + d_.day)
+    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; vk1, vk2 = _vkey(v1), _vkey(v2); vks = {_vkey(u) for u in span}
+    typed, hid = [], False
     for r in e.itertuples():
         for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
             cd, yr = getattr(r, a_), getattr(r, b_)
             if pd.isna(cd) or cd <= 0: continue
             if r.vk in vks and (t_ == 'T' or int(cd) not in HARMLESS): hid = True
-            if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025 and y1 <= yr + 0.5 <= y2: recs.add((int(yr), t_, int(cd)))
+            if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025: typed.append((r.vk, t_, int(cd), int(yr)))
+    old = {(KIND8(t_, cd), yr) for vk, t_, cd, yr in typed if vk <= vk1}
+    recs = sorted({(yr, t_, cd) for vk, t_, cd, yr in typed if vk in vks and (KIND8(t_, cd), yr) not in old})
+    rs = any(vk == vk1 and yr == math.floor(y1) for vk, _, _, yr in typed); re_ = any(vk == vk2 and yr == math.floor(y2) for vk, _, _, yr in typed)
+    f1, f2 = math.floor(y1), math.floor(y2); a = f1 if (y1 <= f1 + 0.5 and not rs) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
     cl = []
-    for yr, t_, cd in sorted(recs):
+    for yr, t_, cd in recs:
         cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}
         if cl and yr - cl[-1][4] <= 2: a0 = cl[-1]; cl[-1] = (a0[0] | cs_, min(a0[1], yr + lo), max(a0[2], yr + hi), max(a0[3], lr), yr)
         else: cl.append((cs_, yr + lo, yr + hi, lr, yr))
-    m = np.ones(len(g), bool)
-    for cs_, lo, hi, lr, _ in cl:                      # sequential narrowing; a constraint that would leave no candidate is skipped (spec)
+    clc = []
+    if b >= a:
+        for cs_, lo, hi, lr, _ in cl:
+            lo2, hi2 = max(lo, a), min(hi, b)
+            if hi2 < lo2: lo2 = hi2 = (a if hi < a else b)
+            clc.append((cs_, lo2, hi2, lr))
+    g = C[C.pid == pid]; Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2)
+    return dict(g=g, Xg=Xg, cl=clc, det=any(c[3] >= 4 for c in clc), hid=hid, a=a, b=b)
+def exp_set(v1, v2, span):
+    """candidate set of the history v1 -> v2 by the spec (pair_spec): every detectable cluster needs compatible evidence in its window; with no hiding code
+    at any visit of the span, no stand-replacing evidence in the acting years, and with no detectable record either, no evidence at all there except the
+    evidence of the period's recorded (weak) events inside their windows; a constraint that would leave no candidate is skipped"""
+    q = pair_spec(v1, v2, span); g, Xg, m = q['g'], q['Xg'], np.ones(len(q['g']), bool)
+    for cs_, lo, hi, lr in q['cl']:
         if lr < 4: continue
         a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
         if b0 >= a0:
             nm_ = m & (Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0)
             if nm_.any(): m = nm_
-    det = any(c[3] >= 4 for c in cl)
-    if not hid:
-        a0, b0 = int(math.floor(y1)) + 1 - 2000, int(math.floor(y2)) - 1 - 2000
-        if b0 >= max(a0, 0):
-            nm_ = m & ~(np.maximum(Xg[:, max(a0, 0):b0 + 1, ix['harvest']], Xg[:, max(a0, 0):b0 + 1, HH]) >= 0.5).any(1)
+    a0, b0 = max(q['a'] - 2000, 0), min(q['b'] - 2000, NY - 1)
+    if not q['hid'] and b0 >= a0:
+        nm_ = m & ~(np.maximum(Xg[:, a0:b0 + 1, ix['harvest']], Xg[:, a0:b0 + 1, HH]) >= 0.5).any(1)
+        if nm_.any(): m = nm_
+        if not q['det']:
+            Xe = Xg.copy()
+            for cs_, lo, hi, lr in q['cl']: Xe[:, max(lo - 2000, 0):min(hi - 2000, NY - 1) + 1, sorted(cs_)] = 0
+            nm_ = m & ~((Xe[:, a0:b0 + 1, :NC].sum(-1) + Xe[:, a0:b0 + 1, HH]) > 0).any(1)
             if nm_.any(): m = nm_
-            if not det:
-                nm_ = m & ~((Xg[:, max(a0, 0):b0 + 1, :NC].sum(-1) + Xg[:, max(a0, 0):b0 + 1, HH]) > 0).any(1)
-                if nm_.any(): m = nm_
-    return set(g.cid.values[m]), det
+    return set(g.cid.values[m]), q['det']
 for v1 in rng8.choice(list(PC), 300, replace=False):
     es, det = exp_set(v1, ns_['vpair'][v1], [ns_['vpair'][v1]]); nev8 += det
     n8 += 1; bad8 += es != set(PC[v1][0].tolist())
 check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputation from FIADB records + spec', bad8 == 0, f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
+# T8e the record assignment itself: records made AT v2 whose year is v2's own year belong to (v1, v2] (the mid-year rule dropped first-half visits'
+# records: audit r5 I3), and the flow applies their year's evidence before v2 (Flow re) — counted on the sample, non-vacuous
+n8e = 0
+for v1 in list(PC)[:4000]:
+    v2 = ns_['vpair'][v1]; y2 = float(V.year.values[v2])
+    if y2 - math.floor(y2) < 0.5 and bool(ns_['VREC'][v2]):
+        q = pair_spec(v1, v2, [v2]); n8e += 1
+        if not (q['b'] == math.floor(y2) and q['cl']): n8e = -10 ** 9; break
+check('T8e first-half visits that recorded an event of their own year: the interval (v1, v2] holds the record and acts through v2\'s year', n8e > 0, f'{max(n8e, 0)} such pairs among the first 4000')
 # T8c multi-horizon pairs (PAIR_ALL): the same independent recomputation over the span (a hiding code at ANY visit in between blocks the undisturbed rules)
 PC2 = ns_.get('pair_cand2', {}); multi = [k for k in PC2 if k[0] in ns_['vpair'] and ns_['vpair'][k[0]] != k[1]]
+vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()
 if multi:
-    vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict(); bad8c = 0; n8c = 0
+    bad8c = 0; n8c = 0
     for i8 in rng8.choice(len(multi), min(200, len(multi)), replace=False):
         v1, v2 = multi[i8]; seq = vs_of8[int(V.pid.values[v1])]; span = seq[seq.index(v1) + 1:seq.index(v2) + 1]
         es, _ = exp_set(v1, v2, span); n8c += 1; bad8c += es != set(PC2[(v1, v2)][0].tolist())
@@ -431,47 +474,36 @@ off_ok = all(set(ns_['pair_cand'][k][0].tolist()) == PC_rec[k] for k in list(PC_
 os.environ['LOAD'] = '0'; os.environ['PAIR_ANCHOR'] = 'both'; ns_['C'] = C.merge(pd.read_parquet(f'{D}/cand_hist.parquet'), on=['cid', 'pid'], how='left').assign(cons=lambda x: x.cons.fillna(False).astype(bool))
 ns_['C']['prior0'] = ns_['C'].prior; ns_['cand_hist'] = {pid: (g.prior0.values, g.cons.values) for pid, g in ns_['C'].groupby('pid')}
 exec(compile(src8[src8.index('vpair = '):src8.index("print(f'FIA-anchored pairs")], 'g03b', 'exec'), ns_)      # (vpair applies g03b's forest-share filter fs_ok)
-PCs = ns_['pair_cand']; BAtk = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); okr = 0; nrep = 0
+PCs = ns_['pair_cand']; BAtk = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum()
+def strong_set(v1, v2, span):
+    """event-consistent candidates with stand-replacing evidence (harvest class or Hansen loss on >= half the footprint) in a detectable cluster's window"""
+    q = pair_spec(v1, v2, span); cl_ = [c for c in q['cl'] if c[3] >= 4]
+    if not cl_: return None
+    Xp, allc = q['Xg'], q['g'].cid.values; w_ = np.zeros(len(allc), bool); m_ev = np.ones(len(allc), bool)
+    for cs_, lo, hi, lr in cl_:
+        lo_, hi_ = max(lo - 2000, 0), min(hi - 2000, NY - 1) + 1
+        if hi_ > lo_:
+            w_ |= (np.maximum(Xp[:, lo_:hi_, ix['harvest']], Xp[:, lo_:hi_, HH]) >= 0.5).any(1)
+            nm_ = m_ev & (Xp[:, lo_:hi_][:, :, sorted(cs_)].sum(-1) > 0).any(1)
+            if nm_.any(): m_ev = nm_
+    return set(allc[w_ & m_ev])
+okr = 0; nrep = 0
 for v1, v2 in list(ns_['vpair'].items()):
     if v1 not in PCs or BAtk.get(v1, 0) <= 1.0 or BAtk.get(v2, 0) / BAtk.get(v1, 1) >= 0.3: continue
-    pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
-    cl_ = [c for c in G2.clusters([(k, y) for k, y in ns_['ev_of'].get(pid, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
-    if not cl_: continue
-    allc = C[C.pid == pid].cid.values; Xp = np.asarray(CF[allc], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(allc), NY, NC + 2); w_ = np.zeros(len(allc), bool)
-    for c in cl_:
-        lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
-        if hi > lo: w_ |= (np.maximum(Xp[:, lo:hi, ix['harvest']], Xp[:, lo:hi, HH]) >= 0.5).any(1)
-    m_ev = np.ones(len(allc), bool)                     # event-consistent set (sequential narrowing with skip, independent code)
-    for c in cl_:
-        lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
-        if hi > lo:
-            nm_ = m_ev & (Xp[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
-            if nm_.any(): m_ev = nm_
-    sel = np.isin(allc, PCs[v1][0]); strong = set(allc[w_ & m_ev])
+    strong = strong_set(v1, v2, [v2])
     if not strong: continue
-    nrep += 1; okr += set(allc[sel]) <= strong       # selected ⊆ event-consistent candidates with stand-replacing evidence
+    nrep += 1; okr += set(PCs[v1][0].tolist()) <= strong       # selected ⊆ event-consistent candidates with stand-replacing evidence
     if nrep >= 300: break
 check('T8b severity anchoring: OFF under LOAD=1 (evaluation sets = records-only sets); ON in training (PAIR=both): stand-replacing pairs use only candidates with stand-replacing evidence',
       off_ok and okr == nrep and nrep > 0, f'evaluation sets unchanged: {off_ok}; {nrep} stand-replacing pairs with strong candidates checked, violations {nrep - okr}')
 # T8d multi-horizon severity (audit r4 I2): a span whose BA fell below 0.3 of v1 at ANY visit in between (even if it regrew by the end) is stand-replacing
 PC2s = ns_.get('pair_cand2', {}); okd = 0; nd = 0
 if ns_.get('PAIR_ALL'):
-    vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()
     for (v1, v2), (cs2, _) in PC2s.items():
         if ns_['vpair'].get(v1) == v2 or BAtk.get(v1, 0) <= 1.0: continue
         seq = vs_of8[int(V.pid.values[v1])]; span = seq[seq.index(v1) + 1:seq.index(v2) + 1]
         if min(BAtk.get(u, 0.0) for u in span) / BAtk.get(v1) >= 0.3 or BAtk.get(v2, 0.0) / BAtk.get(v1) < 0.3: continue   # only regrown spans: end ratio misleads
-        pid = int(V.pid.values[v1]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
-        cl_ = [c for c in G2.clusters([(k, y) for k, y in ns_['ev_of'].get(pid, []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]
-        if not cl_: continue
-        allc = C[C.pid == pid].cid.values; Xp = np.asarray(CF[allc], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(allc), NY, NC + 2); w_ = np.zeros(len(allc), bool); m_ev = np.ones(len(allc), bool)
-        for c in cl_:
-            lo, hi = max(c['lo'] - 2000, 0), min(c['hi'] - 2000, NY - 1) + 1
-            if hi > lo:
-                w_ |= (np.maximum(Xp[:, lo:hi, ix['harvest']], Xp[:, lo:hi, HH]) >= 0.5).any(1)
-                nm_ = m_ev & (Xp[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
-                if nm_.any(): m_ev = nm_
-        strong = set(allc[w_ & m_ev])
+        strong = strong_set(v1, v2, span)
         if not strong: continue
         nd += 1; okd += set(np.asarray(cs2).tolist()) <= strong
         if nd >= 300: break

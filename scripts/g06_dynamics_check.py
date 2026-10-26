@@ -20,7 +20,7 @@ with torch.no_grad():
         d = torch.zeros(len(vv_), NY, NC + 2); j = 2023 - YEARS[0]
         if kind == 'clearcut': d[:, j, G2.IX['harvest']] = 1; d[:, j, G2.H_] = 1; d[:, j, NC] = 3
         if kind == 'fire': d[:, j, G2.IX['fire']] = 1; d[:, j, NC] = 1
-        s = summaries(*dec(flow(z, vyear[vt], [2025], d, soil)[2025])); res[kind] = float(s[1].median())
+        s = summaries(*dec(flow(z, vyear[vt], [2025], d, soil, rs=VREC[vt])[2025])); res[kind] = float(s[1].median())
     vt_ = torch.tensor(te_v); o_ = obs_summ(vt_); s_ = summaries(*dec(torch.cat([enc(c, vyear[c]) for c in torch.split(vt_, 2000)]))); rec = {}
     for i, k in enumerate(('TPH', 'BA', 'QMD')):       # autoencoder fidelity on held-out visits (decode(encode(visit)) vs the visit)
         m = o_[i] > 0; x = torch.log(o_[i][m]); y = torch.log(s_[i][m] + 1e-3)
@@ -31,7 +31,7 @@ with torch.no_grad():
     cutk = {'T10', 'T20', 'T30', 'T40'}; rows = []
     for v1, v2 in vpair.items():
         if (vpid[v1] not in test_pid if os.environ.get('G06_SET', 'test') == 'test' else vpid[v1] not in set(vpid[tr_v])) or v1 not in pair_cand: continue
-        y1, y2 = float(vyear[v1]), float(vyear[v2]); evp = [(k, y) for k, y in ev_of.get(vpid[v1], []) if y1 <= y + 0.5 <= y2]
+        y1, y2 = float(vyear[v1]), float(vyear[v2]); evp = recs_in(vpid[v1], y1, y2)        # records of the interval (recorded at v2: audit r5 I3)
         cl_ = [c for c in G2.clusters(evp) if c['lr'] >= 4]; grp = 'cut' if any(k in cutk for k, _ in evp) and cl_ else ('other_event' if cl_ else 'none')
         rows.append((v1, v2, grp))
     pred = {}
@@ -42,7 +42,7 @@ with torch.no_grad():
             if EVAL_LOC == 'public': cid, pr = g_.cid.values[[int(np.argmin(g_.dist_m.values))]], np.ones(1)       # pinned at the public coordinate
             else: cid, pr = g_.cid.values, g_.incl_w.values / g_.incl_w.values.sum()                                # uniform over the disk's footprints
         ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); y2 = vyear[v2]; yy = int(math.floor(float(y2)))
-        st = flow(enc(torch.tensor([v1]), vyear[[v1]]).repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=y2.repeat(16))
+        st = flow(enc(torch.tensor([v1]), vyear[[v1]]).repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=y2.repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16))
         s = summaries(*dec(st[yy])); s0 = summaries(*dec(enc(torch.tensor([v1]), vyear[[v1]])))           # s0: v1 decoded without flow (reconstruction)
         pred[(v1, v2)] = (float(torch.exp(torch.log(s[1] + 1e-3).median())), float(torch.exp(torch.log(s[0] + 1e-3).median())), float(s0[1][0]))
     o1 = obs_summ(torch.tensor([r[0] for r in rows])); o2 = obs_summ(torch.tensor([r[1] for r in rows]))
@@ -65,16 +65,17 @@ with torch.no_grad():
     # 3 LONG-HORIZON undisturbed growth (audit r3 I1: the no-event flow shrank stands ~2.4 %/yr over long horizons; FIA undisturbed pairs grow):
     #   held-out pairs of every horizon (g03b.pair_cand2: PAIR_ALL) with no detectable FIA event in the span and no hiding code at any visit in between —
     #   predicted vs observed BA log change per year, by horizon
-    blk_ = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool);     # (no column: every visit counts as blocked, as g03b) vs_of = V.assign(vid=np.arange(nv)).sort_values('year').groupby('pid').vid.apply(list).to_dict()
+    blk_ = V.fia_blocked.values if 'fia_blocked' in V.columns else np.ones(nv, bool)     # (no column: every visit counts as blocked, as g03b)
+    vs_of = V.assign(vid=np.arange(nv)).sort_values('year').groupby('pid').vid.apply(list).to_dict()   # (audit r5 B1: this assignment sat inside the comment)
     lh = []
     for (v1, v2), (cid, pr) in pair_cand2.items():
         if vpid[v1] not in test_pid: continue
         y1, y2 = float(vyear[v1]), float(vyear[v2]); seq = vs_of[vpid[v1]]; mid = seq[seq.index(v1) + 1:seq.index(v2) + 1]
-        if blk_[mid].any() or [c for c in G2.clusters([(k, y) for k, y in ev_of.get(vpid[v1], []) if y1 <= y + 0.5 <= y2]) if c['lr'] >= 4]: continue
+        if blk_[mid].any() or [c for c in G2.clusters(recs_in(vpid[v1], y1, y2)) if c['lr'] >= 4]: continue
         ob1, ob2 = float(obs_summ(torch.tensor([v1]))[1][0]), float(obs_summ(torch.tensor([v2]))[1][0])
         if ob1 < 1.0: continue
         ci = torch.tensor(np.random.choice(cid, 16, replace=True, p=pr)); yy = int(math.floor(y2)); z0 = enc(torch.tensor([v1]), vyear[[v1]])
-        st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
+        st = flow(z0.repeat(16, 1), vyear[[v1]].repeat(16), [yy], DIST[ci], SOIL[ci], end=vyear[[v2]].repeat(16), rs=VREC[[v1]].repeat(16), re=VREC[[v2]].repeat(16)); pb = float(torch.exp(torch.log(summaries(*dec(st[yy]))[1] + 1e-3).median()))
         p0 = float(summaries(*dec(z0))[1][0])
         def dec_age(zz):    # decoded BA-weighted mean age of the expected slots (age-class midpoints)
             lp_, val_ = dec(zz); pr_ = torch.sigmoid(calibrated(lp_)); w_ = torch.exp(val_[..., 0].clamp(max=12)) * pr_ * torch.exp(val_[..., 1].clamp(max=math.log(150.0))) ** 2
@@ -94,3 +95,6 @@ with torch.no_grad():
                        'age_ok': d_['median_obs_age_per_yr'] > 0 and 0.7 <= d_['median_pred_age_per_yr'] / d_['median_obs_age_per_yr'] <= 1.3}
     out['undisturbed_acceptance'] = {'bins': acc, 'passed': bool(acc) and all(all(v.values()) for v in acc.values())}
 print(json.dumps(out, indent=1)); json.dump(out, open(f'{D}/dynamics_check_{out["tag"] or "run"}.json', 'w'), indent=1)
+# the acceptance is ENFORCED (audit r5 I5): a model whose undisturbed dynamics fail it is not mapped (the pipeline's downscale / map depend on this stage)
+if EVAL_LOC == 'history' and not out['undisturbed_acceptance']['passed']:   # (the location ablations are reports only)
+    print(f"ACCEPTANCE FAILED: {out['undisturbed_acceptance']}", flush=True); sys.exit(3)

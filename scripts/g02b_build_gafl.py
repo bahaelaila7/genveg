@@ -1,5 +1,5 @@
 """Generative-vegetation prototype v2 (all GA+FL plots), training table. Same content as g02_build_proto.py but:
-  visits   = every (plot, MEASDATE) of curated_trees (slim_r4, read-only) for GA+FL since 2000 with a forested condition (tree records on FIADB COND
+  visits   = every (plot, MEASDATE) of curated_trees (common.curated_db(), read-only) for GA+FL since 2000 with a forested condition (tree records on FIADB COND
              COND_STATUS_CD 1 only: non-forest conditions of mixed plots and wholly non-forest visits are dropped), single-visit plots included; live trees with
              estimated_age, DIA, HT, CR, TPA_UNADJ (the ages / filters of the Pan interval product); species key = top-K species, else _S/_H.
              Densities are per FORESTED area: TPA_UNADJ / (forest share of the subplot (DIA >= 5 in) or microplot (saplings) area, FIADB COND
@@ -8,9 +8,9 @@
   cands    = up to NCAND footprints per plot (stratified: high-prior stratum + random fill), features as in g02 (AlphaEarth 2022/25 3x3 means,
              disturbance history 2000-2025 by class + severity + Hansen at the EVENT's calendar year, centre-pixel soils)
   prior    = FIA-dated events (FIADB COND of the forested conditions, codes 1-3) matched BY TYPE to candidate evidence in the event year (±1; planting /
-             regeneration -2..+1) → ×8 (cutting matched by a LANDFIRE harvest class ×2 more); negative evidence: a remeasurement with no FIA event code
-             at all, or the stand age at the first visit, makes candidate stand-replacing evidence (harvest class or Hansen loss) inside that period
-             ×0.25. Kept candidates carry prior × inverse inclusion weight (each stands for incl_w footprints); hi = footprint in the full disk's
+             regeneration -2..+1) → ×8 (cutting matched by a LANDFIRE harvest class ×2 more); negative evidence: a remeasurement whose visit carries no FIA
+             code that could hide a stand-replacing event (fia_records) makes candidate stand-replacing evidence (harvest class or Hansen loss) inside
+             that period ×0.25 (the stand age at the first visit is NOT used: audit r5 M4). Kept candidates carry prior × inverse inclusion weight (each stands for incl_w footprints); hi = footprint in the full disk's
              high-prior set (prior >= 4 x median); plots carry n_hi / mass_hi on the full disk (localisation)
   conc     = per plot, prior mass on its top 10 % of footprints (localisation confidence; curriculum)
 Mapping set: Baker stands as in g02. Output data/proto/gafl/…
@@ -23,6 +23,7 @@ from pyproj import Transformer
 from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
 from features import ROOT, WS, SOILS, dequant
+from common import curated_db, fiadb
 from stand_runs import stands_run
 # location prior: FIA public coordinates are perturbed within 1 mile (1.6 km) of the plot, and "the proportion perturbed more than 0.5 mi (0.8 km) is small"
 # (Coulston et al., FIA perturbation studies; audit F7: a uniform disk put 75 % of the mass beyond 0.8 km): RADIAL_P of the prior mass inside 0.5 mile,
@@ -238,14 +239,14 @@ def fia_records(FE, FV, P, key):
         negs[pidk[k_]] = nl
     return evs, negs, blocked
 if __name__ == '__main__':
-    con = duckdb.connect(f'{WS}/landis_region4/data_r4/slim_r4.duckdb', read_only=True)
+    con = duckdb.connect(curated_db(), read_only=True)
     t = con.execute(f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
                               t.STATUSCD status, t.CONDID cond, t.cond_stdage stdage, t.TRTCD1, t.TRTYR1, t.TRTCD2, t.TRTYR2, t.DSTRBCD1, t.DSTRBYR1, t.DSTRBCD2, t.DSTRBYR2, t.cond_stdorgcd org
                        from curated_trees t join REF_SPECIES r on r.SPCD = t.SPCD
                        where t.STATECD in {ST_SQL} and t.MEASDATE >= '2000-01-01' order by t.STATECD, t.UNITCD, t.COUNTYCD, t.PLOT, t.MEASDATE, t.SUBP, t.TREE""").df()
     t['live'] = t.status == 1          # every visit is kept (bare / just-harvested visits = no live tree = empty cohort table); cohorts from live trees only
     t['md'] = pd.to_datetime(t.md); key = ['st', 'u', 'c', 'p']
-    fc = duckdb.connect(f'{WS}/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+    fc = duckdb.connect(fiadb(), read_only=True)
     CS = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md, c.CONDID cond, c.COND_STATUS_CD cs
                         from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df(); CS['md'] = pd.to_datetime(CS.md)
     t = t.merge(CS, on=key + ['md', 'cond'], how='left'); n0_ = len(t)
