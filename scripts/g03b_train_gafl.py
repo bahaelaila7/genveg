@@ -143,7 +143,9 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         """z [n, D_Z] at time `start` [n] (decimal year) → state at the end of each year (or at `end` [n], after which it is frozen), recorded at `stop`
         years; dist [n, NY, NC+2]. An event of year y applies iff mid-year y lies in [start, end] — except in a VISIT's own calendar year when that visit
         recorded an FIA event of that year (rs / re [n] bool: the start / end visit did): the year's evidence then lies BEFORE that visit (audit r5 I3);
-        and ra [n] bool: a LATER visit recorded a new event dated in the start visit's year, which therefore lies AFTER the start (audit r7 I2).
+        and ra [n] bool: a LATER visit recorded a new event dated in the start visit's year, which therefore lies AFTER the start (audit r7 I2) —
+        unless the start visit itself recorded an own-year event (rs): then the year's evidence (e.g. the cut) predates the start and is not re-applied
+        (r8 M5; the later record's own evidence of that year, e.g. site preparation, is lost: 0.2 % of pairs).
         Returns dict stop->state."""
         end = torch.full_like(start, 1e9) if end is None else end
         rs = torch.zeros_like(start, dtype=torch.bool) if rs is None else rs; re = torch.zeros_like(start, dtype=torch.bool) if re is None else re
@@ -158,7 +160,7 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
             lam = 1 / torch.exp(s.ltau) + g; zs = g * 3 * torch.tanh(Aa) / lam   # exact (exponential) integration over dt; attractor bounded (|A| ≤ 3)
             zn = zs + (z - zs) * torch.exp(-lam * dt)
             z = torch.cat([z[:, :1] + dt * torch.exp(s.lrho) / AGE_S, zn[:, 1:]], 1) if AGE_CH else zn    # (AGE_CH: dimension 0 is the age clock)
-            act = ((((start <= y + 0.5) & ~(rs & (fs_ == y))) | (ra & (fs_ == y))) & ((end >= y + 0.5) | (re & (fe_ == y)))).float().unsqueeze(-1)   # visit-year rule
+            act = ((((start <= y + 0.5) & ~(rs & (fs_ == y))) | (ra & ~rs & (fs_ == y))) & ((end >= y + 0.5) | (re & (fe_ == y)))).float().unsqueeze(-1)   # visit-year rule
             ev = dist[:, jj]; has = (ev[:, :NC].sum(-1, keepdim=True) + ev[:, NC + 1:NC + 2] > 0).float() * act
             if s.sparse_j:                                                  # (v4) the jump network only on the rows with an event: same result, ~1/20 of the cost
                 ix = has.squeeze(-1).nonzero(as_tuple=True)[0]
@@ -301,7 +303,7 @@ def recs_in(p_, y1, y2):
 def act_span(y1, y2, rs, re, ra=False):
     """first / last calendar year whose events the flow applies between visits at y1 and y2 (Flow's visit-year rule; b < a: none)"""
     f1, f2 = int(math.floor(y1)), int(math.floor(y2))
-    return (f1 if ((y1 <= f1 + 0.5 and not rs) or ra) else f1 + 1), (f2 if (y2 >= f2 + 0.5 or re) else f2 - 1)
+    return (f1 if (not rs and (y1 <= f1 + 0.5 or ra)) else f1 + 1), (f2 if (y2 >= f2 + 0.5 or re) else f2 - 1)
 def pair_ra(v1, v2):
     """a record of the interval (v1, v2] dated in v1's calendar year: that event lies after v1 (Flow ra; audit r7 I2)"""
     f1 = int(math.floor(vyr[v1])); return any(y == f1 for _, y in recs_in(vpid[v1], float(vyr[v1]), float(vyr[v2])))
@@ -355,7 +357,8 @@ def pair_set(v1, v2, blk=None, span=None):
         srw = (np.maximum(per[:, a:b + 1, G2.IX['harvest']], per[:, a:b + 1, G2.H_]) >= 0.5).any(1)
         if r_ < 0.3: m = _narrow(m, srw, 'outcome_loss'); loss_applied = True; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'outcome_kept'); nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
-    if not blk and not loss_applied and b >= a:   # FIA-undisturbed period (a measured major loss overrides the 'no code' reading)
+    collapse = SEVER and r_ is not None and r_ < 0.3     # training only: a measured major loss (min BA ratio < 0.3) is no 'undisturbed' period (r8 M3)
+    if not blk and not loss_applied and not collapse and b >= a:   # FIA-undisturbed period (a measured major loss overrides the 'no code' reading)
         m = _narrow(m, ~(np.maximum(per[:, a:b + 1, G2.IX['harvest']], per[:, a:b + 1, G2.H_]) >= 0.5).any(1), 'neg'); nanch['neg_constrained'] += 1
         if not cl_:     # FIA-undisturbed AND no detectable record: the histories must be event-free where any are (audit r4 I3: else the mixture credits
                         # spurious LANDFIRE / Hansen jumps of mislocated footprints, not the undisturbed drift) — EXCEPT the evidence of the period's
@@ -443,7 +446,7 @@ for ep in range(EP):
         dc_ = DIST[cidx]; evy = (dc_[:, :, :NC].sum(-1) + dc_[:, :, NC + 1]) > 0                       # [B*K, years] any candidate evidence
         yrs_ = (torch.arange(NY) + YEARS[0]).float().unsqueeze(0)
         fcs_ = torch.floor(cst).unsqueeze(-1) == yrs_
-        after = (evy & ((((cst.unsqueeze(-1) <= yrs_ + 0.5) & ~(crs.unsqueeze(-1) & fcs_))) | (cra.unsqueeze(-1) & fcs_))).any(1).view(-1, K)   # = the flow's rule
+        after = (evy & ((((cst.unsqueeze(-1) <= yrs_ + 0.5) & ~(crs.unsqueeze(-1) & fcs_))) | ((cra & ~crs).unsqueeze(-1) & fcs_))).any(1).view(-1, K)   # = the flow's rule
         pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
         wy = wy * okv.float(); lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)
         ldec = dec_loss(z, v); zr = z[:, 1:] if AGE_CH else z                          # (the age clock is supervised, not regularised toward N(0, 1))

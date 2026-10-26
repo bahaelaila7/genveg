@@ -65,9 +65,12 @@ class MDN(nn.Module):
         i = torch.arange(len(x)).unsqueeze(-1); return (mu[i, k] + torch.exp(ls[i, k]) * torch.randn(len(x), m, D_Z)).clamp(-3, 3)   # encoder range (3 tanh)
 mdn = MDN(); om = torch.optim.AdamW(mdn.parameters(), lr=1e-3, weight_decay=1e-4)
 Xv = torch.stack([nx(XL[vpid[v]]) for v in range(nv) if vpid[v] in XL]); vv = np.array([v for v in range(nv) if vpid[v] in XL]); vi = {v: i for i, v in enumerate(vv)}
-# calibration plots: 15 % of the TRAINING blocks, held out of the MDN fit (the calibration factors are then out-of-sample)
-_trb = sorted(set(P.blk[P.pid.isin(set(vpid[tr_v]))])); cal_blk = set(np.random.default_rng(2).choice(_trb, max(1, int(0.15 * len(_trb))), replace=False))
-cal_pid = set(P.pid[P.blk.isin(cal_blk)]) & set(vpid[tr_v])
+# calibration plots: with VAL_SPLIT, the VALIDATION plots — never trained on by g03b (flow, decoder) nor by the MDN — so the calibration factors and the
+# start-year gate are out of sample for the whole model (audit r8 I2); else (older models) 15 % of the TRAINING blocks, held out of the MDN fit only
+if VAL_SPLIT and len(va_v): cal_pid = set(vpid[va_v]) & set(XL)
+else:
+    _trb = sorted(set(P.blk[P.pid.isin(set(vpid[tr_v]))])); cal_blk = set(np.random.default_rng(2).choice(_trb, max(1, int(0.15 * len(_trb))), replace=False))
+    cal_pid = set(P.pid[P.blk.isin(cal_blk)]) & set(vpid[tr_v])
 _ca = P[P.pid.isin(cal_pid)]; _dc, _ = _KD(_ca[['x', 'y']].values).query(P[['x', 'y']].values)
 calbuf_pid = set(P.pid[(_dc < 3200) & ~P.pid.isin(cal_pid)])          # MDN-fit plots whose disk could overlap a calibration plot's: not fitted (r6 M7)
 trA = np.array([vi[v] for v in tr_v if v in vi and vpid[v] not in cal_pid and vpid[v] not in calbuf_pid]); teA = np.array([vi[v] for v in te_v if v in vi])
@@ -122,7 +125,7 @@ with torch.no_grad():
     zs = mdn.sample(X_te, vyear[te_l], 32); S_ = summ(zs.reshape(-1, D_Z)); A_ = [S_[i].view(len(te_l), 32) for i in range(3)]
     predA = [torch.exp(torch.log(x + 1e-3).median(1).values) for x in A_]
     # post-hoc calibration estimated on training plots only (the decoder predicts log-medians; sums of N and N·D² are biased low)
-    trs_v = [v for v in tr_l if vpid[v] in cal_pid]                                   # calibration plots (not used by the MDN fit)
+    trs_v = [v for v in lastv[lastv.pid.isin(cal_pid)].vid.values if v in vi]           # calibration plots' last visits (not used by the MDN fit)
     zt = mdn.sample(Xv[[vi[v] for v in trs_v]], vyear[trs_v], 32); St = summ(zt.reshape(-1, D_Z)); o_ts = obs_summ(torch.tensor(trs_v))
     CAL = [float(torch.median(torch.log((o_ts[i] + 1e-3) / (torch.exp(torch.log(St[i].view(len(trs_v), 32) + 1e-3).median(1).values))))) for i in range(3)]
     print(f'calibration log-factors (TPH, BA, QMD) from {len(trs_v)} calibration plots:', [round(c, 3) for c in CAL], flush=True)
@@ -199,6 +202,8 @@ with torch.no_grad():
             occ = obs_summ(torch.tensor(cal)); skc_ = occ[0] > 0; ott = obs_summ(torch.tensor(te)); skt_ = ott[0] > 0
             pc = map_path(cal, y0); CF = [float(torch.median(torch.log((occ[i][skc_] + 1e-3) / torch.stack([r[i] for r in pc])[skc_]))) for i in range(3)]
             pt = map_path(te, y0); P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]
+            P_[2] = torch.where(P_[0] > 0, 100 * torch.sqrt(P_[1] / (P_[0] * math.pi / 4).clamp(min=1e-9)), torch.zeros_like(P_[0]))   # QMD as g05 maps it:
+            # from the calibrated TPH / BA (GEN_QMD), not the samples' median QMD x its own factor (audit r8 M6)
             return CF, pt, P_, {nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
         # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its TPH and BA errors are no worse than the 2021
         # path's and than the null's, AND the prediction still depends on the stand's landscape (BA predictions with the landscapes shuffled correlate

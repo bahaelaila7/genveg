@@ -22,7 +22,7 @@ import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stands_stages import apply_overrides
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
-LIB = ['common.py', 'features.py', 'stand_runs.py', 'region.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
+LIB = ['common.py', 'features.py', 'stand_runs.py', 'region.py', 'check_comments.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
 STAGES = {   # stage: scripts (code hash), config sections, upstream stages, stand-run stages it depends on
     'table':        dict(code=['g02b_build_gafl.py'], cfg=['table', 'data'], up=[], stands=['clean']),
     'localisation': dict(code=['g02d_localisation.py'], cfg=[], up=['table'], stands=[]),
@@ -31,7 +31,7 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize']),
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
     'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history', 'stands_fp'], stands=[]),   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
-    'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train'], up=['train'], stands=[]),
+    'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train', 'model_seed'], up=['train'], stands=[]),   # (model_seed: whose acceptance is enforced; r8 I1)
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train', 'dynamics'], stands=[]),   # (dynamics: its acceptance gates mapping, audit r5 I5)
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),
     'fe':           dict(code=['24_export_fe.py', 'g07_fe_attach.py'], cfg=['fe'], up=['map'], stands=['finalize']),
@@ -103,6 +103,9 @@ def main():
     ap.add_argument('--config', default=os.path.join(ROOT, 'config', 'genveg.yml')); ap.add_argument('--set', action='append', default=[], dest='sets')
     ap.add_argument('--force', default=''); ap.add_argument('--adopt', default=''); ap.add_argument('stages', nargs='*')
     a = ap.parse_args(); force = set(filter(None, a.force.split(','))); adopt = set(filter(None, a.adopt.split(',')))
+    from check_comments import swallowed                                     # refuse to run code that a comment swallowed (r5-r8: 4 such bugs)
+    hits = [(f, ln, fr) for f in sorted({c for d in STAGES.values() for c in d['code']} | set(LIB)) for ln, fr in swallowed(os.path.join(SCR, f))]
+    if hits: sys.exit('code inside comments:\n' + '\n'.join(f'  {f}:{ln}: {fr}' for f, ln, fr in hits))
     cfg = apply_overrides(yaml.safe_load(open(a.config)), a.sets)
     D = os.path.join(ROOT, 'data', 'proto', cfg['data']); LOGD = os.path.join(D, 'pipeline_logs'); os.makedirs(LOGD, exist_ok=True)
     SR = os.path.join(ROOT, 'data', 'derived', 'runs', cfg['stands_run'])

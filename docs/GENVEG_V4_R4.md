@@ -209,3 +209,25 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
   bare visits with FIADB live trees), T3e (stored severity of the old label table: max Δ 1/3 = one severity step), T3f / T10 (old NONBLOCK / periods).
   New code vs the independent severity spec on 400 freshly computed footprints: 0 mismatches. Smoke: train step, g06 (val acceptance enforced, exit 3),
   g04, g05 (stand map records map_y0 = bayes_eval map_y0) end to end; scratch outputs deleted. Required after the slim_r4_v2 rebuild: 52 / 52.
+
+## K. Audit round 8 (2026-10-26, fresh independent Opus review of fda6ccd); findings reproduced before fixing
+* **B1** g02e crashed for Region 4: KY's 1986-88 periodic previous measurements have MEASDAY 0 (`make_date` out of range) → every FIADB date is built only
+  from a valid month / day (unknown date → no match → a measurement-chain gap); also in g02b's queries. r4_v4 g02e now runs (398 gaps).
+* **I1** the dynamics stage hash ignored `model_seed`, so switching the production seed skipped its enforced acceptance → `model_seed` in the dynamics cfg.
+* **I2** g04's start-year gate and mapping-path calibration used g03b TRAINING plots (held out of the MDN only) → with VAL_SPLIT the calibration plots are
+  the VALIDATION plots (never trained on by g03b or the MDN); older models keep the 15 % training-block rule.
+* **M1** with VAL_SPLIT=0 an enforced acceptance could pass on the test plots → exit 4 whenever enforced without a validation set.
+* **M2** a RISE of the forested share by >= 0.25 is a re-delineation that changes per-forested-area densities too → blocks like a drop (|Δ| >= 0.25).
+* **M3** under SEVERITY_ANCHOR=1 a measured collapse (min BA ratio < 0.3) with no record was still forced onto event-free histories → in training, a
+  collapse blocks the undisturbed rules (evaluation unchanged: outcomes are never used there).
+* **M4** (visits of 2023 compared with AlphaEarth 2022 un-flowed) — NOT a defect: `ok = cst <= yr + 1` admits only visits up to the END of 2022, which
+  flow forward to the end-2022 state; visits in calendar 2023 (decimal year > 2023) are excluded. Recorded here, no change.
+* **M5** with both rs and ra the flow re-applied the start year's (pre-visit) cut → rs wins (the later record's own-year evidence is lost: 0.2 % of pairs).
+* **M6** g04 validated median-sample QMD × its factor while g05 maps QMD from the calibrated TPH / BA → g04 validates the derived QMD.
+* **M7** T4i was vacuous (a single-candidate plot) → a plot with >= 3 candidates and max prior < 0.9.
+* **M8** g06's synthetic section used all 2019-20 visits → held-out (test ∪ validation) visits only. Selection between v3 and v4 is to be made on the
+  validation metrics (g04 gate errors on the validation plots, g06 acceptance); g03b's held-out block stays the test report.
+* While smoke-testing r8 two more of my edits had put code inside an inline comment (g06 synthetic set, gv_verify T4i) — the 4th / 5th instance of that
+  bug class → `scripts/check_comments.py` (a tokenizer + ast scan; catches all earlier instances, none left) runs in the driver before any stage
+  (refuses to start) and as gv_verify T0. Verification of r8 on gafl_v4: gv_verify 49 / 53 (T1k / T3e / T3f / T10 = the stale table, by design);
+  smoke: train step, g06 (val acceptance enforced: exit 3; not enforced: 0), g04 (calibration on the 676 validation plots), g05; scratch deleted.

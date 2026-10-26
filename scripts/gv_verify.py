@@ -10,6 +10,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.envi
 rng = np.random.default_rng(42); RES = []
 def check(name, ok, detail=''):
     RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
+import glob as _g0; from check_comments import swallowed as _sw0
+_h0 = [(os.path.basename(f), ln) for f in sorted(_g0.glob(f'{ROOT}/scripts/g0*.py') + [f'{ROOT}/scripts/{x}' for x in ('gv_verify.py', 'gv_verify_upstream.py', 'genveg_pipeline.py', 'common.py')]) for ln, _ in _sw0(f)]
+check('T0 no code swallowed by an inline comment in the pipeline scripts (static scan)', not _h0, f'hits {_h0}')
 M = json.load(open(f'{D}/meta.json')); from region import region_check; region_check(M); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
 # region switches (as g02b): REGION = FIA STATECDs; AEF90 = Region 4 rasters (AlphaEarth / soils at 90 m: a footprint = one 90 m pixel, centres = 1 mod 3)
 REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({','.join(map(str, REGION))})"; AEF90 = os.environ.get('AEF90', '0') == '1'
@@ -215,7 +218,7 @@ _fs = _fs[_fs.f1 > 0].sort_values(['st', 'u', 'c', 'p', 'vk']); CONV = set()
 for k4, g4 in _fs.groupby(['st', 'u', 'c', 'p']):
     f_, v_ = g4.f1.values, g4.vk.values
     for j in range(1, len(f_)):
-        if f_[j - 1] - f_[j] >= 0.25: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
+        if abs(f_[j - 1] - f_[j]) >= 0.25: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
 ratios, nneg, ncl = [], 0, 0; REC = {}
 for pid, g in Cs.groupby('pid'):
     k_ = tuple(int(v) for v in Pi.loc[pid][key]); e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]
@@ -329,7 +332,7 @@ with torch.no_grad():
     m_b = nojump.abs().mean().item()
 check('T4h flow timing: a visit-year event counts for a first-half visit only; the first year integrates only the part after the visit',
       abs(j_early - math.tanh(1.0)) < 1e-5 and j_late < 1e-7 and 0 < m_b < m_a, f'jump(2010.25) {j_early:.5f}, jump(2010.75) {j_late:.1e}, drift full year {m_a:.3f} > 0.75 yr {m_b:.3f}')
-pid_t = max(ns_['cand_of'], key=lambda k: ns_['cand_of'][k][1].max()); cid_t, pr_t = ns_['cand_of'][pid_t]; np.random.seed(0)
+pid_t = max((k for k in ns_['cand_of'] if len(ns_['cand_of'][k][0]) >= 3 and ns_['cand_of'][k][1].max() < 0.9), key=lambda k: ns_['cand_of'][k][1].max()); cid_t, pr_t = ns_['cand_of'][pid_t]; np.random.seed(0)   # (a non-degenerate draw: r8 M7)
 draws = np.concatenate([ns_['sample_cands']([pid_t], 48)[0] for _ in range(400)]); fr = pd.Series(draws).value_counts().reindex(cid_t).fillna(0).values / len(draws)
 check('T4i MIL candidates are iid draws from the prior (empirical frequency of the most concentrated plot)', np.abs(fr - pr_t).max() < 0.02, f'max prior {pr_t.max():.3f}, empirical {fr[np.argmax(pr_t)]:.3f}, max |Δ| {np.abs(fr - pr_t).max():.4f}')
 with torch.no_grad():
@@ -348,6 +351,7 @@ with torch.no_grad():
     dm = torch.zeros(1, NY, NC + 2); dm[0, 2014 - 2000, 0] = 1; zm = torch.zeros(1, Dz); sm = torch.zeros(1, ns_['SOIL'].shape[1]); T_, F_ = torch.tensor([True]), torch.tensor([False])
     e_no = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]))[2014]; e_re = flow(zm, torch.tensor([2010.2]), [2014], dm, sm, end=torch.tensor([2014.3]), re=T_)[2014]
     s_no = flow(zm, torch.tensor([2014.2]), [2014], dm, sm)[2014]; s_rs = flow(zm, torch.tensor([2014.2]), [2014], dm, sm, rs=T_)[2014]
+    s_rsra = flow(zm, torch.tensor([2014.2]), [2014], dm, sm, rs=T_, ra=T_)[2014]       # rs wins: the start's own-year evidence predates it (r8 M5)
     s_ra = flow(zm, torch.tensor([2014.7]), [2014], dm, sm, ra=T_)[2014]; s_late = flow(zm, torch.tensor([2014.7]), [2014], dm, sm)[2014]
     s_0b = flow(zm, torch.tensor([2014.7]), [2014], torch.zeros_like(dm), sm)[2014]
     s_0 = flow(zm, torch.tensor([2014.2]), [2014], torch.zeros_like(dm), sm)[2014]; e_0 = flow(zm, torch.tensor([2010.2]), [2014], torch.zeros_like(dm), sm, end=torch.tensor([2014.3]))[2014]
@@ -361,7 +365,7 @@ with torch.no_grad():
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = False, False, ns_['D_Z']
 prod_ok = (q_no - q_0).abs().max() < 1e-7 and abs((q_re - q_0).abs().mean().item() - math.tanh(1.0)) < 1e-5
 check('T4m flow visit-year rule (base and production switches): re applies the end visit\'s own-year event before a first-half end; rs suppresses the start visit\'s recorded own-year event',
-      prod_ok and (s_late - s_0b).abs().max() < 1e-7 and abs((s_ra - s_0b).abs().mean().item() - math.tanh(1.0)) < 1e-5 and
+      prod_ok and (s_rsra - s_0).abs().max() < 1e-7 and (s_late - s_0b).abs().max() < 1e-7 and abs((s_ra - s_0b).abs().mean().item() - math.tanh(1.0)) < 1e-5 and
       (e_no - e_0).abs().max() < 1e-7 and abs((e_re - e_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and abs((s_no - s_0).abs().mean().item() - math.tanh(1.0)) < 1e-5 and (s_rs - s_0).abs().max() < 1e-7)
 # T4k site attractor (SITE_ATTR) and age clock (AGE_CH): an independently-built flow with both switches on (module globals of the exec'd g03b)
 ns_['SITE_ATTR'], ns_['AGE_CH'], ns_['NJ'] = True, True, ns_['D_Z'] + 1
@@ -466,7 +470,7 @@ def pair_spec(v1, v2, span):
     recs = sorted({(yr, t_, cd) for vk, t_, cd, yr in typed if vk in vks and (KIND8(t_, cd), yr) not in old})
     rs = any(vk == vk1 and yr == math.floor(y1) for vk, _, _, yr in typed); re_ = any(vk == vk2 and yr == math.floor(y2) for vk, _, _, yr in typed)
     ra = any(yr == math.floor(y1) for yr, _, _ in recs)       # a new record of the interval dated in v1's year: the event lies after v1
-    f1, f2 = math.floor(y1), math.floor(y2); a = f1 if ((y1 <= f1 + 0.5 and not rs) or ra) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
+    f1, f2 = math.floor(y1), math.floor(y2); a = f1 if (not rs and (y1 <= f1 + 0.5 or ra)) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
     cl = []
     for yr, t_, cd in recs:
         cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}

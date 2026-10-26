@@ -36,8 +36,8 @@ else:                                                                           
     yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)
     md = pd.to_datetime(yi.astype(str) + '-01-01') + pd.to_timedelta(doy - 1, unit='D')
 V['fia_blocked'] = [((int(a), int(b), int(c), int(d)), m) in blocked for a, b, c, d, m in zip(V.st, V.u, V.c, V.p, md)]
-PM = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) md,
-                            make_date(q.MEASYEAR::int, q.MEASMON::int, q.MEASDAY::int) pmd
+PM = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md,
+                            (case when q.MEASMON between 1 and 12 and q.MEASDAY between 1 and 31 then make_date(q.MEASYEAR::int, q.MEASMON::int, q.MEASDAY::int) end) pmd   -- (KY 1986-88 periodic plots: MEASDAY 0 -> unknown date = a gap; audit r8 B1)
                      from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {G2.ST_SQL} and p.MEASYEAR >= 2000""").df()
 pmd = {(int(a), int(b), int(c), int(d), pd.Timestamp(m)): (pd.Timestamp(q) if pd.notna(q) else None) for a, b, c, d, m, q in zip(PM.st, PM.u, PM.c, PM.p, PM.md, PM.pmd)}
 V['_md'] = md.values; gap = np.zeros(len(V), bool)
