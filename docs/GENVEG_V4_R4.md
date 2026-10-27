@@ -443,3 +443,88 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   - the flowed-v2 age bias +0.2 → +3.1 yr.
 
   Each allowed spread is one run pair at 1200 steps. By G49, AGE_DELTA stays off and is not in the configs or the checkpoint `switches` list.
+
+## R. Audit round 15 (2026-10-27; multi-reviewer, HEAD 7068cac); decisions G51–G53
+### R.1 Data fixes (g02b / g02e / g02g / g02j / g02f / g02i / g09 / r4_aef90 / common; G51.1–8, 23, 24)
+Counts below are independent re-derivations (own SQL on FIADB + the curated DB, `scratchpad/r15data/indep15.py`, `ties15.py`), cross-checked
+against g02b on subsets (GA 6 counties on slim_r4, NC 8 counties on the r7 curated slim: identical rule counts).
+* **TPA-weighted vetting (A15-1 / A15-3, G51.1).** A curated visit is incomplete when (`count`) n_fia ≥ 3 and n_cur < n_fia / 2, or
+  (`tpa`) live TPA_cur < TPA_fia / 2 (relative tolerance 1e-9), or (`bare_mismatch`) n_cur = 0 while n_fia ≥ 1; same tree population on both
+  sides (live, TPA > 0, SUBP ≤ 4, forested condition). Table-scope visits (sampled forested share ≥ 0.1) dropped, rules overlapping:
+
+  | curated DB | vetted visits | count (G46.1) | tpa | bare_mismatch | union (new) |
+  |---|---|---|---|---|---|
+  | slim_r4, GA+FL | 34,045 | 1,112 | 6,894 | 305 | 6,936 |
+  | slim_r4, Region 4 | 113,443 | 4,759 | 29,395 | 1,154 | 29,559 |
+  | r7 slim AL / FL / GA / KY | 16,845 / 12,079 / 22,648 / 9,776 | 10 / 11 / 6 / 17 | 15 / 25 / 24 / 26 | 4 / 5 / 2 / 5 | 16 / 25 / 24 / 28 |
+  | r7 slim MS / NC / SC / TN | 14,558 / 15,401 / 13,414 / 11,768 | 16 / 6 / 2 / 7 | 27 / 11 / 8 / 13 | 3 / 3 / 2 / 0 | 28 / 11 / 8 / 14 |
+
+  The old curated DB loses a fifth of its visits to the sapling gap (the G1 defect the count rule could not see); the r7 product loses ≤ 28 per
+  state (kept-visit TPA share 0.9945 on the NC subset). meta.json: `incomplete_by_rule` {count, tpa, bare_mismatch} (overlapping counts),
+  `incomplete_by_rule_only` (visits only that rule catches), `tpa_share_kept`, `n_share_kept`, plus the G46.1 keys; `inputs` = {curated_db,
+  fiadb}: {path, size, mtime_ns, sha256, sha256_scope} (`common.file_fingerprint`: the whole file up to 128 MiB, else its first + last 64 MiB).
+* **Raw keys (curation r7 A7-9 / D-F2, G51.2).** The curated trees carry the canonical key of the curation chain; g02b joins them to FIADB
+  PLOT × COND on their raw key (`unitcd_raw` / `countycd_raw` / `plot_raw`; a curated DB without the columns, slim_r4, has raw = canonical).
+  Every FIADB read (visits, events, negative evidence, coordinates) goes through the PLOT CN: `key_remap(cur, fc)` = the CNs whose curated PLOT
+  key differs from FIADB's (written to `key_remap.parquet` in the table; g02e and g09 read FIADB with that same map through
+  `g02b.canon(df, remap)`), so the events and negatives of every chain segment belong to the canonical plot. Coordinates: the curated PLOT row
+  of the plot's latest visit since 2000 (the D28 location the curation writes on every row of a remapped plot), FIADB's latest row for a plot
+  without curated PLOT rows (meta `coords`; on slim_r4 the coordinates are unchanged: 0 plots move > 0.1 km). Records recovered on the r7 product
+  (on a forested condition; all were dropped before): AL 176, FL 233, GA 401, KY 306, MS 94, NC 754 (582 live, 14 visits, 9 plots), SC 441,
+  TN 62. NC subset: every remapped visit is a table visit with tokens, the 9 plots sit at their D28 location, the later segments' codes are
+  events of the canonical plot (e.g. TRTCD 10 of 2007, DSTRBCD 31 of 2021) and their periods are negatives. meta `keys_canonical`.
+* **Float ties (A15-2, G51.3).** `g02b.SHARE_DELTA, SHARE_TOL = 0.25, 1e-9`; both share blocks compare ≥ 0.25 − 1e-9. Pairs with an exact
+  Δ = 0.25 that evaluated to 0.24999999999999994: consecutive forested FIADB visits GA+FL 5, Region 4 9; vs the PREV_PLT_CN measurement GA+FL 5,
+  Region 4 10 (now blocked). g03b's G38 test and the verifier use the same constant (their implementers).
+* **evid_end from meta.json (A15-4, G51.4).** `fia_records(..., evid_end)`; g02e and g02g require meta.json `evid_end` and pass it.
+* **Provenance (A15-5 / A15-6 / E15-7, G51.5).** `common.code_hash(path)`: sha256 over `common.code_files(path)` (the script and every local
+  module it imports, transitively: g02b → common, features, stand_runs, stands_cfg; g02e / g02g → + g02b, region) of a TOKEN stream (names,
+  numbers, operators, strings by their source text; NEWLINE / INDENT / DEDENT by type; f-strings as their whole source text; comments, blank
+  lines, continuations, spacing, indentation width and docstrings dropped). No ast.dump; version-independent by construction (no Python 3.12 is
+  installed here to test both). Taken at the START of each run. meta.json: `build_id` (uuid4 hex, new per g02b run), `code_hash` {g02b},
+  `code_files` {g02b: [file names]}. Every parquet output of g02e (fia_events, fia_negs, visits), g02g (cand_hist, localisation) and g02j (stands)
+  records `genveg_provenance` = {code_hash: {<script>, g02b}, build_id, evk_hash (not g02j)}; each script's outputs are written as temporary files
+  and renamed together (A15-6e). `g02b.meta_build_id(meta)` refuses a table without a build_id; `g02b.check_prov(path, meta)` refuses a parquet whose
+  build_id / evk_hash differ from meta.json (g02g checks fia_events and fia_negs; g09 checks fia_events). G46.6's text (code hash in meta.json for
+  every script) stays amended by Q.1: the later stages' hashes are in their parquet records.
+* **EVK consumers (A15-7, G51.6).** g02f reads the table's EVK (evk_from_meta) and region_check, and groups the clusters by `det`; g02i_reprior
+  refuses to run. **EVK_PROVISIONAL=1** (g02b env; the driver adds it to STAGE_SWITCHES): a region without an EVK_TABLES entry is built with the
+  GA+FL rows and meta `evk_provisional: true` (refused for a region that has an entry); g03b and every training / evaluation stage refuse such a
+  table (their implementers). **g09** is the derivation tool (`g09_fia_landfire_association.py [--out DIR] [--association] [--legacy-table]`):
+  common.fiadb(), the table's key_remap, any region; the rows' classes / windows / detectability follow its RULES (mechanism classes per kind;
+  Hansen loss and detectability for the stand-replacing kinds T10–T40 / Dcrown; 'unknown' for T10–T40; window (−2, +1) for T30 / T40); lr is
+  measured (below). It writes `evk_proposal.json` (rows with n / f / base / lifts / per-class lifts, the EVK_TABLES and EVK_LR_METHOD entries as
+  Python text, evk_json / evk_hash). Self-test on GA+FL: the rules equal EVK_TABLES[(12, 13)] (PASS, 'unknown' included) and the measured lr
+  equal the committed lr (PASS on gafl_v4).
+* **lr measured, detectable kept (G48.1 follow-up, G51.7).** EVK rows are (classes, window, lr, detectable); meta.json `evk` rows
+  `[class indices, [dlo, dhi], lr, detectable]` (the first three positions as before; `evk_from_meta` refuses rows without the flag) and
+  `evk_lr_method`. `clusters()` adds `det` (a detectable record in the cluster): the hard constraint of g02g (and of g03b / g06 / the verifier,
+  which switch from `lr >= 4` to `det`). In g02b the high-prior flag `hi` is weight ≥ `hi_weight(evk)` = the smallest detectable lr (meta
+  `hi_weight`; 4 under the coded table, as before) and the elevated-prior sampling stratum is weight > 1 (identical to the old > 1.5 under
+  coded powers of 2). lr = g09's inner-zone lift on gafl_v4 (within 804.672 m; (mean f + 0.002) / (mean base + 0.002), the association
+  analysis' floor, so a class passing ~0.01 % of the quiet footprints cannot weigh ×5–31 on a few records; rows with < 30 records take the pooled
+  lift of their detectability; floored at 1; 3 decimals):
+
+  | kind | detectable | n | f / base (inner) | raw lift | old lr | new lr |
+  |---|---|---|---|---|---|---|
+  | T10 | yes | 5,415 | 0.255 / 0.103 | 2.485 | 4 | 2.456 |
+  | T20 | yes | 1,641 | 0.297 / 0.116 | 2.552 | 4 | 2.526 |
+  | T30 | yes | 1,742 | 0.322 / 0.140 | 2.299 | 4 | 2.281 |
+  | T40 | yes | 1,281 | 0.303 / 0.131 | 2.311 | 4 | 2.291 |
+  | Dcrown | yes | 13 | 0.380 / 0.144 | 2.638 | 4 | 2.407 (pooled) |
+  | T50 | no | 507 | 0.0096 / 0.0051 | 1.868 | 2 | 1.625 |
+  | Dfire | no | 3,091 | 0.215 / 0.102 | 2.103 | 2 | 2.082 |
+  | Dins | no | 420 | 0.0025 / 0.00008 | 31.3 | 2 | 2.183 |
+  | Dwx | no | 1,142 | 0.0049 / 0.0008 | 5.97 | 2 | 2.445 |
+  | Dhum | no | 398 | 0.0005 / 0.0001 | 4.23 | 2 | 1.190 |
+
+  The raw lifts reproduce A15's (T10 2.49, T20 2.55, T30 2.30, T40 2.31, Dcrown 2.64). The detectable set, cluster rule and windows are
+  unchanged; only the prior weights change, so the GA+FL table must be rebuilt (evk_hash 89f99631…).
+* **UNDIST on converted plots (A15-8, G51.8)** lives in g03b's pair_set (model implementer): `UNDIST[(v1, v2)]` must be False when `VCONV[v1]`.
+* **G46.2's text (F4, G51.23).** The code compares EVERY visit with its PREV_PLT_CN measurement, as Q.1 says; the decision text (coordinator)
+  is widened to that.
+* **AlphaEarth 90 m tile rule (E15-4, G51.24).** r4_aef90: each 90 m cell takes its pixels from the source tiles of the UTM zone of its centre
+  longitude (floor((lon + 180) / 6) + 1), first valid pixel in path order; a cell no tile of its zone covers takes the other tiles' pixels (tile
+  tag `zone_fallback_cells`). Tiles carry `zone_rule`; tiles of the old rule count as unfinished and assemble refuses them, so the next run
+  rebuilds every tile (after the restart). E15-4 case (r4_sub cid 9009, lon −84.0008, zone 16): rebuilt window vs the zone-16 tile's own route
+  cos 0.99991 (old product 0.99830); a synthetic test covers order independence, partial cells and the fallback.
