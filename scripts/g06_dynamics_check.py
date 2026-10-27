@@ -14,7 +14,7 @@ G4 = open(f'{_HERE}/g04_bayes_downscale.py').read(); exec(compile(G4[G4.index('#
 torch.manual_seed(0); np.random.seed(0); out = {'tag': os.environ.get('TAG', '')}
 EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history | public | uniform
 with torch.no_grad():
-    o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021) & V.pid.isin(test_pid | val_pid)].vid.values; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of])[:800]; vt = torch.tensor(vv_)   # (held-out visits only: r8 M8)
+    o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021) & V.pid.isin(test_pid | val_pid)].vid.values; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of]); vv_ = np.random.default_rng(33).choice(vv_, min(800, len(vv_)), replace=False); vt = torch.tensor(vv_)   # (held-out visits only: r8 M8)
     z = enc(vt, vyear[vt]); cid0 = np.array([cand_of[vpid[v]][0][0] for v in vv_]); soil = SOIL[cid0]; res = {}
     for kind in ('none', 'clearcut', 'fire'):
         d = torch.zeros(len(vv_), NY, NC + 2); j = 2023 - YEARS[0]

@@ -70,14 +70,14 @@ with torch.no_grad():
         idx = torch.multinomial(w / w.sum(), 16, replacement=True); fpi = [fp[i % len(fp)] for i in range(16)]   # samples spread over the stand's footprints
         st = flow(zs[idx], torch.full((16,), MAP_Y0), [2025], SD[fpi], SS[fpi]); lp_, val_ = dec(st[2025]); s_ = list(summaries(lp_, val_))
         s_[:3] = [s_[i] * math.exp(CAL[i]) for i in range(3)]
-        tph_m, ba_m = float(s_[0].median()), float(s_[1].median())
+        tph_m, ba_m = float(lmed(s_[0])), float(lmed(s_[1]))                     # the same statistic g04 calibrated (r11 M-1)
         # stand cohorts (TreeMap-independent initial state for the simulation engines): ONE plausible stand — the posterior draw closest to the calibrated
         # median summary (medoid in log TPH / BA / QMD) with its present slots (sampled with the calibrated presence; else its largest slot) — not the ensemble mean
         # of the 16 draws, which spread every stand over ~13 keys and ~48 cohorts (audit F2) and made the mean-share dominant collapse onto the regional
         # mode (F3). Its totals are scaled to the calibrated median TPH / BA (one density and one diameter factor; ages, heights, crowns kept).
         pr_ = torch.sigmoid(calibrated(lp_)); Nr = torch.exp(val_[..., 0].clamp(max=12)); Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
         Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95)
-        dist_ = sum((torch.log(s_[i].clamp(min=1e-6)) - math.log(max(float(s_[i].median()), 1e-6))) ** 2 for i in range(3)); i_ = int(dist_.argmin())
+        dist_ = sum((torch.log(s_[i].clamp(min=1e-6)) - math.log(max(float(lmed(s_[i])), 1e-6))) ** 2 for i in range(3)); i_ = int(dist_.argmin())
         # presence SAMPLED per slot (Bernoulli(p), seeded by the stand id): the expected totals are the expected-value summaries the calibration was fitted on
         # (a p >= 0.5 threshold dropped the many small-p slots' mass: the scaling factors then had median 1.96 for TPH)
         u_ = torch.rand(pr_.shape[1], generator=torch.Generator().manual_seed(int(sid)))
@@ -96,7 +96,7 @@ with torch.no_grad():
         # GEN_QMD = the QMD of the calibrated TPH / BA (consistent with the cohort table; the median of the samples' QMDs was not: audit F10)
         rows.append(dict(stand_id=int(sid), node=int(j), tph=tph_m, ba=ba_m, qmd=100 * math.sqrt(ba_m / (tph_m * math.pi / 4)) if tph_m > 0 else 0.0,
                          ba_sd=float(s_[1].std()), dom=dom_, draw=i_))
-out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out['map_y0'] = MAP_Y0; out.to_parquet(f'{D}/stand_veg_v3_B{int(USE_B)}.parquet')   # (the pipeline promotes the production use_b to stand_veg_v3.parquet: r6 M2)
+out = pd.DataFrame(rows); keys = json.load(open(f'{D}/meta.json'))['keys']; out['dom_key'] = [keys[i] for i in out.dom]; out['map_y0'] = MAP_Y0; out['map_cal_tph'], out['map_cal_ba'] = CAL[0], CAL[1]; out.to_parquet(f'{D}/stand_veg_v3_B{int(USE_B)}.parquet')   # (the pipeline promotes the production use_b to stand_veg_v3.parquet: r6 M2)
 C_ = pd.DataFrame(crows); C_.to_parquet(f'{D}/stand_cohorts_v3_B{int(USE_B)}.parquet')
 _t = C_.groupby('stand_id').tph.sum(); _b = (C_.tph * math.pi / 4 * (C_.qmd_cm / 100) ** 2).groupby(C_.stand_id).sum()
 _fnd = np.array(fND); print(f'medoid-draw factors fN q05/q50/q95 {np.nanquantile(_fnd[:, 0], [.05, .5, .95]).round(3)}, fD {np.nanquantile(_fnd[:, 1], [.05, .5, .95]).round(3)}', flush=True)

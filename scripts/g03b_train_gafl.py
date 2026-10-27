@@ -517,7 +517,7 @@ with torch.no_grad():
         ev['validation'] = metrics(torch.ones(len(va_last), dtype=torch.bool))
     # localisation check: plots with dated FIA events — posterior mass (uniform prior) on prior-favoured (event-matching) candidates vs their share
     loc = []
-    for v in te_v[:400]:
+    for v in np.random.default_rng(31).choice(te_v, min(400, len(te_v)), replace=False):   # a random sample, not the first plots in key order (one state; r11 M-2)
         p = vpid[v]; cid, pr = cand_of[p]; iw_, hi_ = cand_iw[p]
         if not hi_.any() or hi_.all(): continue                                 # no event information for this plot
         z = enc(torch.tensor([v]), vyear[[v]]).repeat(len(cid), 1); st = flow(z, vyear[[v]].repeat(len(cid)), [2022, 2025], DIST[cid], SOIL[cid], rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))

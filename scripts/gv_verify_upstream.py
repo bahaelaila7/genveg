@@ -148,6 +148,7 @@ elif os.path.exists(f'{D}/stand_nodes.npz') and 'node' in pd.read_parquet(f'{D}/
           okn == 1.0 and (t8 > 3.5).mean() < 0.05 and np.abs(dd8[:, :128]).mean() < 0.02, f'own-centroid agreement {okn:.3f}; {len(dd8)} nodes: dims with significant bias {(t8 > 3.5).mean():.3f}, mean |Δ AEF| {np.abs(dd8[:, :128]).mean():.4f}')
 else:
     print('   (U8 skipped: stand_nodes.npz / stand_veg_v3.node not yet written by g05)')
+    if os.environ.get('GV_REQUIRE_MAP') == '1': check('U8 stand-mapping outputs present (required after the map stage)', False, 'stand_nodes.npz / stand_veg_v3.parquet node column missing')
 # ======================= U9 Forest Explorer display: unit labels of the generative attributes match g07's conversions
 js = open(os.path.join(WS, 'fe_pan/apps/forest-explorer/public/stands.js')).read()
 lab = dict(re.findall(r"(GEN_[A-Z_]+): '([^']+)'", js[js.index('const u = {'):js.index('}', js.index('const u = {'))]))

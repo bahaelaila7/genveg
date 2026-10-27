@@ -117,3 +117,24 @@ recommendations, but document the decision point and the different options"). Th
   - (b) **count a pixel once per class and event year**;
   - (c) drop the fiscal products' previous-calendar-year codes.
 - **Chosen:** (b). It keeps every pixel's evidence and counts it once. gv_verify T3e states the same rule.
+
+## G21 — Gates vs hash dependencies (r11 I-1 / I-2 / M-3, agent; amends G18)
+- **Options:**
+  - (a) the check stages as hash dependencies of train (G18): a verifier setting or a new check retrains every seed;
+  - (b) **a separate `gate` list**: the stages must be current (so they ran and passed) but do not enter train's hash;
+  - (c) no gating.
+- **Chosen:** (b).
+  - train is gated on vup and on the new **vtab**: gv_verify before training, so the table-level checks incl. the pre-registered T1k / T1l fail before any seed is trained.
+  - vup hashes only `verify.n_upstream` plus its own inputs' fingerprints.
+  - The driver refuses a `model_seed` that is not in `train.seeds` (otherwise no acceptance is enforced and a stale checkpoint is mapped).
+
+## G22 — Median of the mapping samples (r11 M-1, agent)
+- **Options:**
+  - (a) torch.median (the lower middle value), as before: g05's median of 16 was 2–5 % below g04's median of 32;
+  - (b) the same sample count in both;
+  - (c) **a shared true (interpolated) median in log space, `lmed`, in g04's mapping path and g05**.
+- **Chosen:** (c). The same statistic on both paths; the sample counts may differ.
+
+## G23 — Map checks must run after the map stage (r11 M-5, agent)
+- **Chosen:** GV_REQUIRE_MAP=1 in the verify stage: missing map / FE / bayes outputs FAIL (T11z, U8) instead of being skipped. vtab runs with it off.
+- **Also:** g05 records the calibration factors it applied (`map_cal_tph`, `map_cal_ba`), and T11c compares them with bayes_eval.json.

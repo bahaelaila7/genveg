@@ -17,6 +17,8 @@ SRC = SRC[:SRC.index('# ---------------- evaluation on held-out plots')]        
 exec(compile(SRC, 'g03b_train_gafl.py', 'exec'))
 sys.argv = _argv; torch.manual_seed(1); np.random.seed(1)
 # decoded summaries (from g03b's evaluation section)
+def lmed(x):     # TRUE median in log space (torch.median returns the LOWER middle value: 2-5 % low at 16 vs 32 samples; r11 M-1)
+    return torch.exp(torch.quantile(torch.log(x + 1e-3), 0.5, dim=-1))
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), share of the dominant key — EXPECTED values (slot density x calibrated presence probability)."""
     pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=math.log(150.0)))   # QMD cap 150 cm
@@ -110,7 +112,7 @@ ev = {}
 with torch.no_grad():
     # localisation skill of B on held-out localised plots: posterior mass (uniform over ALL candidates) on the high-prior footprints vs their share
     loc = []
-    for v in teB[:500]:
+    for v in np.random.default_rng(32).choice(teB, min(500, len(teB)), replace=False):   # random, not key order (r11 M-2)
         cid, pr = cand_of[vpid[v]]; iw_, hi = cand_iw[vpid[v]]
         d, _ = fwd_dist(ZV[[v]].repeat(len(cid), 1), vyear[[v]].repeat(len(cid)), torch.tensor(cid), rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))
         post = torch.softmax(-d / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()     # uniform over the disk's footprints
@@ -184,14 +186,14 @@ with torch.no_grad():
     # the stand's whole 2000-2025 history act — audit r3 B1: from 2021, a stand cut in 2016-20 was mapped as mature)
     # ---- the MAPPING path of g05, validated: z ~ p(z | X_L, MAP_Y0) -> v2 flow (decoder-consistent) through a prior-drawn candidate's history to the visit
     # date -> decode. Calibration factors for THIS path from the calibration plots (visits 2022-2025), errors on held-out plots' visits 2022-2025.
-    def map_path(vs, y0, ms=32, X=None):
+    def map_path(vs, y0, ms=32, X=None):     # (lmed: the shared true median of the mapping path, g05 maps with the same; r11 M-1)
         out_ = []
         for q_, v in enumerate(vs):
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
             xv = Xv[[vi[v]]] if X is None else X[q_:q_ + 1]
             zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = min(int(math.floor(float(yv))), YEARS[-1])
             st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms)); s_ = summ(st[yy])
-            out_.append([torch.exp(torch.log(s_[i] + 1e-3).median()) for i in range(3)] + [s_[4].mean(0)])
+            out_.append([lmed(s_[i]) for i in range(3)] + [s_[4].mean(0)])
         return out_
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]
     cal_m = rec(trs_v); te_m = rec(te_l)

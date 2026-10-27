@@ -257,3 +257,17 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * Verification of r10: gv_verify 49 / 54 (the same 5 stale-table checks); new g02b fractions = the once-per-pixel rule on 300 fresh footprints (0
   mismatches; 69 / 300 differ from the stale table); smoke train / g06 / g04 / g05 OK; validation kNN bias no longer exactly 0 (self-matches gone); the
   gate records both shuffled-landscape correlations.
+
+## N. Audit round 11 (2026-10-27, fresh independent Opus review of 1b470bc); no blocker, findings reproduced before fixing
+* **I-1** a model_seed outside train.seeds bypassed the enforced acceptance and mapped a stale checkpoint → the driver refuses it (G21).
+* **I-2** gating train on vup by hash retrained everything on a verifier setting / new check → `gate` list (current and passed, not hashed); vup hashes
+  only verify.n_upstream + fingerprints of its own inputs (TreeMap, EVT, Hansen, AOI mask, stand-run config, FE stands.js; CONUS TreeMap / EVT for R4).
+* **M-1** g05's median of 16 vs g04's of 32 (torch.median = lower middle) biased the map 2-5 % low → shared `lmed` (G22).
+* **M-2** localisation / synthetic subsets were the first N in key order (one state) → random samples.
+* **M-3** the table checks ran only after mapping → stage vtab (gv_verify before training) gates train.
+* **M-4** T1b ranked species over all conditions → forested conditions only, as g02b.
+* **M-5** VRA had no check → T8g (independent from FIADB COND); g05's applied calibration factors recorded and compared (T11c); map checks required in
+  the verify stage (T11z, U8).
+* Not changed (negligible, recorded): the visit-year rule is class-agnostic (moves all of a visit year's evidence; 0.02 % of visits carry unrelated
+  stand-replacing evidence in that year).
+* Verification of r11: gv_verify 50 / 55 (the same 5 stale-table checks; T1b forested-condition spec and new T8g VRA pass); smoke OK; driver gating tested on the stub root (rerun all current; verify.n change re-runs vtab + verify only; a model_seed outside train.seeds is refused).

@@ -25,9 +25,15 @@ key = ['st', 'u', 'c', 'p']; V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd
 P = pd.read_parquet(f'{D}/plots.parquet'); C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r')
 con = duckdb.connect(curated_db(), read_only=True)
 # ======================= T1 visits and cohort tokens (SQL aggregation, independent of the pandas builder)
-top = [r[0] for r in con.execute(f"""select r.SPECIES_SYMBOL from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01'
-                                    and t.STATUSCD=1 group by 1 order by count(*) desc, 1 limit {len(KEYS) - 2}""").fetchall()]
-check(f'T1b species keys = top-{len(KEYS) - 2} live species (SQL) + _H/_S', sorted(top) + ['_H', '_S'] == KEYS, f'{sorted(top)[:5]}…')
+# (r11 M-4: ranked over live trees on FORESTED conditions only — the cohort table describes forested conditions — FIADB COND_STATUS_CD by plot / date / CONDID)
+_lt = con.execute(f"""select r.SPECIES_SYMBOL sym, t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, t.CONDID cond from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD
+                       where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01' and t.STATUSCD=1""").df()
+_cs = duckdb.connect(fiadb(), read_only=True).execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p,
+            (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md, c.CONDID cond, c.COND_STATUS_CD cs
+            from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+_lt['md'] = pd.to_datetime(_lt.md); _cs['md'] = pd.to_datetime(_cs.md); _lt = _lt.merge(_cs, on=['st', 'u', 'c', 'p', 'md', 'cond'], how='left')
+_vc = _lt[_lt.cs == 1].groupby('sym').size().reset_index(name='n').sort_values(['n', 'sym'], ascending=[False, True]); top = list(_vc.sym[:len(KEYS) - 2])
+check(f'T1b species keys = top-{len(KEYS) - 2} live species on forested conditions (SQL + FIADB COND) + _H/_S', sorted(top) + ['_H', '_S'] == KEYS, f'{sorted(top)[:5]}…')
 samp = V.sample(min(NS, len(V)), random_state=1)
 reg = duckdb.connect(); reg.register('samp', samp[key + ['vid']].assign(yr=samp.year))
 q = f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp, t.DIA dia, t.HT ht, t.CR cr, t.TPA_UNADJ tpa,
@@ -548,6 +554,20 @@ for v1 in rng8.choice(list(PC), 400, replace=False):
     mine = sorted((c[1], c[2], c[3], tuple(sorted(c[0]))) for c in q['cl']); theirs = sorted((c['lo'], c['hi'], int(c['lr']), tuple(sorted(c['cols']))) for c in pc_)
     n8f += 1; bad8f += (ya, yb) != (q['a'], q['b']) or mine != theirs
 check('T8f g03b act_span / recs_in / pair_clusters (acting years, clipped event clusters of the interval) = the independent spec', bad8f == 0, f'{n8f} pairs, mismatches {bad8f}')
+# T8g VRA (MIL / Q-decode / B flows from a visit): a LATER visit recorded a new (not re-reported) typed event dated in the visit's own calendar year —
+# recomputed from FIADB COND records (r11 M-5)
+_vs8 = np.random.default_rng(81).choice(len(V), 3000, replace=False); bad8g = 0; npos8g = 0
+for v in _vs8:
+    pid = int(V.pid.values[v]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); yv = float(V.year.values[v]); vkv = _vkey(int(v))
+    e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; typed = []
+    for r in e.itertuples():
+        for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
+            cd, yr = getattr(r, a_), getattr(r, b_)
+            if pd.notna(cd) and cd > 0 and (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025: typed.append((r.vk, KIND8(t_, int(cd)), int(yr)))
+    old = {(kd, yr) for vk, kd, yr in typed if vk <= vkv}
+    exp_ = any(vk > vkv and (kd, yr) not in old and yr == math.floor(yv) for vk, kd, yr in typed)
+    npos8g += exp_; bad8g += exp_ != bool(ns_['VRA'][int(v)])
+check('T8g VRA = a later visit\'s new record dated in the visit\'s year (independent, FIADB COND)', bad8g == 0 and npos8g > 0, f'3000 visits, positives {npos8g}, mismatches {bad8g}')
 # T8c multi-horizon pairs (PAIR_ALL): the same independent recomputation over the span (a hiding code at ANY visit in between blocks the undisturbed rules)
 PC2 = ns_.get('pair_cand2', {}); multi = [k for k in PC2 if k[0] in ns_['vpair'] and ns_['vpair'][k[0]] != k[1]]
 vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()
@@ -649,6 +669,9 @@ if os.path.exists(f'{D}/cand_hist.parquet'):
           bad10 == 0, f'{Cs.pid.nunique()} plots, mismatching plots {bad10}, empty sets {ne10}')
 # ======================= T11 Forest Explorer export (g07): GEN_* = stand map x unit conversions
 FEJ = os.environ.get('FE_GEOJSON', os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson'))   # genveg_pipeline: config fe.geojson
+if os.environ.get('GV_REQUIRE_MAP') == '1':          # after the map / fe stages the map checks must RUN, not skip (r11 M-5)
+    _need = [FEJ, f'{D}/stand_veg_v3.parquet', f'{D}/stand_cohorts_v3.parquet', f'{D}/bayes_eval.json']
+    check('T11z map-stage outputs present (T11 / T11b / T11c run)', all(os.path.exists(f) for f in _need), f'missing {[os.path.basename(f) for f in _need if not os.path.exists(f)]}')
 if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     SV = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id'); fe = json.load(open(FEJ))['features']; e11 = []; n11 = 0
     for f in fe:
@@ -663,8 +686,10 @@ if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
 if os.path.exists(f'{D}/bayes_eval.json'):
     be = json.load(open(f'{D}/bayes_eval.json')); y0b = be.get('map_y0', 2021.0); gt = be.get('map_y0_gate', {})
     _svp = f'{D}/stand_veg_v3.parquet'; _sy = pd.read_parquet(_svp, columns=['map_y0']).map_y0.unique().tolist() if os.path.exists(_svp) and 'map_y0' in pd.read_parquet(_svp).columns else None
+    _sc = pd.read_parquet(_svp)[['map_cal_tph', 'map_cal_ba']].drop_duplicates().values.tolist() if _sy is not None and 'map_cal_tph' in pd.read_parquet(_svp).columns else None
+    _bc = be.get('calibration_log_factors_mapping_path'); _cal_ok = _sc is not None and _bc is not None and len(_sc) == 1 and np.allclose(_sc[0], _bc[:2], atol=1e-9)
     check('T11c mapping start year: the production stand map (g05) was mapped from the start year g04 gated; a year other than 2021 only if the gate passed',
-          _sy == [y0b] and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, stand map {_sy}, gate passed {gt.get("passed")}')
+          _sy == [y0b] and _cal_ok and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, stand map {_sy}, gate passed {gt.get("passed")}; calibration factors map {_sc} vs g04 {_bc[:2] if _bc else None}')
 # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
 if os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
