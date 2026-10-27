@@ -20,13 +20,19 @@ pipeline's modules it imports), its upstream stages (hash + output fingerprint),
 verifiers' own VERIFY_INPUTS) and pixel-content fingerprints of the stand-run rasters it reads.
 A stage is current if its hash matches, the files its run wrote are unchanged and its upstream stages are current; a current stage is skipped;
 --force re-runs it; --adopt records the stage's existing files (its last recorded file list, as they are now) as current WITHOUT running it (only for
-artifacts known to come from this code + config; never a check stage). --log FILE tees the driver's output to FILE (any name, also in the data dir).
+artifacts known to come from this code + config; never a check stage, nor a file an earlier stage rewrote since). Nothing runs or is adopted past a
+FAILED gate (G53.4; --force included). --log FILE tees the driver's output to FILE (any name, also in the data dir; opened once the data-dir lock is
+held). At start the driver runs the swallow detector's regression suite (scripts/tests/test_check_comments.py) and refuses when it fails.
 Logs: data/proto/<data>/pipeline_logs/<stage>.log. One driver per data dir (a lock, held by the stages it starts too); no other process may write
 into the data dir during a run."""
-import os, sys, json, time, argparse, hashlib, subprocess, shutil, glob, ast, re, copy, fnmatch, signal, yaml
+import os, sys, io, json, time, argparse, hashlib, subprocess, shutil, glob, ast, re, copy, fnmatch, signal, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from stands_stages import apply_overrides
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
+_SSJ = os.environ.pop('STANDS_STAGE_JSON', None)                 # the driver's own import of the stand pipeline modules: no stage context (G53.5)
+try: from stands_stages import apply_overrides
+finally:
+    if _SSJ is not None: os.environ['STANDS_STAGE_JSON'] = _SSJ   # (restored for an importer such as gv_verify T0; base_env strips it for the stages)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts')
+WS = os.path.abspath(os.environ.get('WORKSPACE', os.path.dirname(ROOT)))     # absolute: the stages run with cwd = ROOT (G53.5)
 # shared modules: the genveg ones are hashed whole; features.py / common.py are STAND-pipeline modules, so only their module-level statements and the
 # top-level definitions a stage's scripts import from them (and what those reference) enter its hash (r13 I-1: an edit to the stand featurizer must
 # not retrain genveg; G45.3: importing a module runs all its module-level statements)
@@ -80,6 +86,8 @@ STAGE_SWITCHES = {'STAND_DIAG', 'GV_REQUIRE_MAP', 'GV_CURATED_DB', 'GV_FIADB', '
                   'STANDS_STAGE_JSON',                       # stands_cfg (imported by features): a stand-pipeline stage context must not leak in (r13 I-1)
                   'WORKSPACE', 'SIGREG_MEAN', 'JUMP_RESET', 'STATE_ATTR',   # (G29-G31)
                   'SIGREG_FLOW', 'AGE_FLOW', 'AGE_DELTA',    # (G46.9; AGE_DELTA G49 / G50, off unless set)
+                  'DEC_AGE',                                 # (g03b decoded-age loss, G51.9; off unless set, pending its A/B)
+                  'EVK_PROVISIONAL',                         # (g02b: a new region's table built with the GA+FL evidence table, G51.6)
                   'GV_DYN_JSON'}                             # (gv_verify T15: the production acceptance record, passed by the driver; G45.8)
 # switches only the driver sets (per stage / from other config keys): a config env section setting one is refused (r13 D-6)
 DRIVER_SET = {'GV_SKIP_U8', 'LOAD', 'SMOKE_BATCHES', 'STAND_DIAG', 'G06_ENFORCE', 'GV_REQUIRE_MAP', 'MODEL', 'SEED', 'USE_B', 'TAG', 'EVAL_LOC', 'DATA',
@@ -220,10 +228,13 @@ def path_fp(p, D, SR, srh):
     side = [p[:-4] + x for x in ('.shx', '.dbf', '.prj', '.cpg')] if p.endswith('.shp') else []        # a shapefile is read with its sidecars (r13 M-9)
     return '|'.join(f'{rel[:-4] + f[-4:] if side else rel}:{os.stat(f).st_size}:{os.stat(f).st_mtime_ns}' for f in [p] + [f for f in side if os.path.exists(f)])
 _VI_MARK = '@@GENVEG_VERIFY_INPUTS@@'
-_VI = f"""import importlib.util, json, sys
+_VI = f"""import importlib.util, json, os, sys
 s = importlib.util.spec_from_file_location('_genveg_verify_inputs', sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
-print('\\n{_VI_MARK}' + json.dumps(dict(inputs=sorted(map(str, m.VERIFY_INPUTS)), code=sorted(map(str, getattr(m, 'VERIFY_CODE', []))))))
+ab = lambda L: sorted(os.path.abspath(str(p)) for p in L)
+print('\\n{_VI_MARK}' + json.dumps(dict(inputs=ab(m.VERIFY_INPUTS), code=ab(getattr(m, 'VERIFY_CODE', [])))))
 """
+VI_TIMEOUT = 900                                             # s: the evaluation imports the verifier module (G53.5: a hung import must not hang the driver)
+# (the entries are made absolute in the stage's cwd, ROOT: a relative entry names what the verifier, run with cwd ROOT, reads; G53.5)
 
 # ---------------------------------------------------------------- code
 def _bound(s):
@@ -281,20 +292,26 @@ def code_hash(files):
         _CH[k] = h.hexdigest()
     return _CH[k]
 def env_reads(path):
-    """(reads, bad) of a script (G45.10, AST-based): reads = {switch: True if some read of it is float(...)-parsed}, from os.environ.get / setdefault /
-    pop / [...] / `in os.environ` and os.getenv (aliases included); bad = [line] of reads whose name is not a constant — a name looped over a literal
-    (directly or through a name bound to one in the same scope) is resolved"""
+    """(reads, bad) of a script (G45.10 / G53.5, AST-based): reads = {switch: kinds}, kinds ⊆ {'float', 'int'} ('float': some read is float(...)-parsed;
+    'int': some read is int(...)-parsed with a default other than 0 / 1, a count rather than a flag), from os.environ.get / setdefault / pop / [...] /
+    `in os.environ` and os.getenv(name or key=name), aliases of os.environ included; writes (os.environ[...] = / del / .update(NAME=...)) are allowed.
+    bad = [line] of reads whose name is not a constant (a name looped over a literal, directly or through a name bound to one in the same scope, is
+    resolved) and of every other reference to the environment — os.environ / environ / os.getenv used any other way (passed on, copied, iterated,
+    a bound method, getattr(os, 'environ'), sys.modules['os'], __import__('os'), environb, expandvars, exec of a string reading it): fail closed"""
     tree = ast.parse(open(path).read()); par = {}
     for n in ast.walk(tree):
         for c in ast.iter_child_nodes(n): par[c] = n
-    osn, envn, getn = {'os'}, set(), set()
+    osn, envn, getn, bad = {'os'}, set(), set(), []
     for n in ast.walk(tree):
         if isinstance(n, ast.Import): osn |= {a.asname or a.name for a in n.names if a.name == 'os'}
         elif isinstance(n, ast.ImportFrom) and n.module == 'os':
             envn |= {a.asname or a.name for a in n.names if a.name == 'environ'}; getn |= {a.asname or a.name for a in n.names if a.name == 'getenv'}
+            if any(a.name in ('*', 'environb', 'getenvb', 'putenv', 'unsetenv') for a in n.names): bad.append(n.lineno)
     def is_env(x): return (isinstance(x, ast.Attribute) and x.attr == 'environ' and isinstance(x.value, ast.Name) and x.value.id in osn) or (isinstance(x, ast.Name) and x.id in envn)
-    for n in ast.walk(tree):                                                    # (aliases of os.environ)
-        if isinstance(n, ast.Assign) and is_env(n.value): envn |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+    def is_get(x): return (isinstance(x, ast.Attribute) and x.attr == 'getenv' and isinstance(x.value, ast.Name) and x.value.id in osn) or (isinstance(x, ast.Name) and x.id in getn)
+    ok = set()                                                                  # id() of the environment references in a recognised position
+    for n in ast.walk(tree):                                                    # (aliases: a name assigned os.environ)
+        if isinstance(n, ast.Assign) and is_env(n.value) and all(isinstance(t, ast.Name) for t in n.targets): envn |= {t.id for t in n.targets}; ok.add(id(n.value))
     SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.Module)
     COMPS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
     def gen_binds(g, nm): return (isinstance(g.target, ast.Name) and g.target.id == nm) or (isinstance(g.target, ast.Tuple) and g.target.elts and isinstance(g.target.elts[0], ast.Name) and g.target.elts[0].id == nm)
@@ -334,36 +351,73 @@ def env_reads(path):
         walk(x)
         if not found and not isinstance(x, ast.Module): return name_strs(nm, x, depth)     # a free name: the enclosing scope
         return None if (not found or None in out) else out
-    reads, bad = {}, []
-    def add(arg, node):
+    reads = {}
+    FLAG = (0, 1, '0', '1')
+    def add(arg, node, default=None):
         ss = strs(arg, node)
         if ss is None: bad.append(node.lineno); return
-        p = par.get(node); fl = isinstance(p, ast.Call) and isinstance(p.func, ast.Name) and p.func.id == 'float' and p.args and p.args[0] is node
-        for s in ss: reads[s] = reads.get(s, False) or fl
+        p = par.get(node); kinds = set()
+        if isinstance(p, ast.Call) and isinstance(p.func, ast.Name) and p.args and p.args[0] is node:
+            if p.func.id == 'float': kinds.add('float')
+            if p.func.id == 'int' and not (isinstance(default, ast.Constant) and default.value in FLAG): kinds.add('int')
+        for s in ss: reads[s] = reads.get(s, frozenset()) | kinds
+    def key_ok(arg, node):                                                      # a write's name: a constant (or a loop over a literal)
+        if strs(arg, node) is None: bad.append(node.lineno)
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and n.args:
+        if isinstance(n, ast.Call):
             f = n.func
-            if isinstance(f, ast.Attribute) and is_env(f.value) and f.attr in ('get', 'setdefault', 'pop', '__getitem__', '__contains__'): add(n.args[0], n)
-            elif (isinstance(f, ast.Attribute) and f.attr == 'getenv' and isinstance(f.value, ast.Name) and f.value.id in osn) or (isinstance(f, ast.Name) and f.id in getn): add(n.args[0], n)
-        elif isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Load) and is_env(n.value): add(n.slice, n)
-        elif isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.In, ast.NotIn)) and is_env(n.comparators[0]): add(n.left, n)
-    return reads, bad
+            if isinstance(f, ast.Attribute) and is_env(f.value) and f.attr in ('get', 'setdefault', 'pop', '__getitem__', '__contains__'):
+                ok.add(id(f.value))
+                if n.args: add(n.args[0], n, n.args[1] if len(n.args) > 1 else None)
+                else: bad.append(n.lineno)
+            elif isinstance(f, ast.Attribute) and is_env(f.value) and f.attr == 'update':                  # a write: os.environ.update(NAME=..., ...)
+                ok.add(id(f.value))
+                for a in n.args:
+                    if not (isinstance(a, ast.Dict) and all(k is not None for k in a.keys)): bad.append(n.lineno)
+                    else:
+                        for k in a.keys: key_ok(k, n)
+                if any(k.arg is None for k in n.keywords): bad.append(n.lineno)
+            elif is_get(f):
+                ok.add(id(f)); kw = [k.value for k in n.keywords if k.arg == 'key']; dk = [k.value for k in n.keywords if k.arg == 'default']
+                if n.args or kw: add((n.args or kw)[0], n, (n.args[1:] or dk or [None])[0])
+                else: bad.append(n.lineno)
+            elif isinstance(f, ast.Name) and f.id in ('exec', 'eval', 'compile', '__import__') and any(isinstance(a, ast.Constant) and isinstance(a.value, str) and
+                                                                                                   ('environ' in a.value or 'getenv' in a.value or a.value == 'os') for a in n.args):
+                bad.append(n.lineno)
+            elif isinstance(f, ast.Attribute) and f.attr == 'import_module' and any(isinstance(a, ast.Constant) and a.value == 'os' for a in n.args): bad.append(n.lineno)
+        elif isinstance(n, ast.Subscript) and is_env(n.value):
+            ok.add(id(n.value))
+            if isinstance(n.ctx, ast.Load): add(n.slice, n)
+            else: key_ok(n.slice, n)                                            # (a write: an os.environ entry assigned or deleted)
+        elif isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.In, ast.NotIn)) and is_env(n.comparators[0]):
+            ok.add(id(n.comparators[0])); add(n.left, n)
+        elif isinstance(n, ast.Subscript) and isinstance(n.value, ast.Attribute) and n.value.attr == 'modules' and isinstance(n.slice, ast.Constant) and n.slice.value == 'os':
+            bad.append(n.lineno)                                                # sys.modules['os']
+    for n in ast.walk(tree):                                                    # every other reference to the environment: refused (G53.5, fail closed)
+        if (is_env(n) or is_get(n)) and id(n) not in ok and not (isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)): bad.append(n.lineno)
+        elif isinstance(n, ast.Attribute) and n.attr in ('environ', 'environb', 'getenv', 'getenvb', 'putenv', 'unsetenv', 'expandvars') and not is_env(n) and not is_get(n):
+            bad.append(n.lineno)
+        elif isinstance(n, ast.Constant) and n.value in ('environ', 'environb', 'getenv', 'getenvb'): bad.append(n.lineno)
+    return reads, sorted(set(bad))
 _ER = {}
 def env_reads_of(files):
-    """{switch: float-parsed somewhere} over scripts (SCR-relative); refuses a non-constant name read"""
+    """{switch: kinds} over scripts (SCR-relative; kinds as env_reads); refuses a non-constant name read and any other environment reference"""
     out = {}
     for f in files:
         if f not in _ER: _ER[f] = env_reads(os.path.join(SCR, f))
         r, bad = _ER[f]
-        if bad: sys.exit(f'{f}: environment read(s) with a non-constant name at line(s) {bad}: name the switch (G45.10)')
-        for k, v in r.items(): out[k] = out.get(k, False) or v
+        if bad: sys.exit(f'{f}: environment read(s) with a non-constant name or other environment reference(s) at line(s) {bad}: read a named switch '
+                         f'through os.environ.get / [...] / os.getenv (G45.10 / G53.5)')
+        for k, v in r.items(): out[k] = out.get(k, frozenset()) | v
     return out
 
 # ---------------------------------------------------------------- report-only outputs (r13 S-6)
 # Rule: an output counts for currency only if a later stage or the product reads it. Report-only files — evaluations, diagnostics, non-production
 # stand maps / acceptance records, logs — are listed in the state but neither enter the output fingerprint nor make a stage stale when deleted or
 # changed. The production seed's history acceptance record (dynamics_check_<name>_history_s<model_seed>.json) is NOT report-only: verify T15 reads it.
-REPORT_ONLY = ['eval_*.json', 'dynamics_check_*.json', 'stand_veg_q_*.parquet', '*.log', '*.out']
+# The non-production per-pair dumps dynamics_pairs_<TAG>.parquet are report-only too; the production one (TAG <name>_history_s<model_seed>) is not:
+# T15 recounts it (G53.5).
+REPORT_ONLY = ['eval_*.json', 'dynamics_check_*.json', 'dynamics_pairs_*.parquet', 'stand_veg_q_*.parquet', '*.log', '*.out']
 def report_only(rel, prod_b, keep=()):
     b = os.path.basename(rel)
     if b in keep: return False
@@ -371,17 +425,56 @@ def report_only(rel, prod_b, keep=()):
     m = re.fullmatch(r'stand_(?:veg|cohorts)_v3_B(\d+)\.parquet', b)
     return bool(m) and int(m.group(1)) != prod_b
 
+_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')                  # a name that becomes part of a file name (name, model_prefix)
+_DATA = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*')   # a data dir under data/proto (no '..', no absolute path)
+def _module_literal(script, name):
+    """the literal value of a module-level assignment `name = <literal>` in a script (SCR-relative); None if absent or not a literal"""
+    for s in ast.parse(open(os.path.join(SCR, script)).read()).body:
+        if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in s.targets):
+            try: return ast.literal_eval(s.value)
+            except ValueError: return None
+    return None
+def train_switches():
+    """the training switches: gv_verify's T4Y_COMPARED (what T4y compares with the checkpoint's `switches` record), set in train.env only (G53.3)"""
+    v = _module_literal('gv_verify.py', 'T4Y_COMPARED')
+    if not isinstance(v, (tuple, list)) or not v or not all(isinstance(x, str) for x in v): sys.exit('gv_verify.py: T4Y_COMPARED is not a literal tuple of names (G53.3)')
+    return set(v) - PERF_ENV
+def check_g03b_switches():
+    """G53.5: the keys of g03b's checkpoint record SWITCHES (a dict literal) = the stage switches g03b reads: a new g03b switch must be recorded"""
+    keys = None
+    for n in ast.walk(ast.parse(open(os.path.join(SCR, 'g03b_train_gafl.py')).read())):
+        if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'SWITCHES' for t in n.targets):
+            keys = {k.value for k in n.value.keys if isinstance(k, ast.Constant)} if isinstance(n.value, ast.Dict) and all(isinstance(k, ast.Constant) for k in n.value.keys) else None
+    if keys is None: sys.exit('g03b_train_gafl.py: no SWITCHES dict literal with constant keys (the checkpoint switches record; G48.5 / G53.5)')
+    reads = set(env_reads_of(['g03b_train_gafl.py']))
+    if keys != reads: sys.exit(f'g03b_train_gafl.py: SWITCHES keys != the switches it reads: not recorded {sorted(reads - keys)}, recorded but not read {sorted(keys - reads)} (G53.5)')
 def check_config(cfg):
-    """G45.2 / G45.9: list-typed keys are non-empty lists of the right type, env sections hold scalar switches their stages read (region switches in
-    the top-level env only), no empty values, no float for a switch no script parses as a float; normalises null sections and use_b (0 / 1)"""
+    """G45.2 / G45.9 / G53.3 / G53.5: required sections present, names and the data dir well formed, integer settings integers, list-typed keys
+    non-empty lists of the right type (no duplicate seeds), env sections hold scalar switches their stages read (region switches in the top-level env
+    only, training switches in train.env only), no empty values, no float for a switch no script parses as a float, no boolean for an integer count;
+    normalises null sections and use_b (0 / 1)"""
+    if not isinstance(cfg, dict) or not cfg: sys.exit(f'the config is empty or not a mapping (G53.5)')
+    miss = [k for k in ('name', 'data', 'stands_run', 'model_seed', 'table', 'train', 'dynamics', 'downscale', 'map', 'fe', 'verify') if k not in cfg]
+    if miss: sys.exit(f'config lacks {miss} (G53.5)')
     if 'env' in cfg and cfg['env'] is None: cfg['env'] = {}
-    if 'table' in cfg and cfg['table'] is None: cfg['table'] = {}
-    for s in ('train', 'dynamics', 'downscale', 'map'):
+    if cfg['table'] is None: cfg['table'] = {}
+    if not isinstance(cfg['table'], dict): sys.exit(f'config section table must be a mapping, got {cfg["table"]!r}')
+    for s in ('train', 'dynamics', 'downscale', 'map', 'fe', 'verify'):
         if not isinstance(cfg.get(s), dict): sys.exit(f'config section {s} missing or not a mapping')
-        if cfg[s].get('env') is None: cfg[s]['env'] = {}
+        if s in ('train', 'dynamics', 'downscale', 'map') and cfg[s].get('env') is None: cfg[s]['env'] = {}
+    for k, v in (('name', cfg['name']), ('train.model_prefix', cfg['train'].get('model_prefix'))):
+        if not isinstance(v, str) or not _NAME.fullmatch(v): sys.exit(f'{k} must be a name of letters, digits, _ . - (it names files), got {v!r} (G53.5)')
+    if not isinstance(cfg['data'], str) or not _DATA.fullmatch(cfg['data']): sys.exit(f"data must be a directory name under data/proto (no '..', not absolute), got {cfg['data']!r} (G53.5)")
+    if not isinstance(cfg['stands_run'], str) or not _DATA.fullmatch(cfg['stands_run']): sys.exit(f"stands_run must be a run name under data/derived/runs, got {cfg['stands_run']!r} (G53.5)")
+    for k in ('n', 'n_upstream'):
+        v = cfg['verify'].get(k)
+        if not isinstance(v, int) or isinstance(v, bool) or v <= 0: sys.exit(f'verify.{k} must be a positive integer, got {v!r} (G53.5)')
+    for k in ('area', 'geojson', 'tag'):
+        if not isinstance(cfg['fe'].get(k), str) or not cfg['fe'][k]: sys.exit(f'fe.{k} must be a non-empty string, got {cfg["fe"].get(k)!r} (G53.5)')
     ms, seeds = cfg.get('model_seed'), cfg['train'].get('seeds')
     if not isinstance(seeds, list) or not seeds or not all(isinstance(x, int) and not isinstance(x, bool) for x in seeds):
         sys.exit(f'train.seeds must be a non-empty YAML list of integer seeds, got {seeds!r}')
+    if len(set(seeds)) != len(seeds): sys.exit(f'train.seeds {seeds} repeats a seed (it would train twice; G53.5)')
     if not isinstance(ms, int) or isinstance(ms, bool): sys.exit(f'model_seed must be an integer seed (one of train.seeds), got {ms!r} ({type(ms).__name__})')
     if ms not in seeds: sys.exit(f"model_seed {ms} is not in train.seeds {seeds}")          # the production seed must be one this config trains (r11 I-1)
     el = cfg['dynamics'].get('eval_loc')
@@ -392,7 +485,7 @@ def check_config(cfg):
     if not isinstance(ub, list) or not ub or not all(isinstance(x, bool) or (isinstance(x, int) and x in (0, 1)) for x in ub):
         sys.exit(f'map.use_b must be a non-empty YAML list of booleans (true / false or 1 / 0), got {ub!r}')
     cfg['map']['use_b'] = [int(x) for x in ub]
-    lib = set(LIB_WHOLE) | set(LIB_DEFS) | {'stands_cfg.py'}
+    lib = set(LIB_WHOLE) | set(LIB_DEFS) | {'stands_cfg.py'}; tsw = train_switches()
     for nm, sec in env_sections(cfg):
         if not isinstance(sec, dict): sys.exit(f'config env section {nm} must be a mapping, got {sec!r}')
         reads = env_reads_of(sorted({c for st in SECTION_STAGES[nm] for c in STAGES[st]['code']} | lib))
@@ -401,10 +494,13 @@ def check_config(cfg):
             if k in DRIVER_SET: sys.exit(f'config sets {k}, which only the driver sets (r13 D-6)')
             if k not in STAGE_SWITCHES: sys.exit(f'config env key {k} is not a stage switch (typo?)')
             if k in REGION_SWITCHES and nm != 'env': sys.exit(f'{nm}.{k}: region switches belong in the top-level env (every stage must see the same region; G45.9)')
+            if k in tsw and nm != 'train.env': sys.exit(f'{nm}.{k}: a training switch (gv_verify T4Y_COMPARED) belongs in train.env — every stage that loads the model '
+                                                        f'must see the switches it was trained with (G53.3)')
             if k not in reads: sys.exit(f'{nm}.{k}: none of the scripts of the stages this section is passed to ({", ".join(SECTION_STAGES[nm])}) reads {k} (G45.9)')
             if v is None or v == '': sys.exit(f'{nm}.{k} is empty: give a value or remove the key (G45.2)')
             if isinstance(v, (list, dict)): sys.exit(f'{nm}.{k} = {v!r}: an env switch must be a scalar')
-            if isinstance(v, float) and not reads[k]: sys.exit(f'{nm}.{k} = {v!r}: a float, but no script parses {k} as a float (an integer / flag switch; G45.2)')
+            if isinstance(v, float) and 'float' not in reads[k]: sys.exit(f'{nm}.{k} = {v!r}: a float, but no script parses {k} as a float (an integer / flag switch; G45.2)')
+            if isinstance(v, bool) and 'int' in reads[k]: sys.exit(f'{nm}.{k} = {v!r}: a boolean, but a script parses {k} as an integer count (G53.5)')
             sec[k] = envstr(v)
     return cfg
 
@@ -428,15 +524,50 @@ class _Tee:
     def flush(self): self.a.flush(); self.b.flush()
     def __getattr__(self, k): return getattr(self.a, k)
 
+_PRE = dict(path=None)                                           # --log before the lock: its path and the output kept so far (G53.5)
+def _flush_prelock():
+    """a run that ends before the data-dir lock was taken: its kept output goes to --log only where no other driver can attribute the file — outside
+    data/proto, or inside a data dir whose lock is free (taken for the write); otherwise it is on the terminal only (D15-5)"""
+    p = _PRE.get('path')
+    if not p: return
+    _PRE['path'] = None; proto = os.path.join(ROOT, 'data', 'proto'); lk = None
+    try:
+        if _under(p, proto) and p != proto:
+            import fcntl
+            dd = os.path.join(proto, os.path.relpath(p, proto).split(os.sep)[0])
+            if os.path.isdir(dd):
+                lk = open(os.path.join(dd, '.pipeline.lock'), 'a')
+                try: fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError: return
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'a') as f: f.write(f'\n# {time.strftime("%F %T")} genveg_pipeline.py {" ".join(sys.argv[1:])}\n' + _PRE['buf'].getvalue())
+    except OSError: pass
+    finally:
+        if lk is not None: lk.close()
+DETECTOR_SUITE = os.path.join('scripts', 'tests', 'test_check_comments.py')
+def detector_suite():
+    """G53.2: run the swallow detector's regression suite (it scans the pipeline scripts); refuse when it fails. A pass is remembered by the content
+    hash of everything it reads (the suite, check_comments.py and every scanned script, the interpreter), so an unchanged tree is not re-tested"""
+    h = hashlib.sha256(f'{sys.executable}|{sys.version}'.encode())
+    for f in [DETECTOR_SUITE] + [os.path.join('scripts', x) for x in scanned_scripts()]:
+        h.update(f.encode()); h.update(open(os.path.join(ROOT, f), 'rb').read())
+    cache = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'genveg_detector_suite', h.hexdigest()[:32])
+    if os.path.exists(cache): return
+    try: r = subprocess.run([sys.executable, '-I', os.path.join(ROOT, DETECTOR_SUITE)], cwd=ROOT, capture_output=True, text=True, timeout=VI_TIMEOUT,
+                            env={k: v for k, v in os.environ.items() if k not in STAGE_SWITCHES})
+    except subprocess.TimeoutExpired: sys.exit(f'{DETECTOR_SUITE}: timed out (G53.2)')
+    if r.returncode != 0: sys.exit(f'{DETECTOR_SUITE} FAILED (exit {r.returncode}) — the swallow detector misses code (G53.2):\n{(r.stdout + r.stderr).strip()[-2500:]}')
+    try: os.makedirs(os.path.dirname(cache), exist_ok=True); open(cache, 'w').close()
+    except OSError: pass
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--config', default=os.path.join(ROOT, 'config', 'genveg_v3b.yml')); ap.add_argument('--set', action='append', default=[], dest='sets')
     ap.add_argument('--force', default=''); ap.add_argument('--adopt', default=''); ap.add_argument('--log', default=None); ap.add_argument('stages', nargs='*')
     a = ap.parse_args(); force = set(filter(None, a.force.split(','))); adopt = set(filter(None, a.adopt.split(',')))
     OWN = set()                                                                # files the driver itself writes into the data dir, by (device, inode)
-    if a.log:
-        os.makedirs(os.path.dirname(os.path.abspath(a.log)), exist_ok=True); logf = open(a.log, 'a'); s_ = os.fstat(logf.fileno()); OWN.add((s_.st_dev, s_.st_ino))
-        logf.write(f'\n# {time.strftime("%F %T")} genveg_pipeline.py {" ".join(sys.argv[1:])}\n'); sys.stdout = _Tee(sys.stdout, logf); sys.stderr = _Tee(sys.stderr, logf)
+    if a.log:                                                                  # --log: opened once the data-dir lock is held (G53.5); until then the output is kept
+        _PRE.update(path=os.path.abspath(a.log), buf=io.StringIO(), out=sys.stdout, err=sys.stderr)
+        sys.stdout = _Tee(sys.stdout, _PRE['buf']); sys.stderr = _Tee(sys.stderr, _PRE['buf'])
     # ---- refusals, before anything is read or written
     run = a.stages or ORDER
     bad = [s for s in run if s not in STAGES]
@@ -451,12 +582,15 @@ def main():
     while todo:
         s = todo.pop()
         if s not in need: need.add(s); todo += STAGES[s]['up'] + STAGES[s].get('gate', [])
+    detector_suite()                                                           # the swallow detector's own regression suite must pass (G53.2)
     from check_comments import swallowed                                         # refuse to run code that a comment swallowed (G12; r13 D-10)
     hits = [(f, ln, fr) for f in scanned_scripts() for ln, fr in swallowed(os.path.join(SCR, f))]
     if hits: sys.exit('code inside comments:\n' + '\n'.join(f'  {f}:{ln}: {fr}' for f, ln, fr in hits))
     unk = set(env_reads_of(hashed_scripts())) - STAGE_SWITCHES
     if unk: sys.exit(f'stage scripts read environment switch(es) {sorted(unk)} not in STAGE_SWITCHES (they would be inherited from the shell): add them')
+    check_g03b_switches()
     raw = yaml.safe_load(open(a.config))
+    if not isinstance(raw, dict) or not raw: sys.exit(f'config {a.config} is empty or not a mapping (G53.5)')
     if raw.get('frozen'): sys.exit(f'config {a.config} is frozen: {raw["frozen"]}')        # on the RAW config: --set frozen=… cannot bypass it (r13 D-1)
     try: cfg = apply_overrides(raw, a.sets)
     except (KeyError, ValueError) as e: sys.exit(f'--set: {e.args[0] if e.args else e}')
@@ -469,6 +603,12 @@ def main():
     lockf = open(os.path.join(D, '.pipeline.lock'), 'a')
     try: fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError: sys.exit(f'another genveg driver (or a stage it started) is running on {D}')
+    if a.log:
+        proto = os.path.join(ROOT, 'data', 'proto')
+        if _under(_PRE['path'], proto) and not _under(_PRE['path'], D): sys.exit(f'--log {a.log}: inside another data dir (its own driver would attribute it to a stage)')
+        os.makedirs(os.path.dirname(_PRE['path']), exist_ok=True); logf = open(_PRE['path'], 'a'); s_ = os.fstat(logf.fileno()); OWN.add((s_.st_dev, s_.st_ino))
+        logf.write(f'\n# {time.strftime("%F %T")} genveg_pipeline.py {" ".join(sys.argv[1:])}\n' + _PRE['buf'].getvalue()); logf.flush()
+        sys.stdout = _Tee(_PRE['out'], logf); sys.stderr = _Tee(_PRE['err'], logf); _PRE['path'] = None
     stf = f'{D}/pipeline_state.json'; state = json.load(open(stf)) if os.path.exists(stf) else {}
     def save():                                                                # atomic (r13 D-9)
         tmp = stf + '.tmp'
@@ -492,7 +632,8 @@ def main():
         for part in k.split('.'): v = v.get(part) if isinstance(v, dict) else None
         return v
     def stands_of(st): return STAGES[st]['stands'] + ([] if r4 else STAGES[st].get('stands_gafl', []))
-    prod_b = cfg['map']['use_b'][-1]; keep = (f"dynamics_check_{cfg['name']}_history_s{cfg['model_seed']}.json",)   # (TAG as cmds_of sets it)
+    prod_b = cfg['map']['use_b'][-1]; ptag = f"{cfg['name']}_history_s{cfg['model_seed']}"     # (the production TAG as cmds_of sets it)
+    keep = (f'dynamics_check_{ptag}.json', f'dynamics_pairs_{ptag}.parquet')    # the production acceptance record + its per-pair dump (T15; G53.5)
     py = [sys.executable, '-I']
     tenv = dict(cfg['train']['env'])
     base_env = dict({k: v for k, v in os.environ.items() if k not in STAGE_SWITCHES}, GV_CURATED_DB=dbs['curated_db'], GV_FIADB=dbs['fiadb'], STANDS_RUN=SR,
@@ -505,7 +646,7 @@ def main():
         if st == 'records': return [(S('g02e_fia_records.py'), {})]
         if st == 'history': return [(S('g02g_history_consistency.py'), {})]
         if st == 'stands_fp': return [(S('g02j_stand_footprints.py'), {})]
-        if st == 'vup': return [(S('gv_verify_upstream.py', cfg['verify']['n_upstream']), dict(GV_SKIP_U8='1'))]   # U8 (stand mapping) runs in verify
+        if st == 'vup': return [(S('gv_verify_upstream.py', cfg['verify']['n_upstream']), dict(GV_SKIP_U8='1'))]   # U8 (stand mapping): checked by the verify stage
         if st == 'train': return [(S('g03b_train_gafl.py'), dict(tenv, SEED=str(s), MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt")) for s in cfg['train']['seeds']]
         if st == 'dynamics':
             return [(S('g06_dynamics_check.py'), dict(tenv, **cfg['dynamics']['env'], MODEL=f"{cfg['train']['model_prefix']}_s{s}.pt",
@@ -531,7 +672,8 @@ def main():
         for args, env in cmds_of(st):
             f = args[len(py)] if len(args) > len(py) else ''
             if os.path.basename(f) not in VERIFIERS: continue
-            r = subprocess.run(py + ['-c', _VI, f], env=dict(base_env, **env), cwd=ROOT, capture_output=True, text=True)
+            try: r = subprocess.run(py + ['-c', _VI, f], env=dict(base_env, **env), cwd=ROOT, capture_output=True, text=True, timeout=VI_TIMEOUT)
+            except subprocess.TimeoutExpired: sys.exit(f'{st}: evaluating VERIFY_INPUTS of {os.path.basename(f)} timed out after {VI_TIMEOUT} s (G53.5)')
             o = r.stdout.rsplit(_VI_MARK, 1)
             if r.returncode != 0 or len(o) != 2:
                 sys.exit(f'{st}: cannot evaluate VERIFY_INPUTS of {os.path.basename(f)} under its env (exit {r.returncode}):\n{(r.stderr or r.stdout).strip()[-1500:]}')
@@ -557,12 +699,6 @@ def main():
                                                    **(vfp(st) if st in VL else {})),
                                               sort_keys=True, default=str).encode()).hexdigest()[:12]
     rehash()
-    def deps(st):                                                              # the stages whose currency decides st's: ups (recursively) + its gates
-        out, todo = set(STAGES[st].get('gate', [])), [st]
-        while todo:
-            for u in STAGES[todo.pop()]['up']:
-                if u not in out: out.add(u); todo.append(u)
-        return out | {st}
     def closure(st):                                                           # st and every stage it depends on (ups and gates, recursively)
         out, todo = set(), [st]
         while todo:
@@ -626,8 +762,8 @@ def main():
     def current(st):
         """hash matches, the files its run wrote are intact, and every up stage is (recursively) current (r13 D-4); gates are not part of currency"""
         return state.get(st, {}).get('hash') == H[st] and files_ok(st) and all(current(u) for u in STAGES[st]['up'])
-    def failed_gates(st):                                                      # gates (of st or its ups) whose last run FAILED (G21 / G45.12)
-        return sorted({g for g in STAGES[st].get('gate', []) if state.get(g, {}).get('how') == 'FAILED'} | {g for u in STAGES[st]['up'] for g in failed_gates(u)})
+    def failed_gates(st):                                                      # gates of st or of any stage it depends on, transitively, whose last run FAILED (G53.4)
+        return sorted({g for s_ in closure(st) for g in STAGES[s_].get('gate', []) if state.get(g, {}).get('how') == 'FAILED'})
     child = [None]
     def sh(stage, cmds):
         with open(f'{LOGD}/{stage}.log', 'w') as lf:
@@ -648,6 +784,9 @@ def main():
         e = state.get(st, {}); fl = e.get('files')
         if fl is None: sys.exit(f'!! {st}: cannot adopt — no recorded run of it (file list) in {stf}: run it')
         new, miss, own = {}, [], []
+        early = sorted(f'{rel} ({W[rel][0]})' for rel in fl if W.get(rel) and W[rel][0] != st and W[rel][0] in STAGES and not later(W[rel], st))
+        if early: sys.exit(f'!! {st}: cannot adopt — recorded file(s) last written by another, not later, stage: {early[:8]}; that rewrite makes {st} stale '
+                           f'(G43.5): run it (G53.1)')
         for rel, rec in fl.items():
             cur = stat_(os.path.join(D, rel))
             if cur is None:
@@ -663,15 +802,19 @@ def main():
     signal.signal(signal.SIGTERM, _on_signal); signal.signal(signal.SIGINT, _on_signal)
     try:
         for st in run:
-            d = STAGES[st]; ensure(deps(st))
-            if st in adopt:                                                    # only on current up stages and gates (r13 D-3)
+            d = STAGES[st]; ensure(closure(st))                                # (closure: also the gates of its ups, e.g. vtab for verify; D15-7)
+            if st in adopt:                                                    # only on current up stages and gates (r13 D-3), no failed gate (G53.4)
                 nc = [u for u in d['up'] + d.get('gate', []) if not current(u)]
                 if nc: sys.exit(f'!! {st}: cannot adopt — upstream stage(s) / gate(s) {nc} not current')
+                gf = failed_gates(st)
+                if gf: sys.exit(f'!! {st}: cannot adopt — gate(s) {gf} FAILED: nothing runs past a failed gate (G53.4)')
                 adopt_stage(st); save(); rehash()
                 print(f'== {st}: ADOPTED its recorded outputs as current ({H[st]})'); continue
             if st not in force and current(st):
                 gf = failed_gates(st)
                 print(f'== {st}: current{" (gate FAILED: " + ", ".join(gf) + ")" if gf else ""} ({state[st]["how"]} {state[st]["at"]})'); continue
+            gf = failed_gates(st)                                              # (G53.4, amends G21 / G45.12; --force does not override it)
+            if gf: sys.exit(f'!! {st}: gate(s) {gf} FAILED (of {st} or of a stage it depends on): nothing new runs past a failed gate — fix and re-run the gate (G53.4)')
             stale = [u for u in d['up'] + d.get('gate', []) if not current(u)]
             if stale: sys.exit(f'!! {st}: upstream stage(s) {stale} not current — run them first')
             if st in ('downscale', 'map', 'verify'): shutil.copy(f'{D}/{model}', f'{D}/model.pt')      # tools that read the default model see the chosen one
@@ -690,9 +833,14 @@ def main():
             save()
             rehash()                                                                        # downstream hashes now see this run's outputs
             print(f'   {tail[0][:300]}', flush=True)
+        ensure(list(VL))                                                       # the late-file refusal, re-evaluated on this run's outputs (D15-7)
     except _Stop as e:
         save(); print(f'!! interrupted (signal {e.args[0]}): the running stage and its processes were stopped; it is not current', file=sys.stderr); sys.exit(128 + e.args[0])
     save()
 
 if __name__ == '__main__':
-    main()
+    try: main()
+    except SystemExit as e:
+        if _PRE.get('path') and isinstance(e.code, str): print(e.code, file=sys.stderr); _flush_prelock(); raise SystemExit(1)   # (a refusal before the lock: kept for --log)
+        raise
+    finally: _flush_prelock()
