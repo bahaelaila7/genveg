@@ -19,6 +19,22 @@ sys.argv = _argv; torch.manual_seed(1); np.random.seed(1)
 # decoded summaries (from g03b's evaluation section)
 def lmed(x):     # TRUE median in log space (torch.median returns the LOWER middle value: 2-5 % low at 16 vs 32 samples; r11 M-1)
     return torch.exp(torch.quantile(torch.log(x + 1e-3), 0.5, dim=-1))
+def medoid_draw(lp_, val_, s_, seed):
+    """THE stand estimator of g05, shared with g04's validation (r13 C-1 / G32): the posterior draw closest to the median summary in log TPH / BA /
+    QMD-from-TPH-BA (r13 F#12), its slots present by Bernoulli(calibrated p) seeded by `seed` (else its largest slot). Returns the draw index, the present
+    slots, the slot arrays and the medoid's BA composition by key (shares are invariant to g05's uniform TPH / diameter scaling) + dominant key."""
+    tph_m, ba_m = float(lmed(s_[0])), float(lmed(s_[1]))
+    qd = 100 * torch.sqrt(s_[1].clamp(min=1e-9) / (s_[0].clamp(min=1e-9) * math.pi / 4)); qd_m = 100 * math.sqrt(ba_m / (tph_m * math.pi / 4)) if tph_m > 0 else 1e-6
+    dist_ = (torch.log(s_[0].clamp(min=1e-6)) - math.log(max(tph_m, 1e-6))) ** 2 + (torch.log(s_[1].clamp(min=1e-6)) - math.log(max(ba_m, 1e-6))) ** 2 \
+            + (torch.log(qd.clamp(min=1e-6)) - math.log(max(qd_m, 1e-6))) ** 2
+    i_ = int(dist_.argmin())
+    pr_ = torch.sigmoid(calibrated(lp_)); Nr = torch.exp(val_[..., 0].clamp(max=12)); Dd = torch.exp(val_[..., 1].clamp(max=math.log(150.0)))
+    u_ = torch.rand(pr_.shape[1], generator=torch.Generator().manual_seed(int(seed)))
+    pres = torch.nonzero(u_ < pr_[i_]).flatten().tolist() or [int((pr_[i_] * Nr[i_]).argmax())]
+    comp = torch.zeros(NK)
+    for j_ in pres: comp[j_ // NA] += float(Nr[i_, j_] * Dd[i_, j_] ** 2)
+    comp = comp / comp.sum().clamp(min=1e-12)
+    return dict(i=i_, pres=pres, pr=pr_, Nr=Nr, Dd=Dd, tph_m=tph_m, ba_m=ba_m, comp=comp, dom=int(comp.argmax()))
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), share of the dominant key — EXPECTED values (slot density x calibrated presence probability)."""
     pr = torch.sigmoid(calibrated(lp)); N = torch.exp(val[..., 0].clamp(max=12)) * pr; Dq = torch.exp(val[..., 1].clamp(max=math.log(150.0)))   # QMD cap 150 cm
@@ -134,8 +150,10 @@ with torch.no_grad():
     predA_raw = predA; predA = [predA[i] * math.exp(CAL[i]) for i in range(3)]
     compA = S_[4].view(len(te_l), 32, NK).mean(1)
     y_tr = vyear[tr_l]
+    FALLBACK = {'knn_queries_with_lt5_in_window': 0, 'null_queries_without_pool': 0}   # (r13 C-7: the fallbacks are counted and reported, not silent)
     def knn_idx(Xq, yq):     # 5 nearest training plots in X_L among those whose last visit is within ±3 years of the query visit
-        dd = torch.cdist(Xq, X_tr); dd = dd + 1e9 * ((yq.unsqueeze(1) - y_tr.unsqueeze(0)).abs() > 3).float(); return dd.topk(5, largest=False).indices
+        far = ((yq.unsqueeze(1) - y_tr.unsqueeze(0)).abs() > 3); FALLBACK['knn_queries_with_lt5_in_window'] += int(((~far).sum(1) < 5).sum())
+        dd = torch.cdist(Xq, X_tr) + 1e9 * far.float(); return dd.topk(5, largest=False).indices
     nn5 = knn_idx(X_te, vyear[te_l]); knn = [o_tr[i][nn5].float().median(1).values for i in range(3)]; compK = o_tr[4][nn5].mean(1)
     err = lambda p, o: float(torch.median(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
     bias = lambda p, o: float(torch.median(torch.log((p + 1e-3) / (o + 1e-3))))
@@ -146,6 +164,7 @@ with torch.no_grad():
     def null_pred(yq, excl=None):       # NULL baseline: median of the training plots' last visits within ±3 years (no satellite / landscape information at all)
         m_ = ((yq.unsqueeze(1) - y_tr.unsqueeze(0)).abs() <= 3).float(); out_ = []         # excl: plots left out of the pool (the ones being judged; r6 M7)
         if excl is not None: m_ = m_ * torch.tensor(~np.isin(p_trl, list(excl)), dtype=torch.float32).unsqueeze(0)
+        FALLBACK['null_queries_without_pool'] += int((m_.sum(1) == 0).sum())
         for i in range(3):
             v_ = o_tr[i].float().unsqueeze(0).expand(len(yq), -1).clone(); v_[m_ == 0] = float('nan'); out_.append(torch.nanmedian(v_, 1).values)
         return out_
@@ -192,8 +211,9 @@ with torch.no_grad():
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
             xv = Xv[[vi[v]]] if X is None else X[q_:q_ + 1]
             zs = mdn.sample(xv, torch.tensor([y0]), ms)[0]; yy = min(int(math.floor(float(yv))), YEARS[-1])
-            st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms)); s_ = summ(st[yy])
-            out_.append([lmed(s_[i]) for i in range(3)] + [s_[4].mean(0)])
+            st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms)); lp_m, val_m = dec(st[yy]); s_ = summaries(lp_m, val_m)
+            md_ = medoid_draw(lp_m, val_m, s_, int(v))                       # the composition / dominant key g05 maps (G32)
+            out_.append([lmed(s_[i]) for i in range(3)] + [s_[4].mean(0), md_['comp'], md_['dom']])
         return out_
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]
     cal_m = rec(trs_v); te_m = rec(te_l)
@@ -206,14 +226,18 @@ with torch.no_grad():
             pt = map_path(te, y0); P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]
             P_[2] = torch.where(P_[0] > 0, 100 * torch.sqrt(P_[1] / (P_[0] * math.pi / 4).clamp(min=1e-9)), torch.zeros_like(P_[0]))   # QMD as g05 maps it:
             # from the calibrated TPH / BA (GEN_QMD), not the samples' median QMD x its own factor (audit r8 M6)
-            return CF, pt, P_, {nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])}
+            Cmd = torch.stack([r[4] for r in pt]); dmd = torch.tensor([r[5] for r in pt])
+            return CF, pt, P_, {**{nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
+                                'bray_medoid': bray(Cmd[skt_], ott[4][skt_]), 'dominant_acc_medoid': float((dmd[skt_] == ott[3][skt_]).float().mean())}
         # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its TPH and BA errors are no worse than the 2021
         # path's and than the null's, AND the prediction still depends on the stand's landscape (at least half the 2021 path's landscape dependence, r10); else 2021. The gate is decided on the CALIBRATION plots (cross-fitted: factors from one half of the plots, errors on
         # the other), never on the held-out plots it then reports (audit r5 M1). The chosen year is recorded; g05 maps with it.
-        res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0, 'decided_on': 'calibration plots, 2-fold by plot'}
+        res = {2021.0: evaluate(2021.0)}; gate = {'requested': MAP_Y0, 'decided_on': 'calibration plots, 2-fold by plot (seeded random halves)'}
+        _cp = sorted(set(vpid[cal_m])); _hp = set(np.random.default_rng(34).permutation(_cp)[:len(_cp) // 2])     # random plot halves (r13 C-8: not pid parity)
+        hA = [v for v in cal_m if vpid[v] in _hp]; hB = [v for v in cal_m if vpid[v] not in _hp]
         if MAP_Y0 != 2021.0:
             res[MAP_Y0] = evaluate(MAP_Y0)
-            hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]
+            pass
             e0, e1, cs_, cs0_, cr_, cr0_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, [], [], [], []
             nulle = {k: 0.0 for k in ('TPH', 'BA')}
             for ca, cb in ((hA, hB), (hB, hA)):              # each half judged with factors from the other
@@ -233,7 +257,7 @@ with torch.no_grad():
             # landscape dependence 1 − corr(real, shuffled-landscape BA): the requested path must keep at least half of the 2021 path's (an absolute
             # cs < 0.5 can be unpassable for both paths, since the plot's own histories and soils are not shuffled: r10, docs/DECISIONS.md G19)
             dep, dep0 = cr - cs, cr0 - cs0                    # landscape dependence above the redraw noise floor (G24)
-            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and dep >= 0.5 * dep0
+            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and dep0 > 0 and dep >= 0.5 * dep0   # (dep0 > 0: G33)
             gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'shuffled_landscape_corr_BA_2021': cs0, 'redraw_corr_BA': cr, 'redraw_corr_BA_2021': cr0,
                          'landscape_dependence': dep, 'landscape_dependence_2021': dep0, 'passed': bool(ok),
                          'heldout_err_2021': res[2021.0][3], 'heldout_err_requested': res[MAP_Y0][3]})     # (held-out: reported, not used)
@@ -241,7 +265,7 @@ with torch.no_grad():
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
         # VALIDATION metrics of the chosen mapping path (cross-fitted on the calibration = validation plots: factors from one half, errors on the other) —
         # model choices (v3 vs v4, seeds) are made on these; the held-out block below is the test report (r9)
-        hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]; xv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD')}
+        xv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray_medoid', 'dominant_acc_medoid')}
         for ca, cb in ((hA, hB), (hB, hA)):
             r_ = evaluate(y0u, ca, cb)
             for k in xv_: xv_[k] += r_[3][k] / 2
@@ -250,5 +274,8 @@ with torch.no_grad():
         ev['calibration_log_factors_mapping_path'] = CALF
         ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,
             **{nm: {'map_path': err(Pm[i][skt], ot[i][skt]), 'map_bias': bias(Pm[i][skt], ot[i][skt]), 'knn': err(km_[i][skt], ot[i][skt]), 'null': err(nm_[i][skt], ot[i][skt])} for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
-            'bray_map': bray(Cm[skt], ot[4][skt]), 'bray_knn': bray(o_tr[4][nnm].mean(1)[skt], ot[4][skt])}
+            'bray_map_meanshare': bray(Cm[skt], ot[4][skt]), 'bray_knn': bray(o_tr[4][nnm].mean(1)[skt], ot[4][skt]),
+            'bray_map_medoid': res[y0u][3]['bray_medoid'], 'dominant_acc_map_medoid': res[y0u][3]['dominant_acc_medoid'],    # the composition g05 maps (G32)
+            'dominant_acc_knn': float((o_tr[4][nnm].mean(1).argmax(1)[skt] == ot[3][skt]).float().mean())}
+ev['baseline_fallbacks'] = FALLBACK
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/bayes_eval.json', 'w'), indent=1)

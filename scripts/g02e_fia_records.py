@@ -4,6 +4,7 @@ anchor FIA data to the disturbances LANDFIRE reports). The same records + rules 
                                                  (rmd; a record describes the interval ending at that visit — g03b.recs_in, audit r5 I3)
   fia_negs.parquet    pid, y_lo, y_hi            periods without stand-replacing disturbance (FIA protocol; see g02b.fia_records)
   visits.parquet      + fia_blocked              the visit carries a code that could hide stand-replacing evidence (no negative evidence for its period)
+                      + plot_converted           the plot turned entirely non-forest at a visit up to 2022 after a forested one (no MIL; r13 G41)
                       + fia_gap                  FIA's previous measurement of the plot (PREV_PLT_CN, any status) is NOT the previous table visit (a
                                                  non-forest / non-sampled visit in between, or unknown): the visit's codes do not cover the whole pair (r6 M1)
 Run after every g02b rebuild (pid / vid are row numbers of the current table)."""
@@ -46,6 +47,20 @@ for _, g_ in V.sort_values(['pid', '_md']).groupby('pid'):
     for j in range(1, len(ix_)):
         r_ = V.loc[ix_[j]]; prev = pmd.get((int(r_.st), int(r_.u), int(r_.c), int(r_.p), pd.Timestamp(mds_[j])))
         gap[ix_[j]] = prev is None or prev != pd.Timestamp(mds_[j - 1])
-V['fia_gap'] = gap; V = V.drop(columns='_md'); V.to_parquet(f'{D}/visits.parquet')
+V['fia_gap'] = gap
+# plots CONVERTED to non-forest before the 2022 forest mask (r13 A-9 / G41): a FIADB visit up to 2022 with no forested condition (and >= 1 non-forest one)
+# after a forested visit — the plot's true footprint is likely outside the 2022 mask, so it has no candidate; g03b leaves these plots out of the MIL loss
+CV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my,
+                            sum(case when c.COND_STATUS_CD = 1 then 1 else 0 end) nf1, sum(case when c.COND_STATUS_CD = 2 then 1 else 0 end) nf2
+                     from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {G2.ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()
+conv = set()
+for k_, g_ in CV.sort_values('my').groupby(['st', 'u', 'c', 'p']):
+    seen_f = False
+    for r in g_.itertuples():
+        if r.nf1 > 0: seen_f = True
+        elif seen_f and r.nf2 > 0 and r.my <= 2022: conv.add(tuple(int(x) for x in k_)); break
+V['plot_converted'] = [(int(a), int(b), int(c), int(d)) in conv for a, b, c, d in zip(V.st, V.u, V.c, V.p)]
+V = V.drop(columns='_md'); V.to_parquet(f'{D}/visits.parquet')
 print(f'plots with typed events {len(evs)} ({sum(map(len, evs.values()))} events); negative periods {sum(map(len, negs.values()))}; '
-      f'visits with a hiding code {int(V.fia_blocked.sum())} of {len(V)}; visits whose previous FIA measurement is not the previous table visit {int(V.fia_gap.sum())}')
+      f'visits with a hiding code {int(V.fia_blocked.sum())} of {len(V)}; visits whose previous FIA measurement is not the previous table visit {int(V.fia_gap.sum())}; '
+      f'plots converted to non-forest before 2022 {len(conv & set(map(tuple, P[key].astype(int).values)))}')

@@ -55,8 +55,9 @@ for s in hansen_dl hansen dist land soils90 soilfill; do .venv/bin/python -I scr
 .venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_r4.yml          # table … verify (stage hashes; reruns only stale stages)
 .venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_v4.yml          # GA+FL v4 (table + footprints built by the driver)
 ```
-Code changes to g02b / g02j / g05 / gv_verify change the stage code hashes of the GA+FL pipelines too (by design); their outputs are byte-identical
-for the defaults, so an existing GA+FL data dir can re-adopt its stages (`--adopt`) instead of rebuilding.
+Code changes to g02b / g02j / g05 / gv_verify change the stage code hashes of the GA+FL pipelines too (by design), so those stages re-run there as well.
+Do not `--adopt` them across a code change: `--adopt` is only for outputs known to come from the current code and configuration, and it requires the
+stage's up stages and gates to be current (r13 D-3). Let the driver rebuild; it re-runs only the stale stages.
 
 ## D. Audit round 1 (2026-10-26, independent Opus review; findings reproduced before fixing)
 | id | finding | fix |
@@ -283,3 +284,20 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * **M-5** T11c trusted g04's `passed` → T11d re-derives the gate decision; R4 vtab / verify hash TIGER and the 30 m AlphaEarth mosaics they read.
 * **S-1** the landscape criterion mixed Monte-Carlo noise → dependence above a same-landscape redraw (G24). **S-2** documented (G26).
 * Verification of r12: gv_verify 50 / 55 (the 5 stale-table checks); smoke OK; the gate records the redraw / shuffled correlations and dependences; the stub root: touched gpkgs invalidate nothing, a check_comments edit re-runs vtab + verify only, a changed stand gpkg re-runs stands_fp onward (not table / train).
+
+## P. Audit round 13 — the first MULTI-REVIEWER round (2026-10-27; 6 parallel Opus reviewers by slice + a fix-diff review of r4–r12; HEAD 5a367c3)
+No blocker. Important findings, all reproduced, by slice:
+* **B (model):** B-1 latent collapse onto the encoder bound (G29); B-2 ±1 jumps cannot represent stand replacement (G30); B-3 LTC equilibria confined to a box
+  (G31). Fixed with switches SIGREG_MEAN / JUMP_RESET / STATE_ATTR, set in the v4 / r4 / v3b configs. Also ltau clamped and a dead counter removed.
+* **C (evaluation):** C-1 the mapped (medoid) composition / dominant key was never validated → a shared `medoid_draw`, used by g05 and validated in g04
+  (G32). C-2 the g06 acceptance used the lower median → `lmed` / true median. C-3 the gate is vacuous when dep0 ≤ 0 (G33). C-7 the kNN / null
+  fallbacks are counted (`baseline_fallbacks`). C-8 the cross-fit halves are a seeded random split. C-5 the g06 synthetic set is fs_ok-filtered with
+  max-prior soils.
+* **A (data):** A-1 no stand-replacing evidence after 2024 (G36). A-2 DSTRBCD 41 / 60 now block (G37). A-3 end-to-end forest-share change (G38).
+  A-4 / A-5 lookback yr0 − 4, and a non-sampled predecessor ⇒ lookback (G39). A-6 / A-7 bare test and all-bare plots (G40). A-9 converted plots
+  are out of MIL (G41). A-12 deferred (G42). The R4 evidence table must be re-derived before an R4 table build (G34; table.EVK_REGION_OK).
+* **D (driver):** see G43 / commit 1c518b9 (stand-pipeline modules hashed by used definitions, region-aware deps, relocatable fingerprints, portable
+  own-output exclusion, complete per-stage inputs, refusals, lock, atomic state, a redesigned swallow detector).
+* **E / F (verifier, fix diffs):** the verifier batch is a separate commit (production-config T8h, g04 set hygiene T12, acceptance re-derivation T15,
+  vacuous / key-order / circular checks, coverage gaps). F#5 → G35 (span ratios over fs_ok visits).
+While implementing, the redesigned guard caught two new comment-swallows in my own g06 edits (fixed before commit).

@@ -8,7 +8,7 @@
   cands    = up to NCAND footprints per plot (stratified: high-prior stratum + random fill), features as in g02 (AlphaEarth 2022/25 3x3 means,
              disturbance history 2000-2025 by class + severity + Hansen at the EVENT's calendar year, centre-pixel soils)
   prior    = FIA-dated events (FIADB COND of the forested conditions, codes 1-3) matched BY TYPE to candidate evidence in the event year (±1; planting /
-             regeneration -2..+1) → ×8 (cutting matched by a LANDFIRE harvest class ×2 more); negative evidence: a remeasurement whose visit carries no FIA
+             regeneration -2..+1) → × the kind's likelihood ratio (EVK: 4 detectable / 2 weak; cutting matched by a LANDFIRE harvest class ×2 more); negative evidence: a remeasurement whose visit carries no FIA
              code that could hide a stand-replacing event (fia_records) makes candidate stand-replacing evidence (harvest class or Hansen loss) inside
              that period ×0.25 (the stand age at the first visit is NOT used: audit r5 M4). Kept candidates carry prior × inverse inclusion weight (each stands for incl_w footprints); hi = footprint in the full disk's
              high-prior set (prior >= 4 x median); plots carry n_hi / mass_hi on the full disk (localisation)
@@ -139,8 +139,10 @@ EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),   
        # ground fire is weak: prescribed burns recur every 2-3 yr, the fire class passes ~17 % of footprints, lift 1.85 -> never a hard constraint
        'Dins': ([IX['insdis']], (-1, 1), 2.0), 'Dwx': ([IX['weather']], (-1, 1), 2.0),
        'Dhum': ([IX['harvest'], IX['dev']], (-1, 1), 2.0)}                                                       # 'unknown' (70): not matched
-NONBLOCK = {11, 21, 31, 40, 41, 42, 43, 44, 45, 46, 60}   # DSTRBCD that cannot hide stand-replacing evidence: insect / disease damage to UNDERSTORY vegetation (11 / 21;
-# 12 / 22 are damage to TREES and can — FIADB v9.4 / EVALIDATOR library, audit r6 I1), ground fire, animal, vegetation
+NONBLOCK = {11, 21, 31, 40, 42, 43, 44, 45, 46}   # (41 beaver incl. flooding and 60 vegetation BLOCK: their stand-loss rates match the blocking codes, r13 A-2 / G37)
+EVID_END = 2024   # last calendar year with stand-replacing evidence: Hansen GFC-2024 lossyear ends 2024, FY2025 LANDFIRE misses Oct-Dec 2025 (r13 A-1 / G36)
+# NONBLOCK = the DSTRBCD that cannot hide stand-replacing evidence: insect / disease damage to UNDERSTORY vegetation (11 / 21; 12 / 22 are damage to
+# TREES and can — FIADB v9.4 / EVALIDATOR library, audit r6 I1), ground fire (31), animal (40, 42-46; 41 beaver blocks)
 def ev_kind(trt, code):
     c = int(code)
     if trt: return {10: 'T10', 20: 'T20', 30: 'T30', 40: 'T40', 50: 'T50'}.get(c)
@@ -204,13 +206,15 @@ def fiadb_visits(fc):
     so trees per forested area = Σ TPA / f1s — audit 2026-10-26 F8; the earlier f1s / (1 − n5s) made densities low by (1 − n5s)) and of the SAMPLED area
     (fsub_s, non-sampled COND_STATUS_CD 5 excluded: the visit filter), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
     FV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md, p.MEASYEAR my, p.CN cn,
-                               any_value(q.MEASYEAR) prev_my,
+                               any_value(q.MEASYEAR) prev_my, any_value(q.PLOT_STATUS_CD) prev_ps,
                                sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
                                sum(case when c.COND_STATUS_CD = 1 then c.MICRPROP_UNADJ else 0 end) f1m, sum(case when c.COND_STATUS_CD = 5 then c.MICRPROP_UNADJ else 0 end) n5m,
                                max(case when c.COND_STATUS_CD = 1 then c.STDORGCD end) org
                         from PLOT p join COND c on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN
                         where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
-    nlive = fc.execute(f"select PLT_CN cn, count(*) n from TREE where STATECD in {ST_SQL} and STATUSCD = 1 group by 1").df()
+    # live TALLIED trees on forested conditions (the bare-visit test; r13 A-6 / G40: every live row of the plot was counted, any condition / TPA)
+    nlive = fc.execute(f"""select t.PLT_CN cn, count(*) n from TREE t join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID
+                            where t.STATECD in {ST_SQL} and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by 1""").df()
     FV = FV.merge(nlive, on='cn', how='left'); FV['n'] = FV.n.fillna(0); FV['md'] = pd.to_datetime(FV.md)
     FV['fsub_s'] = (FV.f1s / (1 - FV.n5s).clip(lower=1e-6)).clip(upper=1.0)
     FV['fsub'] = FV.f1s.clip(upper=1.0); FV['fmic'] = np.where(FV.f1m > 0, FV.f1m.clip(upper=1.0), FV.fsub)
@@ -239,7 +243,7 @@ def fia_records(FE, FV, P, key):
                 if kind and pd.notna(yr) and 2000 <= yr <= 2025 and k_ in pidk: evs.setdefault(pidk[k_], set()).add((kind, int(yr)))
     for k_, g_ in FV.sort_values('md').groupby(key):
         if k_ not in pidk: continue
-        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; nl = []; fs_ = g_.f1s.values
+        yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; pps = g_.prev_ps.values; nl = []; fs_ = g_.f1s.values
         for j in range(len(yrs)):
             # a forest -> non-forest (or non-sampled) conversion of >= 1/4 of the plot since the previous forested visit carries no TRT / DSTRB code
             # (codes live on forested conditions only): it can hide a clearing, so it blocks like a hiding code (audit r7 M1)
@@ -248,12 +252,19 @@ def fia_records(FE, FV, P, key):
             if (k_, pd.Timestamp(mds[j])) in blocked: continue
             # the visit's codes cover the period since FIA's PREVIOUS measurement (PREV_PLT_CN, any status): a non-forest / non-sampled visit in between
             # shortens it (audit r6 M1); the later of that and the previous forested visit is used
-            if pd.notna(pm[j]): nl.append((max(int(pm[j]), yrs[j - 1] if j > 0 else -9999) + 1, yrs[j] - 1))
-            elif j > 0: nl.append((yrs[j - 1] + 1, yrs[j] - 1))
-            else: nl.append((yrs[0] - 5, yrs[0] - 1))
+            # a NON-SAMPLED previous measurement (PLOT_STATUS_CD 3) vouches for nothing: the visit's own lookback applies (r13 A-5 / G39); the FIA lookback
+            # is 5 yr before the visit date, conservatively the calendar years yr-4 .. yr-1 (A-4)
+            if pd.notna(pm[j]) and not (pd.notna(pps[j]) and int(pps[j]) == 3): a_ = max(int(pm[j]), yrs[j - 1] if j > 0 else -9999) + 1
+            elif j > 0: a_ = max(yrs[j] - 4, yrs[j - 1] + 1) if pd.notna(pps[j]) and int(pps[j]) == 3 else yrs[j - 1] + 1
+            else: a_ = yrs[0] - 4
+            b_ = min(yrs[j] - 1, EVID_END)                                     # no negative evidence beyond the evidence window (G36)
+            if b_ >= a_: nl.append((a_, b_))
         negs[pidk[k_]] = nl
     return evs, negs, blocked
 if __name__ == '__main__':
+    if REGION != (12, 13) and os.environ.get('EVK_REGION_OK') != '1':
+        sys.exit('the FIA-record -> evidence table (EVK, its classes / windows / likelihood ratios) was derived on GA+FL (g09); outside GA+FL re-derive it for '
+                 'the region first and set table.EVK_REGION_OK: 1 (docs/DECISIONS.md G34: in KY / TN the 2023 "unknown" class barely moves AlphaEarth)')
     con = duckdb.connect(curated_db(), read_only=True)
     t = con.execute(f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
                               t.STATUSCD status, t.CONDID cond, t.cond_stdage stdage, t.TRTCD1, t.TRTYR1, t.TRTCD2, t.TRTYR2, t.DSTRBCD1, t.DSTRBYR1, t.DSTRBCD2, t.DSTRBYR2, t.cond_stdorgcd org
@@ -273,7 +284,11 @@ if __name__ == '__main__':
     FV = fiadb_visits(fc); FE = fiadb_events(fc)
     # visits = forested visits with curated tree records + truly bare forested visits (no live tree in FIADB, absent from the curated table) of the same plots
     vt = t[key + ['md']].drop_duplicates(); kp_ = vt[key].drop_duplicates()
-    bare = FV[FV.n == 0].merge(kp_, on=key).merge(vt.assign(_in=1), on=key + ['md'], how='left'); bare = bare[bare._in.isna()][key + ['md']]
+    # + FIADB plots that are bare at EVERY visit, inside the curated table's L3 ecoregion scope (r13 A-7 / G40: recently cleared stands were missing)
+    eco_ = fc.execute(f"select statecd st, unitcd u, countycd c, plot p, epa_l3 l3 from data_plot_eco where statecd in {ST_SQL}").df()
+    l3s_ = set(kp_.merge(eco_, on=key).l3.dropna()); ab_ = FV.groupby(key).n.max(); ab_ = ab_[ab_ == 0].reset_index()[key].merge(eco_, on=key)
+    ab_ = ab_[ab_.l3.isin(l3s_)][key]; print(f"all-bare FIADB plots added (L3 scope {len(l3s_)}): {len(ab_)}", flush=True)
+    bare = FV[FV.n == 0].merge(pd.concat([kp_, ab_]).drop_duplicates(), on=key).merge(vt.assign(_in=1), on=key + ['md'], how='left'); bare = bare[bare._in.isna()][key + ['md']]
     vis = pd.concat([vt, bare]).merge(FV[key + ['md', 'fsub', 'fsub_s', 'fmic', 'org']], on=key + ['md'], how='left')
     print(f"visits: with curated trees {len(vt)}, bare FIADB visits added {len(bare)}, without a forested FIADB condition {int(vis.fsub.isna().sum())}", flush=True)
     lowf = vis.fsub_s < 0.1; print(f"visits with forested share < 0.1 of the sampled area dropped: {int(lowf.sum())}", flush=True)

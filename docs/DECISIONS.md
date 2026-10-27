@@ -246,3 +246,23 @@ recommendations, but document the decision point and the different options"). Th
 ## G42 — T10 as a hard constraint (r13 A-12, agent; deferred)
 - **Evidence:** cuttings are mostly partial (median BA ratio 0.756), and the 'unknown' / Hansen base rate is about 15 % per 3-yr window.
 - **Chosen:** keep T10 as a hard constraint for now; the g09 lift evidence supports it. Revisit in the per-region evidence re-derivation (G34).
+
+## G43 — Round-13 driver decisions (implementer, 1c518b9)
+1. **Swallowed-code detector — prose-shaped simple assignments** (`then w = 3`):
+   - Options: (a) flag them, which also flags prose such as "invert year = year + …"; (b) **accept the miss**, since real swallows are code-dense.
+   - Chosen: (b). All 5 historical instances are caught.
+2. **Formulas in comments:** bare `f(x)` and expression-only fragments after prose are not flagged. Use `·`, `←` or backticks in formulas, so they no longer parse as code.
+3. **Which outputs count for currency:** only those read by a later stage or the product.
+   - The production acceptance record `dynamics_check_<name>_history_s<model_seed>.json` is kept as a real output; verify has dynamics as an up stage, because T15 reads it.
+   - Non-production `_B<b>` maps and cohort tables are report-only.
+   - Option rejected: a blanket report-only rule.
+4. **Dangling symlinks** in D are skipped with a note. Any other stat error refuses, before `state.pop`.
+5. **A rewrite by an earlier stage makes the later writer stale** (e.g. a localisation re-run re-runs history and everything after it). This is inherent to mtime-based output fingerprints.
+6. **Imported names of features.py / common.py** are derived by parsing the scripts; a missing name refuses. Option rejected: hard-coding them.
+7. **Missing required inputs** (table rasters, R4 rasters, DBs, vectors) refuse. The vup, TIGER and data-dir extras record `missing`, and the stage itself fails.
+8. **fe** depends on the stand gpkg only (the stands.tif dependency was dropped). It tracks its geojson and `_cohorts.json` (WORKSPACE-relative).
+- **Beyond the brief:**
+  - the driver refuses any stage script that reads an env switch not in STAGE_SWITCHES;
+  - config env keys that are not switches are refused;
+  - train fingerprints cand_loc_aef / cand_prior under LOC aef / plot;
+  - stages always run in pipeline order.

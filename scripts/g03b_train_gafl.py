@@ -101,6 +101,7 @@ if VAL_SPLIT:
     _va = P[P.pid.isin(val_pid)]; _dv, _ = _KD(_va[['x', 'y']].values).query(P[['x', 'y']].values)
     vbuf_pid = set(P.pid[(_dv < 3200) & ~P.pid.isin(val_pid) & ~P.pid.isin(test_pid)])
 MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9 % of
+VCONV = torch.tensor(V.plot_converted.values if 'plot_converted' in V.columns else np.zeros(nv, bool), dtype=torch.bool)   # (g02e; r13 G41)
 fs_ok = (V.fsub.values >= MIN_FS) if 'fsub' in V.columns else np.ones(nv, bool)   # visits with forest share 0.10-0.25 have BA > 60 m2/ha vs 0.5 % when fully forested)
 tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and vpid[v] not in val_pid and vpid[v] not in vbuf_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
 va_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in val_pid and fs_ok[v]], dtype=int)
@@ -123,7 +124,13 @@ class Enc(nn.Module):
 # removed after audit r4 I1: the injected footprints were impossible full clear-cuts.) Defaults 0 keep the older models (and their checkpoints) unchanged.
 SITE_ATTR = os.environ.get('SITE_ATTR', '0') == '1'; PAIR_ALL = os.environ.get('PAIR_ALL', '0') == '1'
 PAIR_HMAX = float(os.environ.get('PAIR_HMAX', 25.0))
-NJ = D_Z + (1 if AGE_CH else 0)                                            # jump-network outputs (AGE_CH: + the clock-reset logit)
+# r13 model switches (docs/DECISIONS.md G29-G31; the new configs set them, defaults keep the older checkpoints loadable):
+# SIGREG_MEAN = 1: SIGReg tests the projections against N(0, 1) INCLUDING location (centring left the mean free: 11-12 of 16 dimensions sat on the ±3 bound);
+# JUMP_RESET = 1: every dimension's jump is a learned partial reset toward a learned post-disturbance state, r ⊙ (z_post − z) + 0.5 tanh(shift) (a ±1
+#   bounded jump could not represent a stand-replacing change, median max |Δz| 4.5); STATE_ATTR = 1: the attractor depends on the state too, A + Am([soil, z])
+#   (the LTC equilibria were confined to the box between 0 and A(soil))
+SIGREG_MEAN = os.environ.get('SIGREG_MEAN', '0') == '1'; JUMP_RESET = os.environ.get('JUMP_RESET', '0') == '1'; STATE_ATTR = os.environ.get('STATE_ATTR', '0') == '1'
+NJ = 2 * D_Z if JUMP_RESET else D_Z + (1 if AGE_CH else 0)                  # jump-network outputs (shift + reset logits; AGE_CH alone: + the clock-reset logit)
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
     sparse_j = False
     def __init__(s):
@@ -131,12 +138,18 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         s.g = nn.Sequential(nn.Linear(D_Z + ns, 64), nn.Tanh(), nn.Linear(64, D_Z)); s.A = nn.Parameter(torch.zeros(D_Z)); s.ltau = nn.Parameter(torch.full((D_Z,), 2.0))
         s.J = nn.Sequential(nn.Linear(D_Z + NC + 2, 64), nn.GELU(), nn.Linear(64, NJ))
         if AGE_CH: s.lrho = nn.Parameter(torch.zeros(1))                  # (AGE_CH) log clock rate: the BA-weighted mean age advances < 1 yr / yr (ingrowth, mortality)
-        if SITE_ATTR:
-            s.Am = nn.Sequential(nn.Linear(ns, 64), nn.Tanh(), nn.Linear(64, D_Z)); nn.init.zeros_(s.Am[2].weight); nn.init.zeros_(s.Am[2].bias)
-    def jump(s, z, ev):
+        if SITE_ATTR or STATE_ATTR:
+            s.Am = nn.Sequential(nn.Linear(ns + (D_Z if STATE_ATTR else 0), 64), nn.Tanh(), nn.Linear(64, D_Z)); nn.init.zeros_(s.Am[2].weight); nn.init.zeros_(s.Am[2].bias)
+        if JUMP_RESET: s.P = nn.Sequential(nn.Linear(NC + 2 + ns, 64), nn.Tanh(), nn.Linear(64, D_Z))   # post-disturbance state from (event, soil)
+    def jump(s, z, ev, so=None):
         """bounded disturbance jump of the state; with AGE_CH, dimension 0 (the age clock) is RESET toward age 0 by a learned fraction r (a clear-cut of a
         100-yr stand needs −2.5 on the clock, beyond any bounded additive jump: audit r5 I1) plus a small bounded shift (thinning from below raises the age)"""
         o = s.J(torch.cat([z, ev], -1)); jd = torch.tanh(o[:, :D_Z])
+        if JUMP_RESET:                                                  # (G30) convex partial reset toward z_post + a small bounded shift; the clock resets to age 0
+            r = torch.sigmoid(o[:, D_Z:2 * D_Z]); zp = 3 * torch.tanh(s.P(torch.cat([ev, so], -1)))
+            if AGE_CH: zp = torch.cat([torch.full_like(zp[:, :1], -AGE_C / AGE_S), zp[:, 1:]], 1)
+            sc = torch.full((D_Z,), 0.5); sc[0] = 0.25 if AGE_CH else 0.5
+            return r * (zp - z) + sc * jd
         if not AGE_CH: return jd
         r = torch.sigmoid(o[:, D_Z:D_Z + 1]); return torch.cat([r * (-AGE_C / AGE_S - z[:, :1]) + 0.25 * jd[:, :1], jd[:, 1:]], 1)
     def forward(s, z, start, stop, dist, soil, end=None, rs=None, re=None, ra=None):
@@ -152,20 +165,21 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         ra = torch.zeros_like(start, dtype=torch.bool) if ra is None else ra
         fs_, fe_ = torch.floor(start), torch.floor(end)
         y0 = int(math.floor(start.min().item())); out = {st: z for st in stop if st < max(y0, YEARS[0])}   # stops before the run: initial state (masked by the caller)
-        Aa = s.A + s.Am(soil) if SITE_ATTR else s.A                          # (SITE_ATTR: the site's attractor; soil is constant along the run)
+        Aa = s.A + s.Am(soil) if (SITE_ATTR and not STATE_ATTR) else s.A      # (SITE_ATTR: the site's attractor; soil is constant along the run)
         for j, y in enumerate(range(max(y0, YEARS[0]), YEARS[-1] + 1)):
             dt = (torch.clamp(end, max=y + 1) - torch.clamp(start, min=y)).clamp(0, 1).unsqueeze(-1)   # part of year y inside [start, end]
             jj = y - YEARS[0]
             g = torch.sigmoid(s.g(torch.cat([z, soil], -1)))
-            lam = 1 / torch.exp(s.ltau) + g; zs = g * 3 * torch.tanh(Aa) / lam   # exact (exponential) integration over dt; attractor bounded (|A| ≤ 3)
+            if STATE_ATTR: Aa = s.A + s.Am(torch.cat([soil, z], -1))            # (G31) state-dependent attractor, frozen within the year
+            lam = 1 / torch.exp(s.ltau.clamp(-5, 10)) + g; zs = g * 3 * torch.tanh(Aa) / lam   # exact (exponential) step; attractor bounded (|A| ≤ 3); τ clamped (r13 B-5)
             zn = zs + (z - zs) * torch.exp(-lam * dt)
             z = torch.cat([z[:, :1] + dt * torch.exp(s.lrho) / AGE_S, zn[:, 1:]], 1) if AGE_CH else zn    # (AGE_CH: dimension 0 is the age clock)
             act = ((((start <= y + 0.5) & ~(rs & (fs_ == y))) | (ra & ~rs & (fs_ == y))) & ((end >= y + 0.5) | (re & (fe_ == y)))).float().unsqueeze(-1)   # visit-year rule
             ev = dist[:, jj]; has = (ev[:, :NC].sum(-1, keepdim=True) + ev[:, NC + 1:NC + 2] > 0).float() * act
             if s.sparse_j:                                                  # (v4) the jump network only on the rows with an event: same result, ~1/20 of the cost
                 ix = has.squeeze(-1).nonzero(as_tuple=True)[0]
-                if len(ix): z = z.index_add(0, ix, s.jump(z[ix], ev[ix]))
-            else: z = z + has * s.jump(z, ev)                               # bounded jump
+                if len(ix): z = z.index_add(0, ix, s.jump(z[ix], ev[ix], soil[ix]))
+            else: z = z + has * s.jump(z, ev, soil)                         # bounded jump
             for st in stop:
                 if y == st: out[st] = z
         return out
@@ -223,18 +237,27 @@ if ARCH == 'v4':
 elif ARCH == 'v3':
     enc, flow, dec, qn = Enc(), Flow(), Dec(), Q(); h22, h25 = nn.Linear(D_Z, 64), nn.Linear(D_Z, 64)
 else: raise ValueError(f'ARCH must be v3 or v4, got {ARCH}')
-if AGE_CH:
-    with torch.no_grad(): flow.J[-1].bias[D_Z:].fill_(-2.0)                 # clock reset fraction starts small (sigmoid(−2) = 0.12)
+if AGE_CH or JUMP_RESET:
+    with torch.no_grad(): flow.J[-1].bias[D_Z:].fill_(-2.0)                 # reset fractions start small (sigmoid(−2) = 0.12)
 print(f'ARCH {ARCH}: D_Z {D_Z}; parameters enc {sum(p.numel() for p in enc.parameters()):,} flow {sum(p.numel() for p in flow.parameters()):,} '
       f'dec {sum(p.numel() for p in dec.parameters()):,} heads {sum(p.numel() for p in [*h22.parameters(), *h25.parameters()]):,}', flush=True)
 params = [*enc.parameters(), *flow.parameters(), *dec.parameters(), *qn.parameters(), *h22.parameters(), *h25.parameters()]
 opt = torch.optim.AdamW(params, lr=float(os.environ.get('LR', 1e-3)), weight_decay=1e-4)
 def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):
     """LeJEPA SIGReg: Epps-Pulley distance between the empirical characteristic function of random 1-D projections of z and that of N(0, 1)."""
-    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z - z.mean(0)) @ u                       # [n, nproj]
+    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z if SIGREG_MEAN else z - z.mean(0)) @ u   # [n, nproj] (SIGREG_MEAN: location tested too, G29)
     arg = p.unsqueeze(-1) * t                                                                            # [n, nproj, T]
     ecf_re, ecf_im = torch.cos(arg).mean(0), torch.sin(arg).mean(0); tgt = torch.exp(-t ** 2 / 2)
     w = torch.exp(-t ** 2 / 2); return (((ecf_re - tgt) ** 2 + ecf_im ** 2) * w).mean()
+def latent_stats(vs, bs=2048):
+    """latent health on encoded visits (G29, pre-registered): per non-clock dimension |mean| ≤ 2.0 (no collapse onto the ±3 encoder bound) and the effective
+    rank (participation ratio of the covariance eigenvalues) ≥ (non-clock dims) / 4"""
+    with torch.no_grad():
+        z = torch.cat([enc(torch.tensor(vs[i:i + bs]), vyear[vs[i:i + bs]]) for i in range(0, len(vs), bs)])
+    zc = z[:, 1:] if AGE_CH else z; mu = zc.mean(0); ev_ = torch.linalg.eigvalsh(torch.cov(zc.T)).clamp(min=0)
+    pr_ = float(ev_.sum() ** 2 / (ev_ ** 2).sum().clamp(min=1e-12)); d_ = zc.shape[1]
+    return dict(n=len(vs), dims=d_, max_abs_mean=float(mu.abs().max()), n_dims_abs_mean_gt2=int((mu.abs() > 2.0).sum()), effective_rank=pr_,
+                ok=bool(float(mu.abs().max()) <= 2.0 and pr_ >= d_ / 4))
 def sample_cands(pids, K):
     idx = []
     for p in pids:
@@ -319,7 +342,7 @@ def pair_clusters(p_, y1, y2, a, b):
         if hi < lo: lo = hi = (a if c['hi'] < a else b)
         out.append(dict(c, lo=lo, hi=hi))
     return out
-pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0, 'fallback_all': 0}
+pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0}
 SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
 PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' | 'period'
@@ -333,11 +356,15 @@ def pair_set(v1, v2, blk=None, span=None):
     rule reads the MINIMUM BA ratio over them (over 15-25 yr a clear-cut regrows above 0.6 of v1: audit r4 I2). Records are those RECORDED in (v1, v2],
     windows clipped to the years the flow applies (audit r5 I3 / M2)."""
     blk = vblk[v2] if blk is None else blk; span = [v2] if span is None else span
+    span = [u for u in span if fs_ok[u]] or [v2]                       # (G35) severity / collapse ratios only over visits passing MIN_FSHARE
+    if 'fsub' in V.columns and abs(float(V.fsub.values[v2]) - float(V.fsub.values[v1])) >= 0.25: blk = True   # (G38) end-to-end forest-share change
     p_ = vpid[v1]
     if p_ not in cand_of: return None
     if PAIR == 'plot': return cand_of[p_]
     cid, pr = cand_of[p_]; y1, y2 = float(vyr[v1]), float(vyr[v2]); per = DIST[cid].numpy(); m = np.ones(len(cid), bool)
     ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2]), pair_ra(v1, v2)); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
+    if yb > G2.EVID_END: blk = True                                    # (G36) no stand-replacing evidence after EVID_END: the period cannot be 'undisturbed'
+    be_ = min(b, G2.EVID_END - YEARS[0])                               # outcome-only windows end at the evidence window
     pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if c['lr'] >= 4]; sk0 = nanch.get('event_skipped', 0)
     for c in cl_:                                       # each detectable FIA event cluster of the period: compatible evidence in its window
         lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
@@ -353,8 +380,8 @@ def pair_set(v1, v2, blk=None, span=None):
             if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
         if r_ < 0.3: m = _narrow(m, srw, 'replacing'); loss_applied = True; nanch['replacing'] = nanch.get('replacing', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'partial'); nanch['partial'] = nanch.get('partial', 0) + 1
-    if SEVER2 and not cl_ and r_ is not None and b >= a:   # training only, pairs without a detectable record: the measured outcome alone
-        srw = (np.maximum(per[:, a:b + 1, G2.IX['harvest']], per[:, a:b + 1, G2.H_]) >= 0.5).any(1)
+    if SEVER2 and not cl_ and r_ is not None and be_ >= a:   # training only, pairs without a detectable record: the measured outcome alone
+        srw = (np.maximum(per[:, a:be_ + 1, G2.IX['harvest']], per[:, a:be_ + 1, G2.H_]) >= 0.5).any(1)
         if r_ < 0.3: m = _narrow(m, srw, 'outcome_loss'); loss_applied = True; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'outcome_kept'); nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
     collapse = SEVER and r_ is not None and r_ < 0.3     # training only: a measured major loss (min BA ratio < 0.3) is no 'undisturbed' period (r8 M3)
@@ -408,7 +435,8 @@ for ep in range(EP):
         for yr, head, sl in ((2022, h22, A22), (2025, h25, A25)):
             ok = (cst <= yr + 1).float(); pred = head(st[yr]); d = d + ok * ((pred - AEF[cidx][:, sl]) ** 2).sum(-1); n_t = n_t + ok
         d = (d / n_t.clamp(min=1)).view(-1, K)
-        mil = -(torch.logsumexp(-d / TEMP, 1) - math.log(K)).mean() * TEMP
+        wmil = (~VCONV[v]).float()                                         # (G41) plots converted to non-forest before the 2022 mask: no AlphaEarth MIL
+        mil = (-(torch.logsumexp(-d / TEMP, 1) - math.log(K)) * wmil).sum() / wmil.sum().clamp(min=1) * TEMP
         post = torch.softmax(-d.detach() / TEMP, 1)                                                        # posterior over the sampled candidates
         # remeasurement pairs: flow z(v1) along each candidate's history to v2's year
         has2 = [i for i, vv in enumerate(v.tolist()) if vv in pairs_of]; tgt2 = [pairs_of[v[i].item()][np.random.randint(len(pairs_of[v[i].item()]))] for i in has2]
@@ -506,7 +534,8 @@ with torch.no_grad():
         return ev
     bk_set = set(map(tuple, pd.read_parquet(f'{ROOT}/data/proto/baker/plots.parquet')[['st', 'u', 'c', 'p']].values))
     Pk = P.set_index('pid'); mk_b = torch.tensor([tuple(Pk.loc[vpid[v], ['st', 'u', 'c', 'p']]) in bk_set for v in te_last])
-    ev = {'all_heldout': metrics(torch.ones(len(te_last), dtype=torch.bool)), 'baker_50km_heldout': metrics(mk_b) if mk_b.sum() > 5 else None}
+    ev = {'all_heldout': metrics(torch.ones(len(te_last), dtype=torch.bool)), 'baker_50km_heldout': metrics(mk_b) if mk_b.sum() > 5 else None,
+          'latent_test': latent_stats(np.asarray(te_v)), **({'latent_validation': latent_stats(np.asarray(va_v))} if VAL_SPLIT and len(va_v) else {})}   # (G29)
     # the same metrics on the VALIDATION plots (VAL_SPLIT): model choices (v3 vs v4, seeds) are made here, the test block above is the report (r9)
     va_last = last[last.pid.isin(val_pid & have)].vid.values if VAL_SPLIT else np.array([], dtype=int)
     if len(va_last) > 5:
