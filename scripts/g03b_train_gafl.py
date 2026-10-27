@@ -537,7 +537,7 @@ for ep in range(EP):
 if SMOKE_B: print('SMOKE_BATCHES: training step ran; no checkpoint, no evaluation', flush=True); sys.exit(0)
 # the training switches (every stage switch g03b reads, its string value; None = unset) recorded in the checkpoint: the loss-only switches leave no
 # trace in the weights (G48.5 / gv_verify T4y). Older checkpoints without the key still load (only enc / flow / dec / q / h22 / h25 are read)
-SWITCHES = {'AGE_CH': os.environ.get('AGE_CH'), 'AGE_FLOW': os.environ.get('AGE_FLOW'), 'ARCH': os.environ.get('ARCH'),
+SWITCHES = {'AGE_CH': os.environ.get('AGE_CH'), 'AGE_DELTA': os.environ.get('AGE_DELTA'), 'AGE_FLOW': os.environ.get('AGE_FLOW'), 'ARCH': os.environ.get('ARCH'),
             'BATCH': os.environ.get('BATCH'), 'CF16': os.environ.get('CF16'), 'CURRIC': os.environ.get('CURRIC'), 'DATA': os.environ.get('DATA'),
             'DZ': os.environ.get('DZ'), 'EPOCHS': os.environ.get('EPOCHS'), 'JUMP_RESET': os.environ.get('JUMP_RESET'), 'KC': os.environ.get('KC'),
             'LOAD': os.environ.get('LOAD'), 'LOC': os.environ.get('LOC'), 'LR': os.environ.get('LR'), 'MIN_FSHARE': os.environ.get('MIN_FSHARE'),

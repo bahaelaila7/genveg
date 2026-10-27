@@ -79,7 +79,7 @@ STAGE_SWITCHES = {'STAND_DIAG', 'GV_REQUIRE_MAP', 'GV_CURATED_DB', 'GV_FIADB', '
                   'SEED', 'SEVERITY_ANCHOR', 'STANDS_RUN', 'TAG', 'TOPK', 'USE_B', 'W_COMP', 'W_SUM',
                   'STANDS_STAGE_JSON',                       # stands_cfg (imported by features): a stand-pipeline stage context must not leak in (r13 I-1)
                   'WORKSPACE', 'SIGREG_MEAN', 'JUMP_RESET', 'STATE_ATTR',   # (G29-G31)
-                  'SIGREG_FLOW', 'AGE_FLOW',                 # (G46.9)
+                  'SIGREG_FLOW', 'AGE_FLOW', 'AGE_DELTA',    # (G46.9; AGE_DELTA G49 / G50, off unless set)
                   'GV_DYN_JSON'}                             # (gv_verify T15: the production acceptance record, passed by the driver; G45.8)
 # switches only the driver sets (per stage / from other config keys): a config env section setting one is refused (r13 D-6)
 DRIVER_SET = {'GV_SKIP_U8', 'LOAD', 'SMOKE_BATCHES', 'STAND_DIAG', 'G06_ENFORCE', 'GV_REQUIRE_MAP', 'MODEL', 'SEED', 'USE_B', 'TAG', 'EVAL_LOC', 'DATA',

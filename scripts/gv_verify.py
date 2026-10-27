@@ -338,9 +338,9 @@ def t4x_check(ns_, SRC4, G4x, V, BAtk):
     ok4x = len(b4) >= 8 and all(res4['flagged'][k] == 0.0 for k in ('mil', 'q', 'qdec')) and all(abs(res4['unflagged'][k]) > 0 for k in ('mil', 'q', 'qdec')) and okB4
     return ok4x, (f'{len(b4)} training visits 2024.5+ with BA > 5: terms unflagged {res4.get("unflagged")}, flagged {res4.get("flagged")}; g04 trB: {len(trB4)} visits, planted converted inside {len(trB4 & set(int(x) for x in plB))}')
 # ---------------------------------------------------------------- T4y / T11i (G48.5 interfaces: checkpoint `switches`, g04_plots.parquet)
-T4Y_COMPARED = ('AGE_CH', 'AGE_FLOW', 'ARCH', 'BATCH', 'CF16', 'CURRIC', 'DZ', 'EPOCHS', 'JUMP_RESET', 'KC', 'LOC', 'LR', 'MIN_FSHARE', 'PAIR_ALL',
+T4Y_COMPARED = ('AGE_CH', 'AGE_DELTA', 'AGE_FLOW', 'ARCH', 'BATCH', 'CF16', 'CURRIC', 'DZ', 'EPOCHS', 'JUMP_RESET', 'KC', 'LOC', 'LR', 'MIN_FSHARE', 'PAIR_ALL',
                 'PAIR_ANCHOR', 'PAIR_HMAX', 'QD_WIN', 'SEVERITY_ANCHOR', 'SIGREG_FLOW', 'SIGREG_MEAN', 'SITE_ATTR', 'STATE_ATTR', 'T_PAIR', 'VAL_SPLIT',
-                'W_AGE', 'W_COMP', 'W_SUM')   # training switches: recorded value = configured value (unset = None); a new g03b switch (G49 AGE_DELTA) is
+                'W_AGE', 'W_COMP', 'W_SUM')   # training switches: recorded value = configured value (unset = None); a new g03b switch (as G49 AGE_DELTA was) is
 #   an unknown recorded name until it is added here (and to the driver's STAGE_SWITCHES), so T4y FAILs rather than ignore it
 T4Y_CONTEXT = ('DATA', 'MODEL', 'NT', 'LOAD', 'SMOKE_BATCHES', 'STAND_DIAG', 'SEED')     # run context / performance: not compared (SEED: from the MODEL name)
 def env_snapshot():
