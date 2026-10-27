@@ -2,11 +2,17 @@
 Every check recomputes a stage from the raw sources by a DIFFERENT code path (SQL instead of pandas, direct raster reads at stored coordinates, FIADB COND
 instead of curated_trees for events) and compares. Output: PASS / FAIL / SKIP / INFO lines + numbers; exit code 1 if anything fails.
   python scripts/gv_verify.py [n_sample=300]
-The paths it reads: VERIFY_INPUTS (data) and VERIFY_CODE (exec'd pipeline code), module constants the driver can import without running the checks.
+The paths it reads: VERIFY_INPUTS (data, the exact list the driver fingerprints: G45.7) and VERIFY_CODE (the pipeline code it execs / imports / scans),
+module constants the driver evaluates in a subprocess; importing this module runs no check (main() does). A test harness may call
+main(argv, force_pairs=[v1, ...], stop_after='T8') to put chosen pairs into every T8 sample and stop early (no environment switch).
+Every FAIL line ends with a provenance label (r14 G47.9): `stale` (a producing script's code hash recorded with the table — meta.json code_hash, the
+parquet provenance record of g02e / g02g / g02j, G46.6 — differs from the current script's, or none was recorded: the table predates G46.6) or
+`divergent` (the table was built by the current code, or the check reads no table: the code disagrees with the spec).
 
-PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r13] = first set in audit round 13 (before any run of it).
-  T0    0 hits                         a swallowed statement silently changes a stage (5 historical instances); list = check_comments.pipeline_scripts
-  T1a/c exact equality                 the visit set / order is a deterministic function of FIADB + the curated table (G40 bare / all-bare rules [r13])
+PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r13] / [r14] = first set in audit round 13 / 14 (before any run of it).
+  T0    0 hits; list unavailable = FAIL   a swallowed statement silently changes a stage (5 historical instances); list = the driver's pipeline_scripts() [r14: no fallback]
+  T1a/c exact equality                 the visit set / order is a deterministic function of FIADB + the curated table (G40 bare / all-bare rules [r13]; G46.1 incomplete visits out [r14])
+  T1r   0 table visits [r14]           G46.1: no table visit with FIADB live tallied trees >= 3 and curated ones < half of them (meta.json incomplete_visits: INFO)
   T1b   exact                          species keys are a deterministic ranking (ties by symbol)
   T1d-g rtol 1e-6 / 1e-9               the same arithmetic on the same records: only float noise may differ
   T1o   max |Δ| 1e-6 [r13]             token A / CR: the same weighted means, float noise only
@@ -16,7 +22,7 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T1k   <= 1 % of bare visits          pre-registered r7: a bare table visit with live FIADB trees is a false clear-cut target
   T1l   median 1 ± 0.02, < 2 % < 0.9   G14 (pre-registered r9): expansion factors identical by construction, residual should be ~0
   T1m   <= 2 % absent [r13]            A-8: FIADB live-tree plots in the curated L3 scope missing from the table bias the training population
-  T1n   exact [r13]                    G41 plot_converted is a deterministic FIADB rule
+  T1n   exact [r13; rule r14 G46.3]    plot_converted: the last FIADB visit dated <= 2022 is non-forest (non-forest land / water, no forest) after a forested one
   T1q   exact [r13]                    E-F8: the table must be built with the configured TOPK / NCAND / RADIAL_P
   T2a0  > 99.9 % keys within 0.2 km    annual-inventory coordinates of one plot key are one location
   T2a/b allclose (1e-3 m)              deterministic transforms
@@ -24,7 +30,7 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T3a   1e-3 m, all <= 1600 m          deterministic geometry; the fuzz disk radius
   T3b   all classes 1-4                candidates are forest land by construction
   T3c   2e-3                           float16 storage of AlphaEarth values in [-1, 1]
-  T3c2  median max|Δ| < 0.02, cos q05 > 0.98, n > 50 (GA+FL mosaic); T3c2z [r13] every R4 UTM zone (15-18), >= 4 footprints, min cos > 0.999 (source COGs)  re-quantisation noise; a 1-block shift gives 0.77-0.996
+  T3c2  median max|Δ| < 0.02, cos q05 > 0.98, n > 50 (GA+FL mosaic), 2022 and 2025 [2022: r14 G47.8]; T3c2z [r13] every R4 UTM zone (15-18), >= 4 footprints, min cos > 0.999 (source COGs)  re-quantisation noise; a 1-block shift gives 0.77-0.996
   T3d   err < 1e-3 relative            float16 storage of soils
   T3e   |Δ| <= 2e-3                    float16 storage of fractions in ninths / severities in thirds
   T3f   ratio spread < 1 + 2e-3        the prior is a product of the spec's factors; float16-free (float64) storage
@@ -32,71 +38,382 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T3j   exact [r13]                    g02e fia_negs = the FIA-protocol periods of the spec (G36 evidence end, G37 NONBLOCK, G39 lookback)
   T3h   all monotone, >= 10 plots [r13]  hi is a threshold; fewer than 10 plots with both classes is vacuous
   T3i   per state, year cells n >= 30 [r13]; post max < pre min and < clean − 0.05   time-axis alignment; pooled states hid KY / TN (G34)
+        [r14 G47.2] per evidence class of the REGION's table: the classes every detectable treatment row (lr >= 4) accepts are judged, the others INFO
+  T3k   exact [r14]                    G47.2: the verifier has its own evidence table for the region (else FAIL) and it equals meta.json evk (classes, window, lr per kind)
   T4a-c rtol 1e-4                      float32 model tensors
   T4d   >= 3200 m; VAL_SPLIT -> val non-empty [r13]   two 1.6 km disks cannot overlap
   T4e-m 1e-5 / 1e-7                    float32 closed forms of the flow
   T4n/o/p/q 1e-5 / 1e-4; SIGReg ratio > 20, |Δ| <= 25 % [r13]   G29-G31 closed forms; the shifted-cloud ratio is ~100x when the location is tested
   T4r   1e-6                           the loss vanishes at a perfect prediction
   T4v   exact [r13]                    MIN_FSHARE vetting is deterministic
+  T4w   1e-6 [r14]                     G46.20 / A14-8: a 2026 visit's flow state = the end-2025 state (the YEARS[-1] clamp), 2026 events dropped
+  T4x   exact 0 [r14]                  G46.7: converted plots carry no MIL / Q / Q-decode weight, no g04 B-likelihood (trB) visit, no pair
+  T4y   exact [r14]                    G47.8: the checkpoint's training switches (recorded, or implied by its tensor shapes) = the configured ones
   T4g   SIGReg(N) < 0.2 SIGReg(3N)     the test statistic must separate a scaled cloud
   T4i   max |freq − prior| < 0.02      19 200 draws: binomial sd <= 0.0036
   T4l   1e-3 yr                        float32 ages
   T5    < 5 % of dims |t| > 3.5        an unbiased estimator; 3.5 sd keeps the family-wise false alarm low over ~200 dims
-  T5s   [r13] weighted |bias| <= 0.5 x unweighted on dims with unweighted |t| > 3.5; aggregate: weighted sum t^2 < unweighted when the latter > df + 3 sqrt(2 df)   E-F5: weights must remove a material bias; INFO when none
+  T5s   [r13] aggregate: weighted sum t^2 < unweighted when the latter > df + 3 sqrt(2 df) (decides); per dim (weighted |bias| <= 0.5 x unweighted where
+        unweighted |t| > 3.5) report-only [r14 G47.7]; plots with a NON-CONSTANT incl_w only [r14] (constant weights: weighted = unweighted)   E-F5 / E14-8; INFO when none
   T6a-d exact / 2e-3 / err < 1 [r13 T6c, T6d]   as T3c-e (float16 storage); the stand offset is exact (500 stands)
   T7a-c exact                          deterministic joins
   T7e   rtol 1e-9 [r13]                the production LOC=history prior is a deterministic restriction + renormalisation
   T8*   exact sets, weights rel 1e-6 (T8, T8c) / 1e-5 (T8h) [r13 weights, T8h, T8p]   deterministic pair rules; float32 / float64 renormalisation noise only
-  T8b   (a) exact on 3000 + 1000 random pairs under both + LOAD=1 [r13]; (b) 0 violations, >= 1 pair   the evaluation must never see outcome-informed sets
+        [r14 G47.1] records = every FIADB record made at a visit dated in (v1, v2], table visit or not; mismatching pairs printed (T8, T8f, T8c, T8h)
+        [r14 G46.5] undisturbed constraints clipped to the evidence end; [r14 G46.7] no pair of a converted plot (T8p)
+  T8b   (a) exact on 3000 + 1000 random pairs under the configured PAIR_ANCHOR + LOAD=1 [r13]; (b) 0 violations, >= 1 pair   the evaluation must never see outcome-informed sets
+        [r14 G47.6] PAIR_ANCHOR / SEVERITY_ANCHOR read from the environment; supported both / period and 0 / 1, any other value FAILs
   T8c   PAIR_ALL=1 -> multi-horizon pairs exist [r13]   E-F6: an empty family is vacuous
+  T8h   [r14 G47.6] >= 300 consecutive pairs, >= 200 multi-horizon pairs (PAIR_ALL=1), >= 20 with a detectable cluster, >= 20 with a severity rule applied
+        (training config)   the sample must exercise the event and severity rules (the r13 size conditions were tautological)
   T9    rel err < 1e-3                 float32 EM posterior
   T10   exact, >= 1 constrained plot [r13]   deterministic; an all-unconstrained sample is vacuous
   T11   max |Δ| < 0.11                 rounding to 0.1 / 0.01 in the FE layer (g07 uses 2.47105 since r13: E-F10)
   T11b  1e-6                           the cohorts are scaled to the summary exactly
   T11c/d exact                         G5 / G19 / G24 / G33 gate rule re-derived; missing keys FAIL [r13 F#10]
   T11e/f/g exact, 1e-6 [r13]           g05 QMD / dominant key / coverage and g07 cohorts JSON are deterministic
-  T12   exact set equalities [r13]     E-F3: g04 calibration = validation plots, MDN fit outside them + 3.2 km, training-only pools, random (not parity) halves
-  T13   argmax at offset (0, 0)        pixel-exact windows peak at no shift
-  T14   no non-training plot, non-empty [r13 non-empty]   leakage
-  T15   G7: |Δ BA log change| <= 0.01 / yr, age ratio 0.7-1.3, n >= 20 per bin; G29: non-clock |mean| <= 2.0, effective rank >= D_Z / 4; set = val [r13]
-        pre-registered (G7 r4 / G29 r13) acceptance re-derived from the recorded bins, not trusted"""
-import sys, os, json, math, numpy as np, pandas as pd, duckdb, rasterio
+  T11h  exact [r14]                    G46.13: g05 maps with g04's estimator (the same `calibrated` helper and medoid draw, MS = 32 iid draws)
+  T11i  rel 1e-6 [r14]                 G46.11 / G46.12: g04's validation null baselines, calibration factors and map_accept recomputed from its per-plot dumps
+  T12   exact set equalities [r13]     E-F3: g04 calibration = validation plots, MDN fit outside them + 3.2 km, training-only pools, random halves
+        [r14 G47.5] every anchored statement assigned exactly once in g04 (else FAIL); behavioural null exclusion; halves not sorted / first-half / parity
+  T13   argmax at offset (0, 0)        pixel-exact windows peak at no shift; N/A (reason printed) in Region 4 [r14]
+  T14   no non-training plot, non-empty [r13 non-empty]   leakage; N/A in Region 4 [r14]
+  T15   [r14 G47.4 / G46.8 / G46.17] GV_DYN_JSON only (unset / missing: FAIL); latent key required: non-clock max |mean| <= 2, min sd >= 0.3, share
+        |z| > 2.9 <= 1 %; G7 per pre-registered horizon bin recomputed (true medians) from g06's per-pair dump: |Δ BA log change| <= 0.01 / yr, age
+        ratio 0.7-1.3, every bin n >= 20; set = val checked against the split (dump pairs = validation plots)"""
+import sys, os, json, math, ast, hashlib, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run; from common import curated_db, fiadb
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"
 AEF90 = os.environ.get('AEF90', '0') == '1'
 def _verify_inputs():
-    """every path this verifier reads under the current environment (r13 E-F12: the driver fingerprints them); stage outputs of the pipeline included"""
+    """every path main() reads under the current environment (G45.7: the driver fingerprints exactly this list): table files, stage outputs, rasters,
+    the dynamics record GV_DYN_JSON and the checkpoint MODEL; the exec'd pipeline code is VERIFY_CODE"""
     try: SR_ = stands_run()
     except FileNotFoundError: SR_ = {}
     try: yrs, soils = (lambda m_: (m_['years'], m_['soils']))(json.load(open(f'{D}/meta.json')))
     except Exception: yrs, soils = list(range(2000, 2026)), ['clay030', 'sand030', 'soc030', 'awc030', 'ph030', 'restrdepth']
+    MAPC = os.environ.get('GV_REQUIRE_MAP') != '0'                  # (vtab, GV_REQUIRE_MAP=0, reads no map-stage output)
     dd = [f'{D}/{f}' for f in ('meta.json', 'visits.parquet', 'tokens.parquet', 'pairs.parquet', 'plots.parquet', 'cands.parquet', 'cand_feat.npy', 'cand_hist.parquet',
                                'localisation.parquet', 'fia_events.parquet', 'fia_negs.parquet', 'stands.parquet', 'stand_feat.npy', 'cand_prior.parquet', 'location_em.json',
-                               'cand_loc_aef.parquet', 'visit_aef', 'stand_veg_v3.parquet', 'stand_cohorts_v3.parquet', 'bayes_eval.json')]
+                               'cand_loc_aef.parquet', 'visit_aef')]
+    if MAPC:
+        dd += [f'{D}/{f}' for f in ('stand_veg_v3.parquet', 'stand_cohorts_v3.parquet', 'bayes_eval.json') + tuple(G04_DUMPS)]
+        if os.environ.get('GV_DYN_JSON'): dd += [os.environ['GV_DYN_JSON'], g06_dump_path(os.environ['GV_DYN_JSON'])]
+        if os.environ.get('MODEL'): dd.append(f"{D}/{os.environ['MODEL']}")
     fe = os.environ.get('FE_GEOJSON', os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson'))
-    rs = [f'{ROOT}/data/aef/aef_2022.tif', f'{ROOT}/data/landfire/dist/dist_codes.csv', f'{ROOT}/data/proto/baker/plots.parquet']
+    rs = [f'{ROOT}/data/aef/aef_2022.tif', f'{ROOT}/data/landfire/dist/dist_codes.csv']
     if AEF90:
         rs += [f'{ROOT}/data/r4/land.tif', f'{ROOT}/data/r4/hansen_lossyear.tif', f'{ROOT}/data/r4/soils90/fill.json', f'{ROOT}/data/aef/aef_2025.tif', f'{ROOT}/data/aef/aef_index.parquet',
                f'{WS}/TIGER/tl_2024_us_county/tl_2024_us_county.shp'] + [f'{ROOT}/data/aef90/aef90_{y}.tif' for y in (2022, 2025)] + \
               [f'{ROOT}/data/r4/soils90/{k}.tif' for k in soils] + [f'{ROOT}/data/r4/dist/dist_{y}.tif' for y in yrs]
     else:
         rs += [f'{ROOT}/data/aef/aef_2025.tif', f'{ROOT}/data/hansen/lossyear.tif'] + [f'{ROOT}/data/soils/{k}.tif' for k in soils] + [f'{ROOT}/data/landfire/dist/dist_{y}.tif' for y in yrs]
-    return sorted(set([curated_db(), fiadb()] + dd + [fe, fe[:-len('.geojson')] + '_cohorts.json' if fe.endswith('.geojson') else fe + '_cohorts.json'] + rs +
-                      [SR_[k] for k in ('land_clean', 'tif') if k in SR_]))
-VERIFY_INPUTS = _verify_inputs()          # + the dynamics acceptance file(s) {D}/dynamics_check_*_history_s<seed>.json (T15; glob)
-VERIFY_CODE = [f'{ROOT}/scripts/{f}' for f in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g02b_build_gafl.py', 'check_comments.py', 'region.py', 'stand_runs.py', 'common.py')]
-def main():
-    NS = int(sys.argv[1]) if len(sys.argv) > 1 else 300
-    rng = np.random.default_rng(42); RES = []
+    fe2 = [fe, fe[:-len('.geojson')] + '_cohorts.json' if fe.endswith('.geojson') else fe + '_cohorts.json'] if MAPC else []
+    return sorted(set([curated_db(), fiadb()] + dd + fe2 + rs + [SR_[k] for k in (('tif',) if AEF90 else ('land_clean', 'tif')) if k in SR_]))
+def _verify_code():
+    """the pipeline code main() execs or imports, plus every script T0 scans (the driver's pipeline_scripts(): T0's verdict depends on all of them)"""
+    out = [f'{ROOT}/scripts/{f}' for f in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g05_map_stands.py', 'g02b_build_gafl.py', 'g02e_fia_records.py',
+                                           'g02g_history_consistency.py', 'g02j_stand_footprints.py', 'check_comments.py', 'region.py', 'stand_runs.py', 'common.py',
+                                           'features.py', 'stands_cfg.py')]
+    try:
+        import check_comments as _cc; out += list(_cc.pipeline_scripts(ROOT))
+    except Exception: pass                                       # (T0 then FAILs in main: the list is unavailable)
+    return sorted(set(out))
+# ---------------------------------------------------------------- interfaces of the r14 pipeline outputs (G46): file names the checks read
+G04_DUMPS = ()                                                                         # g04 per-plot dumps (G46.11 / G46.12; T11i)
+def g06_dump_path(dyn_json):
+    """g06's per-pair dump next to its acceptance record (G46.17; T15): the record's `pair_dump` (a file name in the same directory), else by name
+    (dynamics_check_<TAG>.json -> dynamics_pairs_<TAG>.parquet)"""
+    try: pf = json.load(open(dyn_json)).get('pair_dump')
+    except Exception: pf = None
+    b_ = os.path.basename(dyn_json)
+    if not pf: pf = ('dynamics_pairs_' + b_[len('dynamics_check_'):] if b_.startswith('dynamics_check_') else b_)[:-len('.json')] + '.parquet' if b_.endswith('.json') else b_ + '.parquet'
+    return os.path.join(os.path.dirname(dyn_json), pf)
+# ---------------------------------------------------------------- T15: the enforced dynamics acceptance, re-derived (G7 / G46.8 / G46.17 / G47.4)
+T15_BINS = ((0, 8), (8, 15), (15, 99))        # pre-registered horizon bins (yr, lo <= horizon < hi; G7 r4, kept by G46.17); every bin must be populated
+T15_NMIN = 20                                  # pairs per bin
+def t15_judge(dj, dump, val_pids):
+    """(G47.4) the pre-registered acceptance of g06's record dj re-derived: G46.8 latent criteria on the recorded non-clock statistics (max |mean| <= 2,
+    min sd >= 0.3, share |z| > 2.9 <= 1 %; the `latent` key required); per pre-registered horizon bin the TRUE medians recomputed from the per-pair dump
+    (rows of the acceptance set): n >= 20, |median predicted − observed BA log change| <= 0.01 / yr, observed age gain > 0 and the age-gain ratio 0.7-1.3;
+    set = 'val' and every dump pair of that set on a validation plot (val_pids, from the split). Returns (ok, the rule's verdict, problems, per-bin numbers)"""
+    why = []; ua = dj.get('undisturbed_acceptance', {}) if isinstance(dj, dict) else {}; lat = dj.get('latent') if isinstance(dj, dict) else None; lok = False
+    if not isinstance(lat, dict): why.append('no latent key (G46.8)')
+    else:
+        miss = [k for k in ('max_abs_mean', 'min_sd', 'share_abs_gt_2p9') if lat.get(k) is None]
+        if miss: why.append(f'latent lacks {miss} (G46.8)')
+        else: lok = float(lat['max_abs_mean']) <= 2.0 and float(lat['min_sd']) >= 0.3 and float(lat['share_abs_gt_2p9']) <= 0.01
+        if 'ok' in lat and bool(lat['ok']) != lok: why.append(f"g06's latent ok {lat['ok']} != the rule {lok}")
+    if ua.get('set') != 'val': why.append(f"acceptance set {ua.get('set')!r}, not 'val' (G7)")
+    if [tuple(b_) for b_ in ua.get('bins_required', [])] != list(T15_BINS): why.append(f"recorded bins {ua.get('bins_required')} != pre-registered {list(T15_BINS)}")
+    bins = {}
+    if dump is None: why.append('input missing: the per-pair dump (G46.17)')
+    else:
+        need = {'set', 'pid', 'horizon', 'pred_BA_logchange_per_yr', 'obs_BA_logchange_per_yr', 'pred_age_per_yr', 'obs_age_per_yr'}
+        if not need <= set(dump.columns): why.append(f'dump lacks columns {sorted(need - set(dump.columns))}')
+        else:
+            d_ = dump[dump.set == ua.get('set')]; off = sorted(set(int(p_) for p_ in d_.pid) - set(int(p_) for p_ in val_pids))
+            if off: why.append(f'{len(off)} acceptance-set plots are not validation plots, e.g. {off[:5]}')
+            for lo, hi in T15_BINS:
+                r_ = d_[(d_.horizon >= lo) & (d_.horizon < hi)]; n_ = len(r_)
+                if n_ < T15_NMIN: bins[(lo, hi)] = (n_, None); continue
+                mp, mo = float(np.median(r_.pred_BA_logchange_per_yr)), float(np.median(r_.obs_BA_logchange_per_yr))
+                ap, ao = float(np.median(r_.pred_age_per_yr)), float(np.median(r_.obs_age_per_yr))
+                ok_ = abs(mp - mo) <= 0.01 and ao > 0 and 0.7 <= ap / ao <= 1.3; bins[(lo, hi)] = (n_, ok_)
+                rec_ = dj.get(f'undisturbed_h{lo}_{hi}', {})
+                if rec_ and any(abs(float(rec_.get(k_, np.nan)) - v_) > 1e-9 for k_, v_ in (('median_pred_logchange_per_yr', mp), ('median_obs_logchange_per_yr', mo),
+                                                                                         ('median_pred_age_per_yr', ap), ('median_obs_age_per_yr', ao))):
+                    why.append(f'bin {lo}-{hi}: recorded medians != recomputed')
+    verdict = lok and len(bins) == len(T15_BINS) and all(v_[1] is True for v_ in bins.values())
+    if 'passed' in ua and bool(ua['passed']) != verdict: why.append(f"g06 recorded passed {ua['passed']} != the rule {verdict}")
+    return (not why) and verdict, verdict, why, bins
+# ---------------------------------------------------------------- the verifier's own FIA-record -> evidence tables, per region set (G47.2)
+def evidence_spec(region):
+    """{(record type 'T' / 'D', code): (evidence classes, (window lo, hi) around the record year, likelihood ratio)} for a region set (FIA state codes, any
+    order), written out from the specification independently of g02b's EVK_TABLES; None = the verifier has no table for that region (checks FAIL).
+    GA+FL: the STRICT data-derived rules (g09; 2026-10-22). 'H' = Hansen loss."""
+    reg = tuple(sorted({int(x) for x in region}))
+    if reg != (12, 13): return None
+    S = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'unknown', 'H'], (-1, 1), 4),     # cutting / site prep / regeneration
+         ('T', 30): (['harvest', 'chem', 'unknown', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'unknown', 'H'], (-2, 1), 4),           # accept LANDFIRE 'unknown' (2026-10-22)
+         ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
+    for cd in range(10, 23): S[('D', cd)] = (['insdis'], (-1, 1), 2)
+    for cd in (30, 31): S[('D', cd)] = (['fire'], (-1, 1), 2)
+    S[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
+    for cd in range(50, 55): S[('D', cd)] = (['weather'], (-1, 1), 2)
+    S[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
+    return S
+def spec_kind(t_, cd):
+    """the record kind (the name the table's evidence table uses) of an FIA code: TRTCD 10-50 -> T10-T50; DSTRBCD insects / disease 10-22, ground fire
+    30-31, crown fire 32, weather 50-54, human 80; other codes carry no kind"""
+    cd = int(cd)
+    if t_ == 'T': return f'T{cd}' if cd in (10, 20, 30, 40, 50) else None
+    return 'Dins' if 10 <= cd <= 22 else 'Dfire' if cd in (30, 31) else 'Dcrown' if cd == 32 else 'Dwx' if 50 <= cd <= 54 else 'Dhum' if cd == 80 else None
+def evk_divergence(spec, evk_meta, classes):
+    """(G47.2) the kinds whose evidence row differs between the verifier's spec and a table's meta.json evk (kind -> [class indices, [lo, hi], lr];
+    index len(classes) + 1 = Hansen loss, len(classes) = severity): [(kind, the spec's row(s), the table's row)], empty when they agree"""
+    nc_ = len(classes); nm = lambda i: 'H' if int(i) == nc_ + 1 else (classes[int(i)] if 0 <= int(i) < nc_ else f'?{int(i)}')
+    mine = {}
+    for (t_, cd), (cols, w, lr) in spec.items(): mine.setdefault(spec_kind(t_, cd), set()).add((frozenset(cols), (int(w[0]), int(w[1])), float(lr)))
+    theirs = {k: (frozenset(nm(c) for c in v[0]), (int(v[1][0]), int(v[1][1])), float(v[2])) for k, v in evk_meta.items()}
+    return [(k, sorted((sorted(a), w, l) for a, w, l in mine.get(k, ())), (sorted(theirs[k][0]), theirs[k][1], theirs[k][2]) if k in theirs else None)
+            for k in sorted(set(mine) | set(theirs)) if len(mine.get(k, ())) != 1 or k not in theirs or next(iter(mine[k])) != theirs[k]]
+def _assign_lines(tree, name):
+    """line numbers of every statement of a parsed script that binds `name` (assignment / augmented / annotated / walrus / for / with targets, def / class,
+    import alias)"""
+    out = set()
+    for n in ast.walk(tree):
+        tg = []
+        if isinstance(n, ast.Assign): tg = n.targets
+        elif isinstance(n, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor)): tg = [n.target]
+        elif isinstance(n, ast.NamedExpr): tg = [n.target]
+        elif isinstance(n, (ast.With, ast.AsyncWith)): tg = [i.optional_vars for i in n.items if i.optional_vars is not None]
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name == name: out.add(n.lineno)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)) and any((a_.asname or a_.name).split('.')[0] == name for a_ in n.names): out.add(n.lineno)
+        for t in tg:
+            if any(isinstance(m, ast.Name) and m.id == name for m in ast.walk(t)): out.add(n.lineno)
+    return out
+def t12_check(G4s, ns_, V, P, FSOK, VS12):
+    """T12 (r13 E-F3, r14 G47.5) on g04's source G4s and the exec'd g03b namespace ns_: (ok, detail). FSOK: the independent MIN_FSHARE vetting per visit;
+    VS12: VAL_SPLIT. Module level so a test harness can call it on a planted g04."""
+    import textwrap as _tw12, torch
+    ns12 = dict(ns_); _why12 = []; T4G = ast.parse(G4s); _L12 = G4s.splitlines()
+    _v12, _vp12 = np.arange(len(V)), ns_['vpid']; ns12['XL'] = {p_: None for p_ in ns_['cand_of']}; ns12['vv'] = np.array([v for v in _v12 if _vp12[v] in ns12['XL']]); ns12['vi'] = {v: i for i, v in enumerate(ns12['vv'])}
+    try:
+        exec(compile(G4s[G4s.index('# calibration plots:'):G4s.index("print(f'MDN fit visits")], 'g04', 'exec'), ns12)
+    except Exception as e_: _why12.append(f'set construction not executable ({type(e_).__name__}: {e_})')
+    ANCH12 = {'lastv = V[fs_ok]': ('lastv',), 'trp_ = set(': ('trp_',), 'te_l = [': ('te_l', 'tr_l'), 'trs_v = [': ('trs_v',), 'p_trl = np.array(': ('p_trl',),
+              'rec = lambda': ('rec',), 'cal_m = rec(': ('cal_m', 'te_m'), '_cp = sorted(': ('_cp', '_hp'), 'hA = [': ('hA', 'hB')}
+    for pre, names in ANCH12.items():
+        hit = [i + 1 for i, ln in enumerate(_L12) if ln.strip().startswith(pre)]
+        if len(hit) != 1: _why12.append(f'anchor {pre!r}: {len(hit)} lines in g04 (exactly one required)'); continue
+        for nm_ in names:
+            al = _assign_lines(T4G, nm_)
+            if al != {hit[0]}: _why12.append(f'{nm_!r} assigned on g04 lines {sorted(al)}, not only on its anchored line {hit[0]} (G47.5)')
+        try: exec(compile(_tw12.dedent(_L12[hit[0] - 1]).strip(), 'g04', 'exec'), ns12)
+        except Exception as e_: _why12.append(f'{pre!r}: {type(e_).__name__}: {e_}')
+    # g04's own null_pred (its definition executed here) on a pool PLANTED with the judged half's visits at absurd values: wherever g04 calls null_pred on a
+    # gate / validation half `cb`, its own excl expression must remove them (the result equals the unplanted pool's), and without excl they must show
+    _nul12 = None
+    if not _why12:
+        try:
+            fdef = next(n for n in ast.walk(T4G) if isinstance(n, ast.FunctionDef) and n.name == 'null_pred')
+            ns12['o_tr'] = ns_['obs_summ'](torch.tensor(np.asarray(ns12['tr_l'], int))); ns12['y_tr'] = ns_['vyear'][np.asarray(ns12['tr_l'], int)]
+            ns12['FALLBACK'] = {'knn_queries_with_lt5_in_window': {}, 'null_queries_without_pool': {}}; ns12['FB_SET'] = 'gv_verify'
+            exec(compile(_tw12.dedent(ast.get_source_segment(G4s, fdef)), 'g04', 'exec'), ns12)
+            calls = [n for n in ast.walk(T4G) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'null_pred' and any(isinstance(m, ast.Name) and m.id == 'cb' for a_ in n.args for m in ast.walk(a_))]
+            hb_ = list(ns12['hB']); jud = set(int(x) for x in _vp12[hb_]); yq = ns_['vyear'][hb_]
+            base = {k_: ns12[k_] for k_ in ('p_trl', 'o_tr', 'y_tr')}
+            nul0 = ns12['null_pred'](yq, excl=jud)
+            ns12['p_trl'] = np.concatenate([base['p_trl'], _vp12[hb_]]); ns12['y_tr'] = torch.cat([base['y_tr'], yq]); ns12['o_tr'] = [torch.cat([o_.float(), torch.full((len(hb_),) + tuple(o_.shape[1:]), 1e6)]) for o_ in base['o_tr']]
+            res_c = []
+            for cl in calls:
+                kw = next((k_.value for k_ in cl.keywords if k_.arg == 'excl'), None)
+                if kw is None: res_c.append((cl.lineno, 'no excl')); continue
+                ns12['cb'] = hb_; ns12['ca'] = list(ns12['hA']); ex_ = set(int(x) for x in eval(compile(ast.Expression(kw), 'g04', 'eval'), ns12))
+                got = ns12['null_pred'](yq, excl=ex_); res_c.append((cl.lineno, all(torch.allclose(g_.float(), n_.float(), equal_nan=True) for g_, n_ in zip(got[:3], nul0[:3]))))
+            leak = ns12['null_pred'](yq, excl=None); shows = not all(torch.allclose(l_.float(), n_.float(), equal_nan=True) for l_, n_ in zip(leak[:3], nul0[:3]))   # (the planted pool moves the medians)
+            for k_, v_ in base.items(): ns12[k_] = v_
+            _nul12 = (len(calls) > 0 and all(r_ is True for _, r_ in res_c) and shows, f'{len(calls)} gate / validation null calls {res_c}, planted pool shows without excl {shows}')
+        except Exception as e_: _nul12 = (False, f'null_pred not testable ({type(e_).__name__}: {e_})')
+    if _why12: return False, '; '.join(_why12)
+    trP, vaP, teP = set(_vp12[ns_['tr_v']]), set(_vp12[ns_['va_v']]), set(_vp12[ns_['te_v']]); have12 = set(ns_['cand_of'])
+    calE = (vaP & have12) if VS12 else set(ns12['cal_pid'])
+    _Pxy = P.set_index('pid')[['x', 'y']]; _cx = _Pxy.loc[sorted(calE)].values if calE else np.zeros((0, 2)); _dmin = np.full(len(_Pxy), np.inf)
+    for i_ in range(0, len(_cx), 500): _dmin = np.minimum(_dmin, np.sqrt(((_Pxy.values[:, None, :] - _cx[None, i_:i_ + 500, :]) ** 2).sum(-1)).min(1))
+    dmin12 = dict(zip(_Pxy.index.values, _dmin))
+    fitE = {int(v) for v in ns_['tr_v'] if _vp12[v] not in calE and dmin12[_vp12[v]] >= 3200 and _vp12[v] in ns12['XL']}; fitG = {int(ns12['vv'][i]) for i in ns12['trA']}
+    lastE = {}                                                    # last visit passing MIN_FSHARE of every plot (independent share)
+    for v in np.flatnonzero(FSOK):
+        p_ = _vp12[v]
+        if p_ not in lastE or V.year.values[v] > V.year.values[lastE[p_]]: lastE[p_] = v
+    gateE = {lastE[p_] for p_ in calE if p_ in lastE and 2022.0 <= V.year.values[lastE[p_]] < 2026.0}; gateG = set(ns12['cal_m'])
+    hA_, hB_ = {_vp12[v] for v in ns12['hA']}, {_vp12[v] for v in ns12['hB']}; hall = hA_ | hB_
+    srt = sorted(hall); seq = np.array([p_ in hA_ for p_ in srt]); nA, nB = int(seq.sum()), int((~seq).sum()); runs = 1 + int((seq[1:] != seq[:-1]).sum()) if len(seq) else 0
+    mu_r = 1 + 2 * nA * nB / max(nA + nB, 1); var_r = 2 * nA * nB * (2 * nA * nB - nA - nB) / max((nA + nB) ** 2 * (nA + nB - 1), 1); zr = (runs - mu_r) / math.sqrt(var_r) if var_r > 0 else np.inf
+    par = np.mean([p_ % 2 == 0 for p_ in hA_]) if hA_ else np.nan
+    poolP = set(int(x) for x in ns12['p_trl']); knnE = {lastE[p_] for p_ in trP if p_ in lastE and lastE[p_] in ns12['vi']}
+    res12 = {'cal = validation plots': set(ns12['cal_pid']) == calE and (not VS12 or len(calE) > 0),
+             'MDN fit visits = training visits outside the calibration plots + 3.2 km': fitG == fitE and (min(dmin12[_vp12[v]] for v in fitG) >= 3200 if fitG else False),
+             'gate visits = last vetted visits 2022-25 of the calibration plots': gateG == gateE and len(gateG) > 0,
+             'gate halves disjoint, cover the gate set, balanced, random (runs test |z| < 4, both pid parities in half A: not parity / sorted / first-half)': not (hA_ & hB_) and hall == {_vp12[v] for v in gateG}
+                 and len(hall) >= 20 and abs(nA - nB) <= 1 and abs(zr) < 4 and 0.0 < par < 1.0,
+             'kNN / null pool = last vetted visits of training plots only': set(ns12['tr_l']) == knnE and poolP <= trP and not (poolP & (teP | vaP)),
+             'gate / validation null excludes the judged plots (behavioural)': bool(_nul12 and _nul12[0])}
+    return all(res12.values()), (
+          f"failing {[k for k, v in res12.items() if not v]}; calibration plots {len(calE)}, MDN fit visits {len(fitG)} (expected {len(fitE)}), gate visits {len(gateG)} (plot halves {nA} / {nB}, "
+          f"runs z {zr:.2f}, even-pid share of half A {par:.2f}), pool plots {len(poolP)}; null: {_nul12[1] if _nul12 else 'not run'}")
+def t11h_check(G4h, G5h, ns_):
+    """T11h (G46.13) on g04 / g05 sources and the exec'd g03b namespace: (ok, detail); module level for the planted-defect harness"""
+    import torch
+    T5h, T4h = ast.parse(G5h), ast.parse(G4h)
+    nsh = dict(ns_); exec(compile(G4h[G4h.index('# decoded summaries'):G4h.index('t0 = time.time()')], 'g04', 'exec'), nsh)       # (the slice g05 executes)
+    why_h = [f'g05 executes no {nm_}' for nm_ in ('MS', 'calibrated_median', 'medoid_draw') if nm_ not in nsh]
+    MSh = nsh.get('MS')
+    if MSh != 32: why_h.append(f'MS {MSh} != 32 (G46.13)')
+    own_h = [nm_ for nm_ in ('MS', 'calibrated_median', 'medoid_draw', 'lmed', 'summaries') if _assign_lines(T5h, nm_)]
+    if own_h: why_h.append(f'g05 defines its own {own_h}')
+    for nm_ in ('calibrated_median', 'medoid_draw'):
+        if not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == nm_ for n in ast.walk(T5h)): why_h.append(f'g05 never calls {nm_}')
+    smp = [n for n in ast.walk(T5h) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == 'sample' and isinstance(n.func.value, ast.Name) and n.func.value.id == 'mdn']
+    dr_ = [eval(compile(ast.Expression(n.args[-1]), 'g05', 'eval'), {'USE_B': False, 'Mz': -1, 'MS': MSh}) for n in smp]
+    if not smp or any(x != MSh for x in dr_): why_h.append(f'g05 draws {dr_} per production stand, not MS {MSh}')
+    mp_ = next((n for n in ast.walk(T4h) if isinstance(n, ast.FunctionDef) and n.name == 'map_path'), None)
+    if mp_ is None: why_h.append('g04 has no map_path')
+    else:
+        dfl = {a_.arg: d_ for a_, d_ in zip(mp_.args.args[-len(mp_.args.defaults):], mp_.args.defaults)} if mp_.args.defaults else {}
+        if not (isinstance(dfl.get('ms'), ast.Name) and dfl['ms'].id == 'MS'): why_h.append('g04 map_path does not draw MS by default')
+        ovr = [n.lineno for n in ast.walk(T4h) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'map_path' and (len(n.args) >= 3 or any(k_.arg == 'ms' for k_ in n.keywords))]
+        if ovr: why_h.append(f'g04 calls map_path with its own draw count on lines {ovr}')
+    torch.manual_seed(46); sh_ = torch.rand(7, 32) * 100 + 1; cfh = 0.37
+    got_h = nsh['calibrated_median'](sh_, cfh) if 'calibrated_median' in nsh else None
+    exp_h = torch.exp(torch.quantile(torch.log(sh_ + 1e-3), 0.5, dim=-1)) * math.exp(cfh) if got_h is not None else None
+    if got_h is None or not torch.allclose(torch.as_tensor(got_h).float(), exp_h.float(), rtol=1e-4, atol=1e-3): why_h.append('calibrated_median(s, cf) != e^cf · true median of s')
+    return not why_h, f'MS {MSh}; problems {why_h}'
+def t4x_check(ns_, SRC4, G4x, V, BAtk):
+    """T4x (G46.7) on g03b / g04 sources and the exec'd g03b namespace (pairs built): (ok, detail); updates the model (run it last)"""
+    import torch
+    LOOP4 = SRC4[SRC4.index('for ep in range(EP):'):SRC4.index('if SMOKE_B: print(')]
+    exec(compile(next(ln for ln in SRC4.splitlines() if ln.startswith('TEMP = 0.05')), 'g03b', 'exec'), ns_)     # (the loop's constants: TEMP, K, EP, B, t0)
+    _cand4 = np.array([v for v in ns_['tr_v'] if int(ns_['vpid'][v]) in ns_['cand_of'] and float(V.year.values[v]) >= 2024.5 and float(BAtk.get(int(v), 0.0)) > 5.0])
+    b4 = np.random.default_rng(44).choice(_cand4, min(16, len(_cand4)), replace=False) if len(_cand4) else np.zeros(0, int); res4 = {}
+    sv4 = {k: ns_.get(k) for k in ('tr_v', 'tr_good', 'E1', 'EP', 'SMOKE_B', 'B')}; vc4 = ns_['VCONV'].clone()
+    for tag4, flag in (('unflagged', False), ('flagged', True)):
+        ns_['VCONV'] = vc4.clone(); ns_['VCONV'][torch.tensor(b4)] = flag
+        ns_.update(tr_v=b4, tr_good=b4, E1=0, EP=1, SMOKE_B=1, B=len(b4)); torch.manual_seed(45); np.random.seed(45)
+        exec(compile(LOOP4, 'g03b', 'exec'), ns_); res4[tag4] = {k: float(ns_['tot'].get(k, np.nan)) for k in ('mil', 'q', 'qdec')}
+    ns_.update(sv4); ns_['VCONV'] = vc4
+    T4x_ = ast.parse(G4x)
+    stB = next(n for n in ast.walk(T4x_) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'trB' for t in n.targets))   # g04's trB statement
+    nsB = dict(ns_); nsB['loc_p'] = set(int(x) for x in ns_['vpid']); vcB = ns_['VCONV'].clone(); plB = np.asarray(ns_['tr_v'])[::7]; vcB[torch.tensor(plB)] = True; nsB['VCONV'] = vcB
+    exec(compile(ast.Module(body=[stB], type_ignores=[]), 'g04', 'exec'), nsB); trB4 = set(int(x) for x in nsB['trB'])
+    okB4 = len(trB4) > 0 and not (trB4 & set(int(x) for x in plB)) and trB4 == set(int(x) for x in ns_['tr_v']) - set(int(x) for x in plB) - set(np.flatnonzero(vc4.numpy()).tolist())
+    ok4x = len(b4) >= 8 and all(res4['flagged'][k] == 0.0 for k in ('mil', 'q', 'qdec')) and all(abs(res4['unflagged'][k]) > 0 for k in ('mil', 'q', 'qdec')) and okB4
+    return ok4x, (f'{len(b4)} training visits 2024.5+ with BA > 5: terms unflagged {res4.get("unflagged")}, flagged {res4.get("flagged")}; g04 trB: {len(trB4)} visits, planted converted inside {len(trB4 & set(int(x) for x in plB))}')
+# ---------------------------------------------------------------- LANDFIRE code tables, decoded independently of g02b (shared with gv_verify_upstream U8)
+def landfire_codes(path, classes):
+    """({(file year, code): (class index or None, event calendar year)}, {(file year, code): severity 1-3}) of the LANDFIRE annual-disturbance code tables:
+    type -> class (burned 'Unknown' -> fire; 'Increased Green', water and unmapped pixels are no disturbance); event year = CALENDAR_YR of the
+    fiscal-year products, else the file year; severity: Low 1 .. High 3 (Medium = Moderate in the 2013-14 / 2024-25 products; no rating = neutral 2)"""
+    codes = pd.read_csv(path, low_memory=False)
+    cmap = {'harvest': {'Clearcut', 'Harvest'}, 'thin': {'Thinning', 'Mastication', 'Other Mechanical', 'Mechanical Remove', 'Mechanical Add', 'Mechanical Unknown'},
+            'fire': {'Wildfire', 'Fire', 'Prescribed Fire', 'Wildland Fire Use', 'Wildland Fire', 'Unknown/Possibly Fire'}, 'insdis': {'Insects/Disease', 'Insects', 'Disease'},
+            'weather': {'Weather'}, 'chem': {'Herbicide', 'Chemical', 'Insecticide', 'Biological'}, 'dev': {'Development'}, 'unknown': {'Unknown', 'Unknown/Fire Doubtful'}}
+    codes['desc'] = (codes.DESCRIPTION.fillna('') + ' ' + codes.DESCRIPTIO.fillna('')).str.replace(r'\s+', ' ', regex=True)
+    codes['ey'] = codes.CALENDAR_YR.fillna(codes.year).astype(int)
+    def cls_of(r):
+        t = str(r.DIST_TYPE).strip()
+        if 'Green' in str(r.SEVERITY) or str(r.SEVERITY).strip() in ('Water', 'Nodata/Non-processing mask'): return None
+        if t == 'Unknown' and any(p in r.desc for p in ('indicates burned', 'burn probability is 95% or greater', 'most likely fire')): t = 'Wildfire'
+        return next((i for i, k in enumerate(classes) if t in cmap[k]), None)
+    SEVS = {'Low': 1, 'Unburned/Low': 1, 'Low-Medium': 1.5, 'Medium-Low': 1.5, 'Low-Moderate': 1.5, 'Moderate-Low': 1.5, 'Medium': 2, 'Moderate': 2, 'No Severity': 2,
+            'Medium-High': 2.5, 'High-Medium': 2.5, 'Moderate-High': 2.5, 'High-Moderate': 2.5, 'High': 3}
+    _sv = lambda r: SEVS['No Severity'] if pd.isna(r.SEVERITY) else SEVS[str(r.SEVERITY).strip()]
+    lk = {(int(r.year), int(r.VALUE)): (cls_of(r), int(r.ey)) for r in codes.itertuples()}
+    return lk, {(int(r.year), int(r.VALUE)): _sv(r) for r in codes.itertuples() if cls_of(r) is not None}
+# ---------------------------------------------------------------- provenance of the table (G46.6 / G47.9): stale vs divergent
+PROV_KEY = b'genveg_provenance'
+SCRIPT_OF = {'g02b': 'g02b_build_gafl.py', 'g02e': 'g02e_fia_records.py', 'g02g': 'g02g_history_consistency.py', 'g02j': 'g02j_stand_footprints.py'}
+PROV_FILE = {'g02e': 'fia_events.parquet', 'g02g': 'cand_hist.parquet', 'g02j': 'stands.parquet'}        # (g02b: meta.json code_hash)
+def code_hash(path):
+    """a script's provenance hash as G46.6 defines it: sha256 (hex) of ast.dump of the parsed module after removing the docstring of the module and of
+    every def / class (an emptied body becomes `pass`): comments, docstrings and formatting do not count"""
+    tree = ast.parse(open(path).read())
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body and isinstance(n.body[0], ast.Expr) \
+                and isinstance(n.body[0].value, ast.Constant) and isinstance(n.body[0].value.value, str):
+            n.body = n.body[1:] or [ast.Pass()]
+    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
+def recorded_provenance(d_):
+    """{script: (code hash of that script recorded with the table, the g02b hash recorded with it)} from meta.json code_hash (g02b) and the parquet
+    provenance records of g02e / g02g / g02j (None: nothing recorded)"""
+    out = {}
+    try: out['g02b'] = (json.load(open(f'{d_}/meta.json')).get('code_hash', {}).get('g02b'), None)
+    except Exception: out['g02b'] = (None, None)
+    import pyarrow.parquet as pq_
+    for s_, f_ in PROV_FILE.items():
+        try:
+            md_ = pq_.read_schema(f'{d_}/{f_}').metadata or {}; pr_ = json.loads(md_[PROV_KEY]) if PROV_KEY in md_ else {}
+            out[s_] = (pr_.get('code_hash', {}).get(s_), pr_.get('code_hash', {}).get('g02b'))
+        except Exception: out[s_] = (None, None)
+    return out
+def provenance_label(scripts, rec, cur):
+    """the stale / divergent label of a failing check whose inputs the given table scripts produced (rec: recorded_provenance, cur: current hashes)"""
+    if not scripts: return 'divergent (the check reads current pipeline code / outputs without a table code hash: the code disagrees with the spec)'
+    miss = [s_ for s_ in scripts if rec.get(s_, (None, None))[0] is None]
+    if miss: return f'stale (no code hash recorded for {", ".join(miss)}: the table predates G46.6; rebuild before triage)'
+    old = [s_ for s_ in scripts if rec[s_][0] != cur.get(s_)]
+    if old: return f'stale ({", ".join(old)} changed since the table was built)'
+    lag = [s_ for s_ in scripts if s_ != 'g02b' and rec[s_][1] is not None and rec[s_][1] != rec['g02b'][0]]
+    if lag: return f'stale ({", ".join(lag)} ran on an older g02b table)'
+    return f'divergent (built by the current {", ".join(scripts)}: the code disagrees with the spec)'
+# which table scripts produced the inputs of each check (by check id); checks absent here read no table output
+PRODUCERS = {**{k: ('g02b',) for k in ('T1a', 'T1b', 'T1c', 'T1d', 'T1e', 'T1f', 'T1g', 'T1h', 'T1i', 'T1j', 'T1k', 'T1l', 'T1m', 'T1o', 'T1q', 'T1r',
+                                       'T2a0', 'T2a', 'T2b', 'T2c', 'T3a', 'T3b', 'T3c', 'T3c0', 'T3c2', 'T3c2z', 'T3d', 'T3e', 'T3f', 'T3g', 'T3h', 'T3i', 'T3k',
+                                       'T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T5', 'T5s', 'T7a')},
+             'T1n': ('g02b', 'g02e'), 'T3j': ('g02b', 'g02e'), 'T4x': ('g02b', 'g02e'), 'T6a': ('g02b', 'g02j'), 'T6b': ('g02b', 'g02j'), 'T6c': ('g02b', 'g02j'),
+             'T6d': ('g02b', 'g02j'), 'T7b': ('g02b', 'g02e', 'g02g'), 'T7e': ('g02b', 'g02e', 'g02g'), 'T10': ('g02b', 'g02e', 'g02g'),
+             **{k: ('g02b', 'g02e') for k in ('T8p', 'T8', 'T8e', 'T8f', 'T8g', 'T8c', 'T8b', 'T8d')}, 'T8h': ('g02b', 'g02e', 'g02g')}
+VERIFY_INPUTS = _verify_inputs()
+VERIFY_CODE = _verify_code()
+def main(argv=None, force_pairs=(), stop_after=None):
+    argv = sys.argv if argv is None else argv; NS = int(argv[1]) if len(argv) > 1 else 300; FORCE = [int(x) for x in force_pairs]
+    rng = np.random.default_rng(42); RES = []; _rec0 = recorded_provenance(D)
+    _cur0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}') if os.path.exists(f'{ROOT}/scripts/{f_}') else None) for s_, f_ in SCRIPT_OF.items()}
     def check(name, ok, detail=''):
-        RES.append((name, bool(ok))); print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}", flush=True)
-    import glob as _g0, check_comments as _cc0
-    if hasattr(_cc0, 'pipeline_scripts'): _f0 = list(_cc0.pipeline_scripts(ROOT)); _src0 = 'check_comments.pipeline_scripts'      # the driver's canonical scan list (r13)
-    else: _f0 = sorted(_g0.glob(f'{ROOT}/scripts/g0*.py') + [f'{ROOT}/scripts/{x}' for x in ('gv_verify.py', 'gv_verify_upstream.py', 'genveg_pipeline.py', 'common.py')]); _src0 = 'fallback glob'
+        RES.append((name, bool(ok))); lab = '' if ok else f'  [{provenance_label(PRODUCERS.get(name.split()[0], ()), _rec0, _cur0)}]'
+        print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}{lab}", flush=True)
+    def done(tag):                                                        # (test harness: stop after the named block)
+        if stop_after == tag:
+            nf_ = sum(1 for _, ok in RES if not ok); print(f'\n(stopped after {tag}) {len(RES) - nf_} / {len(RES)} checks PASS'); return True
+        return False
+    import check_comments as _cc0
+    try: _f0 = list(_cc0.pipeline_scripts(ROOT)); _e0 = ''
+    except Exception as e_: _f0 = []; _e0 = f'; the driver\'s list is unavailable ({type(e_).__name__}: {e_})'
     _h0 = [(os.path.basename(f), ln) for f in _f0 for ln, _ in _cc0.swallowed(f)]
-    check('T0 no code swallowed by an inline comment in the pipeline scripts (static scan)', len(_f0) > 0 and not _h0, f'{len(_f0)} files ({_src0}); hits {_h0}')
+    check('T0 no code swallowed by an inline comment in the pipeline scripts (static scan of the driver\'s pipeline_scripts(), G47.8)', len(_f0) > 0 and not _h0, f'{len(_f0)} files; hits {_h0}{_e0}')
     M = json.load(open(f'{D}/meta.json')); from region import region_check; region_check(M); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
     # T1q (r13 E-F8): the table's recorded build switches = the configured ones (the driver passes the table config keys TOPK / NCAND / RADIAL_P; absent -> skipped)
     _m8 = {'TOPK': len(KEYS) - 2, 'NCAND': M.get('ncand'), 'RADIAL_P': M.get('radial_p')}; _e8 = {k: os.environ[k] for k in _m8 if os.environ.get(k) not in (None, '')}
@@ -105,6 +422,24 @@ def main():
     else: print('SKIP  T1q no TOPK / NCAND / RADIAL_P in the environment (the driver passes them)')
     # region switches (as g02b): REGION = FIA STATECDs; AEF90 = Region 4 rasters (AlphaEarth / soils at 90 m: a footprint = one 90 m pixel, centres = 1 mod 3)
     REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({','.join(map(str, REGION))})"; AEF90 = os.environ.get('AEF90', '0') == '1'
+    R4 = tuple(sorted(set(REGION))) != (12, 13)                    # Region 4 (any region set but GA+FL)
+    # T3k (G47.2) the verifier's own evidence table for this region set, and the table's meta.json evk against it. With no table for the region every
+    # spec-dependent check FAILs (it is still computed with the GA+FL table and its verdict shown, for diagnosis only)
+    SPEC = evidence_spec(REGION); NOSPEC = SPEC is None
+    if NOSPEC:
+        SPEC = evidence_spec((12, 13))
+        check('T3k the verifier has an evidence table for the region, = meta.json evk', False, f'no verifier evidence table for region {sorted(set(REGION))} (G47.2); spec checks FAIL')
+    elif 'evk' not in M: check('T3k the verifier has an evidence table for the region, = meta.json evk', False, 'input missing: meta.json has no evk (G46.4)')
+    else:
+        _dv = evk_divergence(SPEC, M['evk'], M['classes'])
+        check('T3k the verifier has an evidence table for the region, = meta.json evk (classes / window / likelihood ratio per record kind); evidence end 2024 (G36)',
+              not _dv and M.get('evid_end') == 2024, f'{len(M["evk"])} kinds in the table; diverging (kind, spec, table): {_dv}; meta.json evid_end {M.get("evid_end", "absent")}')
+    SPEC_CHECKS = {'T3f', 'T3j', 'T3i', 'T8', 'T8e', 'T8f', 'T8g', 'T8c', 'T8b', 'T8d', 'T8h', 'T9', 'T10'}
+    if NOSPEC:
+        _check0 = check
+        def check(name, ok, detail=''):
+            if name.split()[0] in SPEC_CHECKS: return _check0(name, False, f'no verifier evidence table for region {sorted(set(REGION))} (G47.2); with the GA+FL table: {"PASS" if ok else "FAIL"} {detail}')
+            return _check0(name, ok, detail)
     LAND = f'{ROOT}/data/r4/land.tif' if AEF90 else stands_run()['land_clean']
     AEFP = {y: f'{ROOT}/data/aef90/aef90_{y}.tif' if AEF90 else f'{ROOT}/data/aef/aef_{y}.tif' for y in (2022, 2025)}
     SOILP = (lambda k: f'{ROOT}/data/r4/soils90/{k}.tif') if AEF90 else (lambda k: f'{ROOT}/data/soils/{k}.tif')
@@ -126,7 +461,7 @@ def main():
     samp = V.sample(min(NS, len(V)), random_state=1)
     reg = duckdb.connect(); reg.register('samp', samp[key + ['vid']].assign(yr=samp.year))
     q = f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp, t.DIA dia, t.HT ht, t.CR cr, t.TPA_UNADJ tpa,
-                  t.estimated_age age, t.STATUSCD status, t.cond_stdorgcd org, t.CONDID cond
+                  t.estimated_age age, t.STATUSCD status, t.cond_stdorgcd org, t.CONDID cond, t.SUBP subp
            from curated_trees t join REF_SPECIES r on r.SPCD = t.SPCD where t.STATECD in {ST_SQL} and t.MEASDATE >= '2000-01-01'"""
     T = con.execute(q).df(); T['md'] = pd.to_datetime(T.md)
     # ---- the visit set, rebuilt independently from FIADB (pandas aggregation of per-condition rows; string dates):
@@ -146,16 +481,22 @@ def main():
     _f['fsw'] = np.minimum(_f.sp1, 1.0); _f['fmw'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1, 1.0), _f.fsw)          # shares of the WHOLE plot: TPA_UNADJ expands to it (densities)
     T['ds'] = T.md.dt.strftime('%Y-%m-%d'); T = T.merge(_cc[key + ['ds', 'cond', 'cs']], on=key + ['ds', 'cond'], how='left'); nT = len(T); T = T[T.cs == 1]
     _tv = T[key + ['ds']].drop_duplicates()
+    # (G46.1) INCOMPLETE curated visits: FIADB has >= 3 live tallied trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on forested conditions and the curated
+    # table fewer than half as many such trees (on the forested conditions) -> not a table visit (no tokens, no pair endpoint, no bare visit)
+    NCUR = T[(T.status == 1) & (T.tpa > 0) & (T.subp <= 4)].groupby(key + ['ds']).size().rename('n_cur').reset_index()
+    _iv = _tv.merge(NCUR, on=key + ['ds'], how='left').merge(_f[key + ['ds', 'nl', 'fs']], on=key + ['ds'], how='inner'); _iv['n_cur'] = _iv.n_cur.fillna(0)
+    INC = _iv[(_iv.nl >= 3) & (_iv.n_cur < 0.5 * _iv.nl)][key + ['ds', 'n_cur', 'nl', 'fs']]
+    _tvk = _tv.merge(INC[key + ['ds']].assign(_x=1), on=key + ['ds'], how='left'); _tvk = _tvk[_tvk._x.isna()][key + ['ds']]
     # (G40) + FIADB plots bare at EVERY forested visit whose EPA L3 ecoregion (FIADB data_plot_eco) is in the curated table's L3 scope (the L3s of its plots)
     _eco = _fx.execute(f"select statecd st, unitcd u, countycd c, plot p, epa_l3 l3 from data_plot_eco where statecd in {ST_SQL}").df()
     L3S = set(_tv[key].drop_duplicates().merge(_eco, on=key).l3.dropna()); _ab = _f.groupby(key).nl.max(); _ab = _ab[_ab == 0].reset_index()[key].merge(_eco, on=key)
     _ab = _ab[_ab.l3.isin(L3S)][key]
     _bare = _f[_f.nl == 0].merge(pd.concat([_tv[key].drop_duplicates(), _ab]).drop_duplicates(), on=key).merge(_tv.assign(_i=1), on=key + ['ds'], how='left')
     _bare = _bare[_bare._i.isna()][key + ['ds']]
-    EX = pd.concat([_tv, _bare]).merge(_f[key + ['ds', 'fs', 'fm', 'fsw', 'fmw', 'org']], on=key + ['ds'], how='inner'); EX = EX[EX.fs >= 0.1]
+    EX = pd.concat([_tvk, _bare]).merge(_f[key + ['ds', 'fs', 'fm', 'fsw', 'fmw', 'org']], on=key + ['ds'], how='inner'); EX = EX[EX.fs >= 0.1]
     EX['md'] = pd.to_datetime(EX.ds); EX = EX.sort_values(key + ['md']).reset_index(drop=True); EX['vid'] = np.arange(len(EX)); EX['year'] = EX.md.dt.year + (EX.md.dt.dayofyear - 0.5) / np.where(EX.md.dt.is_leap_year, 366.0, 365.0)
-    check('T1a visit set = curated forested-condition visits ∪ bare FIADB visits of their plots and of all-bare plots in the L3 scope, share >= 0.1 (rebuilt from FIADB)', len(EX) == len(V),
-          f'independent {len(EX)} (bare {len(_bare)}; all-bare plots in the L3 scope {len(_ab)}) table {len(V)}; only independent '
+    check('T1a visit set = complete curated forested-condition visits ∪ bare FIADB visits of their plots and of all-bare plots in the L3 scope, share >= 0.1 (rebuilt from FIADB)', len(EX) == len(V),
+          f'independent {len(EX)} (bare {len(_bare)}; all-bare plots in the L3 scope {len(_ab)}; incomplete curated visits left out {int((INC.fs >= 0.1).sum())}) table {len(V)}; only independent '
           f'{len(set(map(tuple, EX[key + ["ds"]].values)) - set(map(tuple, V.assign(ds=pd.to_datetime(V.md).dt.strftime("%Y-%m-%d"))[key + ["ds"]].values)))}, only table '
           f'{len(set(map(tuple, V.assign(ds=pd.to_datetime(V.md).dt.strftime("%Y-%m-%d"))[key + ["ds"]].values)) - set(map(tuple, EX[key + ["ds"]].values)))}; non-forest-condition tree records {nT - len(T)}')
     # T1m (r13 A-8) FIADB plots of the region with a live tallied tree on a forested visit (share >= 0.1) inside the curated L3 scope that are ABSENT from the table
@@ -163,22 +504,26 @@ def main():
     _ab1 = _lp1.merge(V[key].drop_duplicates().assign(_t=1), on=key, how='left'); _ab1 = _ab1[_ab1._t.isna()]
     check('T1m FIADB plots with live trees (region, curated L3 scope) absent from the table entirely <= 2 %', len(_lp1) > 0 and len(_ab1) / len(_lp1) <= 0.02,
           f'{len(_ab1)} of {len(_lp1)} plots absent ({len(_ab1) / max(len(_lp1), 1):.3f}); by state {_ab1.st.value_counts().to_dict()}')
-    # T1n (G41) visits.plot_converted = the plot has a FIADB visit up to 2022 with no forested and >= 1 non-forest condition after a forested visit (independent)
+    # T1n (G41, refined G46.3) visits.plot_converted = the plot's LAST FIADB visit dated <= 2022 (the forest-mask year) is non-forest — no forested
+    # condition and >= 1 condition of non-forest land or water (COND_STATUS_CD 2 / 3 / 4) — and an earlier visit was forested (independent)
+    _cv = _cc.assign(f1=(_cc.cs == 1).astype(int), f2=_cc.cs.isin([2, 3, 4]).astype(int)).groupby(key + ['ds']).agg(f1=('f1', 'max'), f2=('f2', 'max')).reset_index().sort_values(key + ['ds'])
+    _cv = _cv[_cv.ds <= '2022-12-31']; _cv['seen'] = _cv.groupby(key).f1.transform(lambda x: x.cummax().shift(1).fillna(0))      # a forested visit EARLIER
+    _cvl = _cv.groupby(key).tail(1); CONVP = set(map(tuple, _cvl[(_cvl.f1 == 0) & (_cvl.f2 == 1) & (_cvl.seen > 0)][key].astype(int).values))   # converted plot keys
     if 'plot_converted' in V.columns:
-        _cv = _cc.assign(f1=(_cc.cs == 1).astype(int), f2=(_cc.cs == 2).astype(int)).groupby(key + ['my']).agg(f1=('f1', 'max'), f2=('f2', 'max')).reset_index().sort_values(key + ['my'])
-        _cv['seen'] = _cv.groupby(key).f1.transform(lambda x: x.cummax().shift(1).fillna(0))                # a forested visit in an EARLIER year
-        _cvp = set(map(tuple, _cv[(_cv.f1 == 0) & (_cv.f2 == 1) & (_cv.my <= 2022) & (_cv.seen > 0)][key].astype(int).drop_duplicates().values))
+        _cvp = CONVP
         _cve = np.array([tuple(int(x) for x in r_) in _cvp for r_ in V[key].values]); _cvd = int((_cve != V.plot_converted.values.astype(bool)).sum())
-        check('T1n visits.plot_converted (g02e, G41) = independent FIADB recomputation (forested -> entirely non-forest by 2022)', _cvd == 0,
+        check('T1n visits.plot_converted (g02e, G41 / G46.3) = independent FIADB recomputation (last visit up to 2022 non-forest after a forested one)', _cvd == 0,
               f'{V[V.plot_converted.astype(bool)].pid.nunique()} converted plots in the table, expected {len(set(V[_cve].pid))}; mismatching visits {_cvd}')
-    elif os.environ.get('GV_REQUIRE_MAP') == '1': check('T1n visits.plot_converted present (g02e, G41)', False, 'column missing: rerun g02e')
-    else: print('SKIP  T1n visits.parquet has no plot_converted column (older g02e)')
+    else: check('T1n visits.plot_converted present (g02e, G41)', False, 'input missing: visits.parquet has no plot_converted column (G46.3: g03b refuses it); rerun g02e')
     Vs = V.sort_values('vid')
     check('T1c visit ids reproduce (sorted plot, date order)', len(EX) == len(V) and (EX[key].values == Vs[key].values).all() and (np.abs(EX.year.values - Vs.year.values) < 1e-9).all())
     # the independent visits carry the TABLE's visit ids from here on (matched by plot + date): a T1a / T1c failure must not cascade into every later check (r13 E-F7)
     _vd = V.assign(ds=pd.to_datetime(V.md).dt.strftime('%Y-%m-%d'))[key + ['ds', 'vid']]; EX = EX.drop(columns='vid').merge(_vd, on=key + ['ds'], how='inner')
     if len(EX) != len(V): print(f'   (T1a mismatch: {len(EX)} visits matched by plot + date; checks below compare on those)')
-    T = T.merge(EX[key + ['ds', 'vid', 'fs', 'fm', 'fsw', 'fmw']], on=key + ['ds']); Ts = T[T.vid.isin(samp.vid)]
+    T = T.merge(EX[key + ['ds', 'vid', 'fs', 'fm', 'fsw', 'fmw']], on=key + ['ds'])
+    _ns0 = len(samp); samp = samp[samp.vid.isin(set(EX.vid))]                      # (sampled table visits the independent visit set also has: no T1a cascade, E-F7)
+    if len(samp) < _ns0: print(f'   ({_ns0 - len(samp)} sampled table visits are not independent visits (T1a): left out of T1d-T1g / T4a-c / T4r)')
+    Ts = T[T.vid.isin(samp.vid)]
     live = Ts[(Ts.status == 1) & (Ts.dia > 0) & (Ts.tpa > 0) & (Ts.age > 0) & (Ts.ht > 0)].copy()
     _KS = set(k for k in KEYS if not k.startswith('_'))          # the TABLE's keys (T1b checks them against FIADB; a T1b failure must not crash the rest: r13 E-F7)
     live['key'] = [KEYS.index(s) if s in _KS else KEYS.index('_' + (g if g in ('S', 'H') else 'H')) for s, g in zip(live.sym, live.grp)]
@@ -211,6 +556,14 @@ def main():
     _nl = np.array([LIVE.get((int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)), 0) for a, b, c_, d, m in zip(_bare.st, _bare.u, _bare.c, _bare.p, _md)])
     check('T1k bare table visits (no cohort tokens) have no live FIADB trees on their forested conditions (<= 1 %)', len(_nl) == 0 or (_nl > 0).mean() <= 0.01,
           f'{len(_nl)} bare visits, with FIADB live trees {int((_nl > 0).sum())} ({(_nl > 0).mean() if len(_nl) else 0:.3f}), median live trees there {int(np.median(_nl[_nl > 0])) if (_nl > 0).any() else 0}')
+    # T1r (G46.1, A14-1) no TABLE visit is incomplete: FIADB live tallied trees on forested conditions (LIVE, T1k) >= 3 and the curated table's (NCUR)
+    # fewer than half of them; meta.json incomplete_visits shown for information
+    _nc1 = {(int(a), int(b), int(c_), int(d), int(str(ds_).replace('-', ''))): int(n) for a, b, c_, d, ds_, n in zip(NCUR.st, NCUR.u, NCUR.c, NCUR.p, NCUR.ds, NCUR.n_cur)}
+    _vk1 = [(int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)) for a, b, c_, d, m in zip(V.st, V.u, V.c, V.p, pd.to_datetime(V.md))]
+    _bad1 = [k for k in _vk1 if LIVE.get(k, 0) >= 3 and _nc1.get(k, 0) < 0.5 * LIVE.get(k, 0)]
+    check('T1r no table visit is incomplete (FIADB live tallied trees >= 3, curated ones < half of them; G46.1)', not _bad1,
+          f'{len(V)} table visits, incomplete {len(_bad1)} (curated without a live tree {sum(1 for k in _bad1 if _nc1.get(k, 0) == 0)}) e.g. {_bad1[:3]}; independent incomplete '
+          f'curated visits (share >= 0.1) {int((INC.fs >= 0.1).sum())}, meta.json incomplete_visits {M.get("incomplete_visits", "absent")}')
     # T1l (audit r9 I-1: the T1 / T4 token checks recompute from curated_trees, i.e. the table against its own source): STOCKED visits' token TPH and BA
     # = FIADB live trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on forested conditions per forested area (shares from FIADB COND: SUBPPROP_UNADJ for trees
     # >= 5 in, MICRPROP_UNADJ for saplings, of COND_STATUS_CD 1) — catches live trees lost by the curation on visits that still have some
@@ -286,16 +639,19 @@ def main():
     if AEF90:          # the 90 m route against the GA+FL 30 m mosaics (independent: 3x3 means of 02_aef.py's 30 m product), candidates inside that extent
         g30 = {y: rasterio.open(f'{ROOT}/data/aef/aef_{y}.tif') for y in (2022, 2025)}; tl = land.transform
         ci = C[C.st.isin([12, 13])] if 'st' in C.columns else C.merge(P[['pid', 'st']], on='pid').query('st in (12, 13)')
-        ci = ci.sample(min(300, len(ci)), random_state=4); e3, e9 = [], []
-        for r, c, cid_ in zip(ci.row, ci.col, ci.cid):
-            xx, yy = tl * (c + 0.5, r + 0.5); r3, c3 = g30[2025].index(xx, yy)
-            if not (1 <= r3 < g30[2025].height - 1 and 1 <= c3 < g30[2025].width - 1): continue
-            m30 = np.nanmean(dq(g30[2025].read(window=Window(c3 - 1, r3 - 1, 3, 3))).reshape(64, -1), 1)
-            if np.isnan(m30).any(): continue
-            e3.append(m30); e9.append(np.asarray(CF[cid_, 64:128], dtype=np.float32))
-        e3, e9 = np.array(e3), np.array(e9); cs = (e3 * e9).sum(1) / (np.linalg.norm(e3, axis=1) * np.linalg.norm(e9, axis=1) + 1e-9)
-        check('T3c2 AEF90 footprint (2025) = 3x3 mean of the GA+FL 30 m mosaic (re-quantisation tolerance)', len(e3) > 50 and np.median(np.abs(e3 - e9).max(1)) < 0.02 and np.quantile(cs, 0.05) > 0.98,
-              f'{len(e3)} footprints; median max|Δ| {np.median(np.abs(e3 - e9).max(1)):.4f}, cosine q05 {np.quantile(cs, .05):.4f}')
+        ci = ci.sample(min(300, len(ci)), random_state=4); res3c = {}
+        for y3, sl3 in ((2022, slice(0, 64)), (2025, slice(64, 128))):          # (r14 G47.8: 2022 too)
+            e3, e9 = [], []
+            for r, c, cid_ in zip(ci.row, ci.col, ci.cid):
+                xx, yy = tl * (c + 0.5, r + 0.5); r3, c3 = g30[y3].index(xx, yy)
+                if not (1 <= r3 < g30[y3].height - 1 and 1 <= c3 < g30[y3].width - 1): continue
+                m30 = np.nanmean(dq(g30[y3].read(window=Window(c3 - 1, r3 - 1, 3, 3))).reshape(64, -1), 1)
+                if np.isnan(m30).any(): continue
+                e3.append(m30); e9.append(np.asarray(CF[cid_, sl3], dtype=np.float32))
+            e3, e9 = np.array(e3).reshape(-1, 64), np.array(e9).reshape(-1, 64); cs = (e3 * e9).sum(1) / (np.linalg.norm(e3, axis=1) * np.linalg.norm(e9, axis=1) + 1e-9)
+            res3c[y3] = (len(e3), float(np.median(np.abs(e3 - e9).max(1))) if len(e3) else np.nan, float(np.quantile(cs, 0.05)) if len(e3) else np.nan)
+        check('T3c2 AEF90 footprint (2022 and 2025) = 3x3 mean of the GA+FL 30 m mosaics (re-quantisation tolerance)', all(n_ > 50 and md_ < 0.02 and q_ > 0.98 for n_, md_, q_ in res3c.values()),
+              f'{{year: (footprints, median max|Δ|, cosine q05)}} {res3c}')
         # T3c2z (r13 E-F9) every UTM zone of Region 4 (15-18; the GA+FL mosaic above covers 16-17 only): the 90 m footprint against an independent route from
         # the SOURCE AlphaEarth COGs (20 m level-0 overview, remote): each 30 m pixel = mean of 3x3 sub-points at 10 m spacing looked up in the source tile
         # (bottom-up rows), unit-normalised and int8-requantised as 02_aef, then the block mean. A 1-block shift drops the cosine to 0.94-0.99 (measured), so
@@ -343,23 +699,7 @@ def main():
     check('T3d soils = centre pixel, nodata -> regional median (float16 storage)', se.max() < 1 and (np.asarray(CF[::97, -len(SOILS):]) > -9000).all(), f'max err / tol {se.max():.2f}; no -9999 left')
     # --- LANDFIRE: independent decoding of the code tables (type; burned 'Unknown' -> fire; 'Increased Green' is no disturbance; event year = CALENDAR_YR
     #     of the fiscal-year products, else the file year), evidence = fraction of the footprint's 3x3 pixels
-    codes = pd.read_csv(f'{ROOT}/data/landfire/dist/dist_codes.csv', low_memory=False); CLS = M['classes']
-    cmap = {'harvest': {'Clearcut', 'Harvest'}, 'thin': {'Thinning', 'Mastication', 'Other Mechanical', 'Mechanical Remove', 'Mechanical Add', 'Mechanical Unknown'},
-            'fire': {'Wildfire', 'Fire', 'Prescribed Fire', 'Wildland Fire Use', 'Wildland Fire', 'Unknown/Possibly Fire'}, 'insdis': {'Insects/Disease', 'Insects', 'Disease'},
-            'weather': {'Weather'}, 'chem': {'Herbicide', 'Chemical', 'Insecticide', 'Biological'}, 'dev': {'Development'}, 'unknown': {'Unknown', 'Unknown/Fire Doubtful'}}
-    codes['desc'] = (codes.DESCRIPTION.fillna('') + ' ' + codes.DESCRIPTIO.fillna('')).str.replace(r'\s+', ' ', regex=True)
-    codes['ey'] = codes.CALENDAR_YR.fillna(codes.year).astype(int)
-    def cls_of(r):
-        t = str(r.DIST_TYPE).strip()
-        if 'Green' in str(r.SEVERITY) or str(r.SEVERITY).strip() in ('Water', 'Nodata/Non-processing mask'): return None
-        if t == 'Unknown' and any(p in r.desc for p in ('indicates burned', 'burn probability is 95% or greater', 'most likely fire')): t = 'Wildfire'
-        return next((i for i, k in enumerate(CLS) if t in cmap[k]), None)
-    # severity 1-3 of the LANDFIRE labels (Medium = Moderate in the 2013-14 / 2024-25 products; no rating = neutral 2)
-    SEVS = {'Low': 1, 'Unburned/Low': 1, 'Low-Medium': 1.5, 'Medium-Low': 1.5, 'Low-Moderate': 1.5, 'Moderate-Low': 1.5, 'Medium': 2, 'Moderate': 2, 'No Severity': 2,
-            'Medium-High': 2.5, 'High-Medium': 2.5, 'Moderate-High': 2.5, 'High-Moderate': 2.5, 'High': 3}
-    _sv = lambda r: SEVS['No Severity'] if pd.isna(r.SEVERITY) else SEVS[str(r.SEVERITY).strip()]
-    lk = {(int(r.year), int(r.VALUE)): (cls_of(r), int(r.ey)) for r in codes.itertuples()}
-    lks = {(int(r.year), int(r.VALUE)): _sv(r) for r in codes.itertuples() if cls_of(r) is not None}
+    CLS = M['classes']; lk, lks = landfire_codes(f'{ROOT}/data/landfire/dist/dist_codes.csv', CLS)
     print(f"   (fiscal-year codes placed in the previous calendar year: {sum(1 for (fy, _), (c_, ey) in lk.items() if c_ is not None and ey != fy)})")
     hl = rasterio.open(HANSP); LF = {yr: rasterio.open(DISTP(yr)) for yr in YEARS}; bad = 0; nev = 0; nh = 0; maxd = 0
     def fp_dist(r, c):
@@ -388,27 +728,24 @@ def main():
     #     protocol (since the previous measurement, PREV_PLT_CN, or the lookback yr0-4..yr0-1 of a new plot / after a non-sampled one: G39; up to EVID_END 2024: G36) for visits without a code that could hide stand-replacing
     #     evidence; stand-replacing = harvest class or Hansen loss on >= half the footprint -> ×0.25. Stored prior must be ∝ w x incl_w.
     ix = {k: i for i, k in enumerate(CLS)}; HH = NC + 1; EVID_END = 2024     # (G36) the last year with stand-replacing evidence coverage
-    # the STRICT data-derived rules (g09; 2026-10-22), written out independently of g02b.EVK
-    SPEC = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'unknown', 'H'], (-1, 1), 4),     # cutting / site prep / regeneration
-            ('T', 30): (['harvest', 'chem', 'unknown', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'unknown', 'H'], (-2, 1), 4),           # accept LANDFIRE 'unknown' (2026-10-22)
-            ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
-    for cd in range(10, 23): SPEC[('D', cd)] = (['insdis'], (-1, 1), 2)
-    for cd in (30, 31): SPEC[('D', cd)] = (['fire'], (-1, 1), 2)
-    SPEC[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
-    for cd in range(50, 55): SPEC[('D', cd)] = (['weather'], (-1, 1), 2)
-    SPEC[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
-    HARMLESS = {11, 21, 31, 40, 42, 43, 44, 45, 46}   # (G37: 41 beaver / flooding and 60 vegetation now block) FIADB v9.4 DSTRBCD: 11 / 21 insect / disease damage to UNDERSTORY vegetation (12 / 22 = to trees),
-    # 31 ground fire, 40-46 animal, 60 vegetation — the EVALIDATOR variable library's labels (audit r6 I1: the old set had 12 / 22)
+    # SPEC: the region's evidence table (evidence_spec, G47.2; module level, written out independently of g02b's EVK_TABLES)
+    HARMLESS = {11, 21, 31, 40, 42, 43, 44, 45, 46}   # (G37: 41 beaver / flooding and 60 vegetation block) FIADB v9.4 DSTRBCD: 11 / 21 insect / disease damage to UNDERSTORY vegetation (12 / 22 = to trees),
+    # 31 ground fire, 40 and 42-46 animal — the EVALIDATOR variable library's labels (audit r6 I1: the old set had 12 / 22); 41 beaver / flooding and 60 vegetation are NOT harmless (G37)
     evr = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy, q.PLOT_STATUS_CD pst,
                         c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
                         from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
     evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
     # FIA's previous measurement of every visit (PREV_PLT_CN, any plot status): the period a visit's codes describe starts there
-    _pm = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk
+    # (+ G46.2) its plot status and its forested share of the whole plot (COND 1 SUBPPROP_UNADJ; unknown when none of its conditions carries one)
+    _pm = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk,
+                                 q.PLOT_STATUS_CD qps, (select sum(case when c2.COND_STATUS_CD = 1 then c2.SUBPPROP_UNADJ else 0 end) from COND c2 where c2.PLT_CN = q.CN) qf1,
+                                 (select count(c2.SUBPPROP_UNADJ) from COND c2 where c2.PLT_CN = q.CN) qn
                           from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
     PREVK = {(int(a), int(b), int(c), int(d), int(k)): (int(q) if pd.notna(q) else None) for a, b, c, d, k, q in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.pvk)}
-    # forest -> non-forest conversion: the forested share of the plot (COND_STATUS_CD 1 SUBPPROP_UNADJ) fell by >= 0.25 since the previous forested visit —
-    # no TRT / DSTRB code can record it (codes are on forested conditions), so the visit hides possible clearing
+    # forest -> non-forest conversion: the forested share of the plot (COND_STATUS_CD 1 SUBPPROP_UNADJ) changed by >= 0.25 since the previous forested visit —
+    # no TRT / DSTRB code can record it (codes are on forested conditions), so the visit hides possible clearing. (G46.2) also against FIA's PREVIOUS
+    # measurement (PREV_PLT_CN): a pre-2000 one (the first visit since 2000), and an entirely non-forest one (PLOT_STATUS_CD 2) counts as share 0; a
+    # non-sampled one (3) or one whose conditions carry no share says nothing
     _fs = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
                                  sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1
                           from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()
@@ -417,6 +754,13 @@ def main():
         f_, v_ = g4.f1.values, g4.vk.values
         for j in range(1, len(f_)):
             if abs(f_[j - 1] - f_[j]) >= 0.25: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
+    _f1v = {tuple(int(x) for x in r_[:5]): float(r_[5]) for r_ in _fs[['st', 'u', 'c', 'p', 'vk', 'f1']].values}; nconv2 = 0
+    for a, b, c_, d, k, qps, qf1, qn in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.qps, _pm.qf1, _pm.qn):
+        if pd.isna(k) or (int(a), int(b), int(c_), int(d), int(k)) not in _f1v: continue
+        q_ = 0.0 if pd.notna(qps) and int(qps) == 2 else (float(qf1) if pd.notna(qps) and int(qps) == 1 and pd.notna(qn) and qn > 0 else None)
+        k5 = (int(a), int(b), int(c_), int(d), int(k))
+        if q_ is not None and abs(q_ - _f1v[k5]) >= 0.25 and k5 not in CONV: CONV.add(k5); nconv2 += 1
+    print(f'   (forest-share blocks: {len(CONV)} visits, {nconv2} of them only against the previous FIA measurement, G46.2)')
     ratios, nneg, ncl = [], 0, 0; REC = {}
     for pid, g in Cs.groupby('pid'):
         k_ = tuple(int(v) for v in Pi.loc[pid][key]); e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]
@@ -465,27 +809,35 @@ def main():
         _bj = [pid for pid, (_, pe_) in REC.items() if sorted((a, b) for a, b in pe_ if b >= a) != _ng.get(pid, [])]
         check('T3j negative-evidence periods (g02e fia_negs) = the spec (FIA protocol, lookback yr0-4..yr0-1, non-sampled predecessor -> lookback, <= 2024, NONBLOCK)', not _bj,
               f'{len(REC)} plots, {sum(len(v) for v in _ng.values())} periods in the file; mismatching plots {len(_bj)} {_bj[:5]}')
-    # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose stand-replacing evidence falls in 2023-2025
-    # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). A year cell counts with >= 30 single-event candidates; a state is
-    # judged when it has >= 1 such pre (2017-21) and post (2023-24) cell, else reported as INFO
+    # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose evidence falls in 2023-2025
+    # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). (r14 G47.2) per evidence CLASS of every row of the region's
+    # table (SPEC): judged are the classes EVERY detectable treatment row (TRTCD, lr >= 4: cutting, site preparation, regeneration) accepts — the table's
+    # core stand-replacing evidence (GA+FL: harvest, unknown, Hansen; the classes r13 judged); every other class is reported (INFO: row-specific evidence
+    # such as thinning, herbicide or prescribed fire need not remove canopy — in GA+FL 'fire' never lowers the cosine). A year cell counts with >= 30
+    # single-event candidates whose footprint carries the class on >= half of it; a (state, class) is judged when it has >= 1 pre (2017-21) and post
+    # (2023-24) cell, else INFO. LANDFIRE classes 2017-2025, Hansen 2017-2024
+    _det3 = sorted(set.intersection(*[set(cols_) for (t_, _), (cols_, _, lr_) in SPEC.items() if t_ == 'T' and lr_ >= 4]))
+    _wk3 = sorted({c_ for cols_, _, lr_ in SPEC.values() for c_ in cols_} - set(_det3))
     _st3 = C.pid.map(P.set_index('pid').st).values; _r3 = np.random.default_rng(33); res3i = {}; _w3 = 128 + NY * (NC + 2)
     for st3 in sorted(set(int(x) for x in np.unique(_st3))):
         idx3 = np.flatnonzero(_st3 == st3); smp = np.sort(_r3.choice(idx3, min(120000, len(idx3)), replace=False)); XX = np.asarray(CF[smp, :_w3], dtype=np.float32)
         cosv = (XX[:, :64] * XX[:, 64:128]).sum(1) / (np.linalg.norm(XX[:, :64], axis=1) * np.linalg.norm(XX[:, 64:128], axis=1) + 1e-9)
-        pp = XX[:, 128:_w3].reshape(-1, NY, NC + 2); anyd = (pp[:, :, :NC].sum(-1) + pp[:, :, HH]) > 0
-        lfm = pp[:, :, [ix['harvest'], ix['unknown']]].max(-1) >= 0.5; hm_ = pp[:, :, HH] >= 0.5; single = anyd.sum(1) == 1      # one disturbed year only
+        pp = XX[:, 128:_w3].reshape(-1, NY, NC + 2); anyd = (pp[:, :, :NC].sum(-1) + pp[:, :, HH]) > 0; single = anyd.sum(1) == 1      # one disturbed year only
         c_clean = float(np.median(cosv[~anyd[:, 2015 - 2000:].any(1)])) if (~anyd[:, 2015 - 2000:].any(1)).any() else np.nan
         cell = lambda m_: (int(m_.sum()), round(float(np.median(cosv[m_])), 3) if m_.sum() >= 30 else None)
-        tabL = {yr: cell(lfm[:, yr - 2000] & single) for yr in range(2017, 2026)}; tabH = {yr: cell(hm_[:, yr - 2000] & single) for yr in range(2017, 2025)}
-        pre = [v[1] for y, v in tabL.items() if y <= 2021 and v[1] is not None] + [v[1] for y, v in tabH.items() if y <= 2021 and v[1] is not None]
-        post = [v[1] for y, v in tabL.items() if y in (2023, 2024) and v[1] is not None] + [v[1] for y, v in tabH.items() if y in (2023, 2024) and v[1] is not None]
-        judged = bool(pre and post); ok3 = judged and max(post) < min(pre) and max(post) < c_clean - 0.05
-        res3i[st3] = (judged, ok3); del XX, pp
-        print(f"   T3i state {st3}: {'judged' if judged else 'INFO (too few qualifying samples)'} {'ok' if ok3 else ('VIOLATED' if judged else '')}; "
-              f"no disturbance since 2015 {c_clean:.3f}; LANDFIRE {{yr: (n, cos)}} {tabL}; Hansen {tabH}", flush=True)
-    check('T3i time axes PER STATE: LANDFIRE harvest/unknown (calendar year) and Hansen events of 2023-24 lower the AlphaEarth 2022->2025 cosine; events <= 2021 do not',
+        for c3 in _det3 + _wk3:
+            m3 = pp[:, :, HH] >= 0.5 if c3 == 'H' else pp[:, :, ix[c3]] >= 0.5
+            tab = {yr: cell(m3[:, yr - 2000] & single) for yr in range(2017, 2025 if c3 == 'H' else 2026) if yr - 2000 < NY}
+            pre = [v[1] for y, v in tab.items() if y <= 2021 and v[1] is not None]; post = [v[1] for y, v in tab.items() if y in (2023, 2024) and v[1] is not None]
+            judged = bool(pre and post); ok3 = judged and max(post) < min(pre) and max(post) < c_clean - 0.05
+            res3i[(st3, c3)] = (judged and c3 in _det3, ok3)
+            print(f"   T3i state {st3} class {c3} ({'core stand-replacing evidence' if c3 in _det3 else 'row-specific evidence: INFO'}): "
+                  f"{'judged' if judged else 'too few qualifying samples'} {'ok' if ok3 else ('VIOLATED' if judged else '')}; no disturbance since 2015 {c_clean:.3f}; "
+                  f"{{yr: (n, cos)}} {tab}", flush=True)
+        del XX, pp
+    check('T3i time axes PER STATE and evidence class of the region\'s table: events of 2023-24 lower the AlphaEarth 2022->2025 cosine, events <= 2021 do not',
           any(j for j, _ in res3i.values()) and all(o for j, o in res3i.values() if j),
-          f"judged states {[k for k, (j, _) in res3i.items() if j]}, violating {[k for k, (j, o) in res3i.items() if j and not o]}, INFO {[k for k, (j, _) in res3i.items() if not j]}")
+          f"judged classes {_det3}, reported {_wk3}; judged {[k for k, (j, _) in res3i.items() if j]}, violating {[k for k, (j, o) in res3i.items() if j and not o]}")
     def _ev(g):    # the evidence part of the prior: prior / (incl_w x radial location weight) — hi is a threshold of the evidence alone (audit r3 B3)
         rp_ = float(M.get('radial_p', 0.9)); rad = np.where(g.dist_m.values <= 804.672, rp_ / (np.pi * 804.672 ** 2), (1 - rp_) / (np.pi * (1600.0 ** 2 - 804.672 ** 2)))
         return pd.Series(g.prior.values / (g.incl_w.values * rad), index=g.index)
@@ -504,6 +856,7 @@ def main():
         fl = (Lc >= 1) & (Lc <= 4) & (np.hypot(AR - r0, AC - c0) * 30 <= 1600)
         cnt_err.append(abs(g.incl_w.sum() - fl.sum()) / fl.sum())
     check('T3g inclusion weights sum to the full forest-footprint count of the disk', max(cnt_err) < 1e-4, f'max rel err {max(cnt_err):.2e}')
+    if done('T3'): return RES
     # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
     os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT=os.environ.get('NT', '4')); _a = sys.argv; sys.argv = ['g03b']
     SRC = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
@@ -513,7 +866,7 @@ def main():
     o = ns_['obs_summ'](torch.tensor(tv)); ba_t = pd.Series(o[1].numpy(), index=tv)
     ba_i = ba_ind.reindex(tv).fillna(0.0)
     check('T4a obs_summ BA (model targets) = FIA-formula BA (independent)', np.allclose(ba_t.values, ba_i.values, rtol=1e-4, atol=1e-6), f'max abs diff {np.max(np.abs(ba_t.values - ba_i.values)):.2e}')
-    tph_i = live.groupby('vid').w.sum().reindex(tv).fillna(0.0); check('T4b obs_summ TPH = sum of TPA_UNADJ x 2.471 (independent)', np.allclose(o[0].numpy(), tph_i.values, rtol=1e-4, atol=1e-6))
+    tph_i = live.groupby('vid').w.sum().reindex(tv).fillna(0.0); check('T4b obs_summ TPH = sum of TPA_UNADJ x 2.47105 / forested share (independent)', np.allclose(o[0].numpy(), tph_i.values, rtol=1e-4, atol=1e-6))
     NK, NA = len(KEYS), 16; v_ = torch.tensor(tv[:50]); lp_perfect = torch.where(ns_['slot_p'][v_] > 0, torch.tensor(60.0), torch.tensor(-60.0)) + torch.log(ns_['POSW'])
     s_pred = ns_['summaries'](lp_perfect, ns_['slot_v'][v_]); o2 = ns_['obs_summ'](v_)
     check('T4c decoder summaries on perfect slots (with calibration) = observed summaries', all(np.allclose(s_pred[i].numpy(), o2[i].numpy(), rtol=1e-4, atol=1e-5) for i in range(3)))
@@ -577,6 +930,17 @@ def main():
     check('T4j flow end time (pair targets): the state is taken AT the end date (between end-of-2013 and end-of-2014 states), end-year events only if before the end',
           (stE[2014][0] - stE[2014][1]).abs().max() > 0 and (e1 - stE[2014][0]).abs().max() < 1e-6 and abs((e2 - e2n).abs().mean().item() - math.tanh(1.0)) < 1e-5,
           f'Δ(end 2014.3 vs 2014.9) {(stE[2014][0] - stE[2014][1]).abs().max():.3f}; event of 2014 with end 2014.3 ignored, with end 2014.9 applied')
+    # T4w (G46.20 / A14-8) the 2026 clamp: a visit after the last year (2026) is flowed to the END-2025 state (stop year YEARS[-1], end in 2026): its
+    # 2026 part and 2026 events are dropped, while an end inside 2025 still changes the state (the test can tell the end time apart)
+    with torch.no_grad():
+        torch.manual_seed(14); zw = torch.randn(2, Dz); dw = torch.zeros(2, NY, NC + 2); dw[:, YEARS[-1] - YEARS[0], 0] = 1; sw_ = torch.zeros(2, ns_['SOIL'].shape[1])
+        w26 = flow(zw, torch.tensor([2019.4, 2019.4]), [YEARS[-1]], dw, sw_, end=torch.tensor([YEARS[-1] + 1.3, YEARS[-1] + 1.9]))[YEARS[-1]]
+        w25 = flow(zw, torch.tensor([2019.4, 2019.4]), [YEARS[-1]], dw, sw_)[YEARS[-1]]
+        w25m = flow(zw, torch.tensor([2019.4, 2019.4]), [YEARS[-1]], dw, sw_, end=torch.tensor([YEARS[-1] + 0.4, YEARS[-1] + 0.4]))[YEARS[-1]]
+    _n26 = int((V.year.values >= YEARS[-1] + 1).sum())
+    check(f'T4w 2026 clamp: a visit in {YEARS[-1] + 1} is flowed to the end-{YEARS[-1]} state (its own-year part and events dropped); an end inside {YEARS[-1]} differs',
+          (w26 - w25).abs().max().item() < 1e-6 and (w25m - w25).abs().max().item() > 1e-4, f'|Δ| end {YEARS[-1] + 1}.3 / .9 vs end of {YEARS[-1]}: {(w26 - w25).abs().max().item():.1e}; '
+          f'end {YEARS[-1]}.4 vs end of {YEARS[-1]}: {(w25m - w25).abs().max().item():.3f}; table visits in {YEARS[-1] + 1}+: {_n26}')
     # T4m visit-year rule (audit r5 I3): an event in the END visit's own year is applied before a first-half end only if that visit recorded it (re); an event
     # in the START visit's own year is not applied after a first-half start if the start visit recorded it (rs)
     with torch.no_grad():
@@ -697,7 +1061,8 @@ def main():
     # ======================= T5 landscape descriptors: inclusion-weighted subsample vs the full disk
     exec(compile(G4[G4.index('from sklearn.cluster import'):G4.index('XL = {}')], 'g04', 'exec'), ns_)
     AEF, DIST, SOIL = ns_['AEF'], ns_['DIST'], ns_['SOIL']; smu, ssd = ns_['smu'], ns_['ssd']; land_ = ns_['landscape']; dW, dU = [], []
-    _sub5 = C.groupby('pid').incl_w.max(); _sub5 = _sub5.index.values[_sub5.values > 1]               # disks that were subsampled (else trivially exact)
+    _iw5 = C.groupby('pid').incl_w.agg(['min', 'max']); _sub5 = _iw5.index.values[(_iw5['max'].values > 1) & (_iw5['max'].values > _iw5['min'].values * (1 + 1e-6))]   # disks subsampled
+    # with a NON-CONSTANT inclusion weight (r14 G47.7 / E14-8: with a constant one the weighted and unweighted estimates coincide, which dilutes T5s' power)
     for pid in np.random.default_rng(51).choice(_sub5, min(60, len(_sub5)), replace=False) if len(_sub5) else []:   # (random subsampled plots: r13 E-F5)
         g = C[C.pid == pid]; cid = g.cid.values
         xs = land_(AEF[cid], DIST[cid], SOIL[cid], g.incl_w.values); xu = land_(AEF[cid], DIST[cid], SOIL[cid])
@@ -713,9 +1078,10 @@ def main():
     fw, fu = frac_sig(dW), frac_sig(dU)
     check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk landscape (signed errors across subsampled plots; unweighted shown for power)',
           len(dW) >= 10 and fw < 0.05, f'{len(dW)} subsampled plots: dims with significant bias — weighted {fw:.3f}, unweighted {fu:.3f}; mean |Δ| weighted {np.abs(dW).mean():.4f}, unweighted {np.abs(dU).mean():.4f}')
-    # T5s self-test of T5's power (r13 E-F5): the same statistic with the inclusion weights DROPPED. Wherever the unweighted estimate deviates materially from the
-    # full disk (dims with |t| > 3.5 of its mean signed error), the weighted one must be closer: |mean signed error| <= 0.5 x the unweighted one on each such dim.
-    # With no material unweighted deviation the weights cannot be told apart here (INFO, not a failure: the subsample is then near-uniform in that table).
+    # T5s self-test of T5's power (r13 E-F5): the same statistic with the inclusion weights DROPPED. Where the unweighted estimate deviates materially from the
+    # full disk, the weighted one must be closer. The aggregate rule decides (r14 G47.7); the per-dim rule (|mean signed error| <= 0.5 x the unweighted one on
+    # dims with unweighted |t| > 3.5) is reported only (its false-alarm rate is uncalibrated: the weighted estimate has a larger sd). With no material
+    # unweighted deviation the weights cannot be told apart here (INFO, not a failure: the subsample is then near-uniform in that table).
     if len(dW) >= 10:
         def _tst(dd_):                     # per-dim |t| of the mean signed error across plots
             sd_ = dd_.std(0, ddof=1); t_ = np.zeros(dd_.shape[1]); ok_ = sd_ > 1e-9; t_[ok_] = np.abs(dd_.mean(0)[ok_]) / (sd_[ok_] / np.sqrt(len(dd_))); return t_, ok_
@@ -724,10 +1090,11 @@ def main():
         # aggregate form (more power when the bias is spread thinly): the unweighted bias is material when sum t^2 exceeds its no-bias mean by 3 sd
         # (df + 3 sqrt(2 df)); then the weighted sum t^2 must be smaller
         _df = int(_okU.sum()); _cU, _cW = float((_tU[_okU] ** 2).sum()), float((_tW[_okU] ** 2).sum()); _matA = _cU > _df + 3 * math.sqrt(2 * max(_df, 1))
-        if _mat.any() or _matA:
-            check('T5s T5 power self-test: where the UNWEIGHTED landscape is materially biased, the weighted one is closer to the full disk (per dim: >= 2x; aggregate: smaller sum t^2)',
-                  not _viol.any() and (not _matA or _cW < _cU),
-                  f'{int(_mat.sum())} materially biased dims (unweighted |t| > 3.5), violating {int(_viol.sum())}; sum t^2 unweighted {_cU:.0f} / weighted {_cW:.0f} (df {_df}, material above {_df + 3 * math.sqrt(2 * max(_df, 1)):.0f})')
+        if _matA:
+            check('T5s T5 power self-test: where the UNWEIGHTED landscape is materially biased, the weighted one is closer to the full disk (aggregate: smaller sum t^2; per dim reported)',
+                  not _matA or _cW < _cU,
+                  f'{len(dU)} plots with non-constant incl_w; sum t^2 unweighted {_cU:.0f} / weighted {_cW:.0f} (df {_df}, material above {_df + 3 * math.sqrt(2 * max(_df, 1)):.0f}); '
+                  f'per dim (report only): {int(_mat.sum())} materially biased dims (unweighted |t| > 3.5), weighted not within 0.5x on {int(_viol.sum())}')
         else: print(f'INFO  T5s no material bias without the weights ({len(dU)} plots, max unweighted |t| {_tU.max():.2f}, sum t^2 {_cU:.0f} for df {_df}): T5 cannot distinguish missing weights in this table')
     # ======================= T6 stand mapping inputs
     S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy', mmap_mode='r'); ssub = S.sample(200, random_state=5); Xs = np.asarray(SF[ssub.index.values], dtype=np.float32)
@@ -797,19 +1164,20 @@ def main():
     COF_G2 = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}             # g02b's prior (T8 / T8c test the period rule on g02b's candidates)
     PC, PC2 = run_pairs('period', '0', '0', COF_G2)
     EXv = EX.set_index('vid'); rng8 = np.random.default_rng(8); bad8 = 0; n8 = 0; nev8 = 0
-    KIND8 = lambda t_, cd: ('T', cd) if t_ == 'T' else ('ins' if 10 <= cd <= 22 else 'fire' if cd in (30, 31) else 'crown' if cd == 32 else 'wea' if 50 <= cd <= 54 else 'dev' if cd == 80 else None)
+    KIND8 = spec_kind                                                    # (a re-report = the same record kind and event year)
     _VMD = pd.to_datetime(V.md); _vkey = lambda u: (lambda d_: d_.year * 10000 + d_.month * 100 + d_.day)(_VMD.iloc[int(u)])      # (the visit's FIA date)
     FS1 = {tuple(int(x) for x in k_): min(float(f_), 1.0) for k_, f_ in zip(_fs[['st', 'u', 'c', 'p', 'vk']].values, _fs.f1.values)}      # FIADB forested share (COND 1 SUBPPROP) per visit
     FSOK = _fok              # (T4v) independent MIN_FSHARE vetting per visit
     BAtk = TK[TK.N > 0].assign(ba=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').ba.sum()
     def pair_spec(v1, v2, span):
         """The spec of a remeasurement history v1 -> v2 (span = the visits in (v1, v2]), from FIADB COND records — independent of g02b / g03b code:
-        a record describes the interval ending at the visit that RECORDED it (a re-report of an event of the same kind and year recorded at a visit <= v1 is
-        dropped); events of calendar year y act between the visits iff mid-year y lies in [v1, v2], except in a visit's own year when that visit recorded an
+        a record describes the interval ending at the visit that RECORDED it: every FIADB record made at a visit dated in (v1, v2], a table visit or not
+        (G47.1: curation-subset, low-share and incomplete visits record events too), except a re-report of an event of the same kind and year recorded at a
+        visit <= v1; events of calendar year y act between the visits iff mid-year y lies in [v1, v2], except in a visit's own year when that visit recorded an
         event of that year (then it lies before the visit); records chaining within 2 yr form one cluster (union of evidence classes / windows, max lift),
         whose window is clipped to the acting years (clamped to the nearest one if it falls outside). Blocked ('hid') for the undisturbed rules: a hiding code
-        (not NONBLOCK, G37) or a forest-share change >= 0.25 at any visit of the span, a gap in FIA's measurement chain, an end-to-end forest-share change
-        >= 0.25 (G38), or acting years reaching past the evidence end (G36)."""
+        (not NONBLOCK, G37) or a forest-share change >= 0.25 at any visit of the span (G46.2: also against FIA's previous measurement), a gap in FIA's
+        measurement chain, an end-to-end forest-share change >= 0.25 (G38). The undisturbed rules apply up to the evidence end only (G36 as a clip, G46.5)."""
         pid = int(V.pid.values[v1]); k_ = tuple(int(x) for x in Pi.loc[pid][key]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
         e = evr[(evr.st == k_[0]) & (evr.u == k_[1]) & (evr.c == k_[2]) & (evr.p == k_[3])]; vk1, vk2 = _vkey(v1), _vkey(v2); vks = {_vkey(u) for u in span}
         typed, hid = [], False
@@ -824,7 +1192,7 @@ def main():
                 if r.vk in vks and (t_ == 'T' or int(cd) not in HARMLESS): hid = True
                 if (t_, int(cd)) in SPEC and pd.notna(yr) and 2000 <= yr <= 2025: typed.append((r.vk, t_, int(cd), int(yr)))
         old = {(KIND8(t_, cd), yr) for vk, t_, cd, yr in typed if vk <= vk1}
-        recs = sorted({(yr, t_, cd) for vk, t_, cd, yr in typed if vk in vks and (KIND8(t_, cd), yr) not in old})
+        recs = sorted({(yr, t_, cd) for vk, t_, cd, yr in typed if vk1 < vk <= vk2 and (KIND8(t_, cd), yr) not in old})
         rs = any(vk == vk1 and yr == math.floor(y1) for vk, _, _, yr in typed); re_ = any(vk == vk2 and yr == math.floor(y2) for vk, _, _, yr in typed)
         ra = any(yr == math.floor(y1) for yr, _, _ in recs)       # a new record of the interval dated in v1's year: the event lies after v1
         f1, f2 = math.floor(y1), math.floor(y2); a = f1 if (not rs and (y1 <= f1 + 0.5 or ra)) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
@@ -853,8 +1221,8 @@ def main():
           - every detectable cluster (lift >= 4) needs compatible evidence in its window;
           - (sev: training) the span's MIN BA ratio to v1 over the visits passing MIN_FSHARE (G35; v2 always), if BA(v1) > 1 m2/ha: < 0.3 -> only candidates
             with stand-replacing evidence in a detectable cluster's window; > 0.6 -> only candidates without; a min ratio < 0.3 also blocks the undisturbed rules;
-          - unblocked (pair_spec hid / evidence end) and no measured collapse: no stand-replacing evidence in the acting years, and with no detectable record
-            no evidence at all there except the period's weak events inside their windows;
+          - unblocked (pair_spec hid) and no measured collapse: no stand-replacing evidence in the acting years up to the evidence end (G46.5: the part after
+            it is unconstrained), and with no detectable record no evidence at all there except the period's weak events inside their windows;
           - (both) ∩ the plot's FIA-history-consistent set (cand_hist cons) if that leaves a candidate, else the period set;
           a constraint that would leave no candidate is skipped. Weights: the location prior restricted to the set (else g02b's prior there, else uniform)."""
         q = pair_spec(v1, v2, span); g, Xg, m = q['g'], q['Xg'], np.ones(len(q['g']), bool)
@@ -871,7 +1239,7 @@ def main():
             if r_ < 0.3: m = nar(m, srw); loss = True
             elif r_ > 0.6: m = nar(m, ~srw)
         collapse = sev and r_ is not None and r_ < 0.3
-        if not q['hid'] and q['b'] <= EVID_END and not loss and not collapse and q['b'] >= q['a']:
+        if not q['hid'] and not loss and not collapse and q['b'] >= q['a']:          # (G46.5: windows clipped to EVID_END by _srw / below)
             m = nar(m, ~_srw(Xg, q['a'], q['b']))
             if not q['det']:
                 Xe = Xg.copy()
@@ -892,14 +1260,27 @@ def main():
         return set(dexp) == set(dg), (max(abs(dexp[c_] - dg[c_]) / max(dexp[c_], 1e-12) for c_ in dexp) if set(dexp) == set(dg) and dexp else 0.0)
     vs_of8 = V.assign(vid=np.arange(len(V))).sort_values('year').groupby('pid').vid.apply(list).to_dict()
     _span = lambda v1, v2: (lambda sq: sq[sq.index(v1) + 1:sq.index(v2) + 1])(vs_of8[int(V.pid.values[v1])])
-    # T8p the model pairs are the consecutive table pairs whose both visits pass MIN_FSHARE (independent share, T4v)
+    # T8p the model pairs are the consecutive table pairs whose both visits pass MIN_FSHARE (independent share, T4v); (G46.7) the anchored pairs are those
+    # of plots with candidates that are NOT converted (independent T1n rule: the pair code has no FIA-only path, so converted plots' pairs are dropped)
     _vp8 = set(ns_['vpair'].items()); _pe8 = {(int(a), int(b_)) for a, b_ in zip(PR.v1.values, PR.v2.values) if FSOK[a] and FSOK[b_]}
-    check('T8p model pairs (g03b.vpair) = consecutive table pairs with both visits passing MIN_FSHARE (independent FIADB share, T4v)', _vp8 == _pe8, f'{len(_vp8)} pairs, expected {len(_pe8)}, differing {len(_vp8 ^ _pe8)}')
-    for v1 in rng8.choice(list(PC), min(300, len(PC)), replace=False):
+    _cv8 = {pid for pid in COF_G2 if tuple(int(x) for x in Pi.loc[pid][key]) in CONVP}; _pc8e = {a for a, _ in _pe8 if int(V.pid.values[a]) in COF_G2 and int(V.pid.values[a]) not in _cv8}
+    _pc8c = {a for a in PC if int(V.pid.values[a]) in _cv8}
+    check('T8p model pairs (g03b.vpair) = consecutive table pairs with both visits passing MIN_FSHARE (independent FIADB share, T4v); anchored pairs = those of non-converted plots with candidates (G46.7)',
+          _vp8 == _pe8 and set(PC) == _pc8e,
+          f'{len(_vp8)} pairs, expected {len(_pe8)}, differing {len(_vp8 ^ _pe8)}; anchored {len(PC)}, expected {len(_pc8e)}, of converted plots {len(_pc8c)} '
+          f'({len(_cv8)} converted plots with candidates), missing {len(_pc8e - set(PC))}')
+    def _mis8(tag, v1, v2, es, got, extra=''):
+        if len(_ex8.setdefault(tag, [])) < 12: _ex8[tag].append((int(v1), int(v2), len(es), len(got[0]), extra))
+        print(f'   {tag} mismatch: pair {int(v1)} -> {int(v2)}: spec {len(es)} candidates, g03b {len(got[0])}{extra}', flush=True)
+    _ex8 = {}
+    _s8 = [x for x in FORCE if x in PC] + [x for x in rng8.choice(list(PC), min(300, len(PC)), replace=False) if x not in FORCE]
+    for v1 in _s8:
         es, det, _ = spec_set(v1, ns_['vpair'][v1], [ns_['vpair'][v1]]); nev8 += det
         n8 += 1; ok_, we_ = same(es, PC[v1]); bad8 += (not ok_) or we_ > 1e-6
+        if (not ok_) or we_ > 1e-6: _mis8('T8', v1, ns_['vpair'][v1], es, PC[v1], f', sets equal {ok_}, max rel weight diff {we_:.1e}')
+        elif v1 in FORCE: print(f'   T8 forced pair {int(v1)} -> {int(ns_["vpair"][v1])}: agrees ({len(es)} candidates)', flush=True)
     check('T8 FIA-anchored pair histories (g03b.pair_cand, PAIR_ANCHOR=period, records only) = independent recomputation from FIADB records + spec (sets and weights)', n8 > 0 and bad8 == 0,
-          f'{n8} pairs ({nev8} with detectable events), mismatches {bad8}')
+          f'{n8} pairs ({nev8} with detectable events; forced {sum(1 for x in FORCE if x in PC)}), mismatches {bad8}: {_ex8.get("T8", [])}')
     # T8e the record assignment itself: records made AT v2 whose year is v2's own year belong to (v1, v2] (the mid-year rule dropped first-half visits'
     # records: audit r5 I3), and the flow applies their year's evidence before v2 (Flow re) — counted on the sample, non-vacuous
     n8e = 0
@@ -910,13 +1291,16 @@ def main():
             if not (q['b'] == math.floor(y2) and q['cl']): n8e = -10 ** 9; break
     check('T8e first-half visits that recorded an event of their own year: the interval (v1, v2] holds the record and acts through v2\'s year', n8e > 0, f'{max(n8e, 0)} such pairs among 4000 random pairs')
     # T8f g03b's record assignment and acting years (recs_in / act_span / pair_clusters, used by every stage) = the spec (pair_spec), pair by pair
-    bad8f = 0; n8f = 0
-    for v1 in rng8.choice(list(PC), min(400, len(PC)), replace=False):
+    bad8f = 0; n8f = 0; ex8f = []
+    for v1 in [x for x in FORCE if x in PC] + [x for x in rng8.choice(list(PC), min(400, len(PC)), replace=False) if x not in FORCE]:
         v2 = ns_['vpair'][v1]; q = pair_spec(v1, v2, [v2]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
         ya, yb = ns_['act_span'](y1, y2, bool(ns_['VREC'][v1]), bool(ns_['VREC'][v2]), ns_['pair_ra'](v1, v2)); pc_ = ns_['pair_clusters'](int(V.pid.values[v1]), y1, y2, ya, yb)
         mine = sorted((c[1], c[2], c[3], tuple(sorted(c[0]))) for c in q['cl']); theirs = sorted((c['lo'], c['hi'], int(c['lr']), tuple(sorted(c['cols']))) for c in pc_)
-        n8f += 1; bad8f += (ya, yb) != (q['a'], q['b']) or mine != theirs
-    check('T8f g03b act_span / recs_in / pair_clusters (acting years, clipped event clusters of the interval) = the independent spec', n8f > 0 and bad8f == 0, f'{n8f} pairs, mismatches {bad8f}')
+        n8f += 1; bad_ = (ya, yb) != (q['a'], q['b']) or mine != theirs; bad8f += bad_
+        if bad_ or v1 in FORCE:
+            print(f"   T8f {'mismatch' if bad_ else 'forced pair agrees'}: pair {int(v1)} -> {int(v2)}: acting years spec {(q['a'], q['b'])} g03b {(ya, yb)}; clusters spec {mine} g03b {theirs}", flush=True)
+            if bad_ and len(ex8f) < 12: ex8f.append((int(v1), int(v2)))
+    check('T8f g03b act_span / recs_in / pair_clusters (acting years, clipped event clusters of the interval) = the independent spec', n8f > 0 and bad8f == 0, f'{n8f} pairs, mismatches {bad8f}: {ex8f}')
     # T8g VRA (MIL / Q-decode / B flows from a visit): a LATER visit recorded a new (not re-reported) typed event dated in the visit's own calendar year —
     # recomputed from FIADB COND records (r11 M-5)
     _vs8 = np.random.default_rng(81).choice(len(V), min(3000, len(V)), replace=False); bad8g = 0; npos8g = 0
@@ -938,18 +1322,25 @@ def main():
         bad8c = 0; n8c = 0
         for i8 in rng8.choice(len(multi), min(200, len(multi)), replace=False):
             v1, v2 = multi[i8]; es, _, _ = spec_set(v1, v2, _span(v1, v2)); n8c += 1; ok_, we_ = same(es, PC2[(v1, v2)]); bad8c += (not ok_) or we_ > 1e-6
-        check('T8c multi-horizon pair histories (g03b.pair_cand2, period, records only) = independent recomputation over the span (sets and weights)', bad8c == 0, f'{n8c} pairs, mismatches {bad8c}')
+            if (not ok_) or we_ > 1e-6: _mis8('T8c', v1, v2, es, PC2[(v1, v2)], f', sets equal {ok_}, max rel weight diff {we_:.1e}')
+        check('T8c multi-horizon pair histories (g03b.pair_cand2, period, records only) = independent recomputation over the span (sets and weights)', bad8c == 0,
+              f'{n8c} pairs, mismatches {bad8c}: {_ex8.get("T8c", [])}')
     elif PAIR_ALL8: check('T8c multi-horizon pair histories exist with PAIR_ALL=1', False, 'PAIR_ALL=1 but g03b built no multi-horizon pair')
     else: print('SKIP  T8c no multi-horizon pairs (PAIR_ALL off)')
-    # T8b (a) evaluation safety, under the EVALUATION config (PAIR_ANCHOR=both, LOAD=1, the production location prior): the severity rule must be OFF, i.e. the
-    # sets and weights = the records-only sets (SEVERITY_ANCHOR 0) of the same config; compared on a seeded random sample of 3000 pairs (+ 1000 multi-horizon)
-    PCr, PC2r = run_pairs('both', '0', '0', CAND_OF_PROD); PCl, PC2l = run_pairs('both', '1', '1', CAND_OF_PROD)
+    # T8b (a) evaluation safety, under the EVALUATION config (the configured PAIR_ANCHOR and SEVERITY_ANCHOR, LOAD=1, the production location prior): the
+    # severity rule must be OFF, i.e. the sets and weights = the records-only sets (SEVERITY_ANCHOR 0) of the same config; compared on a seeded random sample
+    # of 3000 pairs (+ 1000 multi-horizon). (G47.6) the switches are read from the environment; values the spec does not cover FAIL T8b / T8h
+    ANC8, SEV8 = _ENV8['PAIR_ANCHOR'] or 'both', _ENV8['SEVERITY_ANCHOR'] or '1'; OK8 = ANC8 in ('both', 'period') and SEV8 in ('0', '1')
+    MSG8 = '' if OK8 else f'unsupported configuration PAIR_ANCHOR={ANC8!r} SEVERITY_ANCHOR={SEV8!r} (the spec covers both / period and 0 / 1; G47.6)'
+    if not OK8: ANC8, SEV8 = 'both', '1'                                 # (computed for diagnosis only; T8b / T8h FAIL)
+    PCr, PC2r = run_pairs(ANC8, '0', '0', CAND_OF_PROD); PCl, PC2l = run_pairs(ANC8, SEV8, '1', CAND_OF_PROD)
     _k8a = list(PCr); _k8a = [_k8a[i] for i in np.random.default_rng(87).permutation(len(_k8a))[:3000]]; _k8m = list(PC2r); _k8m = [_k8m[i] for i in np.random.default_rng(88).permutation(len(_k8m))[:1000]]
     def _eq8(a_, b_): return set(np.asarray(a_[0]).tolist()) == set(np.asarray(b_[0]).tolist()) and np.allclose(np.asarray(a_[1])[np.argsort(a_[0])], np.asarray(b_[1])[np.argsort(b_[0])])
     off_ok = set(PCr) == set(PCl) and set(PC2r) == set(PC2l) and all(_eq8(PCr[k], PCl[k]) for k in _k8a) and all(_eq8(PC2r[k], PC2l[k]) for k in _k8m)
-    # (b) training (LOAD=0, SEVERITY 1, PAIR_ANCHOR=both, the production location prior): every stand-replacing pair (detectable FIA event, min BA ratio < 0.3)
-    # whose consistent set CONTAINS a candidate with stand-replacing evidence in the window uses only such candidates (non-vacuous: pairs without any are not counted)
-    PCs, PC2s = run_pairs('both', '1', '0', CAND_OF_PROD)
+    # (b) training (LOAD=0, the configured switches, the production location prior): with SEVERITY_ANCHOR 1 every stand-replacing pair (detectable FIA event,
+    # min BA ratio < 0.3) whose consistent set CONTAINS a candidate with stand-replacing evidence in the window uses only such candidates (non-vacuous:
+    # pairs without any are not counted); with SEVERITY_ANCHOR 0 part (b) does not apply
+    PCs, PC2s = run_pairs(ANC8, SEV8, '0', CAND_OF_PROD)
     for k_, v_ in _ENV8.items():
         if v_ is None: os.environ.pop(k_, None)
         else: os.environ[k_] = v_
@@ -973,12 +1364,13 @@ def main():
         if not strong: continue
         nrep += 1; okr += set(PCs[v1][0].tolist()) <= strong       # selected ⊆ event-consistent candidates with stand-replacing evidence
         if nrep >= 300: break
-    check('T8b severity anchoring: OFF under the evaluation config (both + LOAD=1: sets and weights = the records-only ones); ON in training (both): stand-replacing pairs use only candidates with stand-replacing evidence',
-          off_ok and okr == nrep and nrep > 0, f'evaluation sets unchanged: {off_ok} ({len(_k8a)} + {len(_k8m)} random pairs compared); {nrep} stand-replacing pairs with strong candidates checked, violations {nrep - okr}')
+    check(f'T8b severity anchoring (PAIR_ANCHOR {ANC8}, SEVERITY_ANCHOR {SEV8}): OFF under the evaluation config (LOAD=1: sets and weights = the records-only ones); ON in training: stand-replacing pairs use only candidates with stand-replacing evidence',
+          OK8 and off_ok and (SEV8 == '0' or (okr == nrep and nrep > 0)),
+          f'evaluation sets unchanged: {off_ok} ({len(_k8a)} + {len(_k8m)} random pairs compared); ' + (f'{nrep} stand-replacing pairs with strong candidates checked, violations {nrep - okr}' if SEV8 == '1' else '(b) n/a: SEVERITY_ANCHOR 0') + (f'; {MSG8}' if MSG8 else ''))
     # T8d multi-horizon severity (audit r4 I2): a span whose BA fell below 0.3 of v1 at ANY visit in between that passes MIN_FSHARE (G35; even if it regrew by
     # the end) is stand-replacing
     okd = 0; nd = 0
-    if PAIR_ALL8:
+    if PAIR_ALL8 and SEV8 == '1':
         _pc2_ = list(PC2s.items())
         for (v1, v2), (cs2, _) in [_pc2_[i] for i in np.random.default_rng(86).permutation(len(_pc2_))]:   # (random order: r12 M-3)
             if ns_['vpair'].get(v1) == v2 or BAtk.get(v1, 0) <= 1.0: continue
@@ -990,26 +1382,32 @@ def main():
             if nd >= 300: break
         check('T8d multi-horizon severity: spans whose BA fell below 0.3 of v1 at an intermediate visit passing MIN_FSHARE (regrown by the end) use only stand-replacing candidates',
               okd == nd and nd > 0, f'{nd} regrown stand-replacing spans checked, violations {nd - okd}' + ('' if nd else ' (none in this table: vacuous)'))
-    else: print('SKIP  T8d PAIR_ALL off')
-    # T8h (r13 E-F2) the PRODUCTION pair configuration (PAIR_ANCHOR=both, SEVERITY_ANCHOR=1, training, the production location prior) against the full spec
-    # (spec_set: event rule, severity on the min BA ratio over the span's MIN_FSHARE visits, collapse block, undisturbed rules to the evidence end, ∩ cand_hist cons
-    # with its fallback, weights = the location prior restricted to the set with g02b's prior as fallback) — sets AND weights, >= 300 consecutive + >= 200 multi
-    if _lp8 is None: print(f'SKIP  T8h LOC={LOC7}: the location prior of this LOC is not re-derived (T7e)')
+    else: print(f'SKIP  T8d PAIR_ALL {int(PAIR_ALL8)}, SEVERITY_ANCHOR {SEV8} (needs multi-horizon pairs and the severity rule)')
+    # T8h (r13 E-F2) the PRODUCTION pair configuration (the configured PAIR_ANCHOR / SEVERITY_ANCHOR, training, the production location prior) against the
+    # full spec (spec_set: event rule, severity on the min BA ratio over the span's MIN_FSHARE visits, collapse block, undisturbed rules to the evidence end,
+    # ∩ cand_hist cons with its fallback when both, weights = the location prior restricted to the set with g02b's prior as fallback) — sets AND weights.
+    # (G47.6) real minima: >= 300 consecutive pairs, >= 200 multi-horizon pairs (PAIR_ALL=1), >= 20 with a detectable cluster, >= 20 with a severity rule (SEVERITY_ANCHOR 1)
+    if _lp8 is None: check('T8h PRODUCTION pair sets and weights = the independent spec', False, f'LOC={LOC7}: the location prior of this LOC is not re-derived (T7e)')
     else:
-        _kc = list(PCs); _kc = [_kc[i] for i in np.random.default_rng(89).permutation(len(_kc))[:300]]
+        _kc = list(PCs); _kc = [x for x in FORCE if x in PCs] + [x for x in (_kc[i] for i in np.random.default_rng(89).permutation(len(_kc))[:300]) if x not in FORCE]
         _km = [k for k in PC2s if ns_['vpair'].get(k[0]) != k[1]]; _km = [_km[i] for i in np.random.default_rng(90).permutation(len(_km))[:200]]
-        bh = {'c_set': 0, 'c_w': 0, 'm_set': 0, 'm_w': 0}; wmax = 0.0; nsev = 0; ex8h = []
+        bh = {'c_set': 0, 'c_w': 0, 'm_set': 0, 'm_w': 0}; wmax = 0.0; nsev = 0; ndet = 0; ex8h = []; sv8, bo8 = SEV8 == '1', ANC8 == 'both'
         for v1 in _kc:
-            v2 = ns_['vpair'][v1]; es, det, r_ = spec_set(v1, v2, [v2], sev=True, both=True, prior=_lp8); ok_, we_ = same(es, PCs[v1]); nsev += det and r_ is not None and (r_ < 0.3 or r_ > 0.6)
+            v2 = ns_['vpair'][v1]; es, det, r_ = spec_set(v1, v2, [v2], sev=sv8, both=bo8, prior=_lp8); ok_, we_ = same(es, PCs[v1]); nsev += sv8 and det and r_ is not None and (r_ < 0.3 or r_ > 0.6); ndet += det
             bh['c_set'] += not ok_; bh['c_w'] += ok_ and we_ > 1e-5; wmax = max(wmax, we_)
-            if not ok_ and len(ex8h) < 3: ex8h.append((int(v1), int(v2)))
+            if not ok_ or we_ > 1e-5: _mis8('T8h', v1, v2, es, PCs[v1], f', sets equal {ok_}, max rel weight diff {we_:.1e}')
+            elif v1 in FORCE: print(f'   T8h forced pair {int(v1)} -> {int(v2)}: agrees ({len(es)} candidates)', flush=True)
         for v1, v2 in _km:
-            es, det, r_ = spec_set(v1, v2, _span(v1, v2), sev=True, both=True, prior=_lp8); ok_, we_ = same(es, PC2s[(v1, v2)]); nsev += det and r_ is not None and (r_ < 0.3 or r_ > 0.6)
+            es, det, r_ = spec_set(v1, v2, _span(v1, v2), sev=sv8, both=bo8, prior=_lp8); ok_, we_ = same(es, PC2s[(v1, v2)]); nsev += sv8 and det and r_ is not None and (r_ < 0.3 or r_ > 0.6); ndet += det
             bh['m_set'] += not ok_; bh['m_w'] += ok_ and we_ > 1e-5; wmax = max(wmax, we_)
-            if not ok_ and len(ex8h) < 6: ex8h.append((int(v1), int(v2)))
-        check('T8h PRODUCTION pair sets and weights (both + SEVERITY_ANCHOR 1, training; g03b pair_cand / pair_cand2) = the independent spec',
-              len(_kc) >= min(300, len(PCs)) and (len(_km) >= 200 or not PAIR_ALL8 or len(_km) == sum(1 for k in PC2s if ns_['vpair'].get(k[0]) != k[1])) and len(_kc) > 0 and not any(bh.values()),
-              f'{len(_kc)} consecutive + {len(_km)} multi-horizon pairs ({nsev} with a severity rule applied); mismatches {bh}; max rel weight diff {wmax:.1e}; first mismatching pairs {ex8h}')
+            if not ok_ or we_ > 1e-5: _mis8('T8h', v1, v2, es, PC2s[(v1, v2)], f', multi-horizon, sets equal {ok_}, max rel weight diff {we_:.1e}')
+        _min8 = {'consecutive >= 300': len(_kc) >= 300, 'multi-horizon >= 200 (PAIR_ALL=1)': len(_km) >= 200 or not PAIR_ALL8, 'detectable >= 20': ndet >= 20,
+                 'severity rule >= 20': nsev >= 20 or not sv8}
+        check(f'T8h PRODUCTION pair sets and weights (PAIR_ANCHOR {ANC8}, SEVERITY_ANCHOR {SEV8}, training; g03b pair_cand / pair_cand2) = the independent spec',
+              OK8 and all(_min8.values()) and not any(bh.values()),
+              f'{len(_kc)} consecutive + {len(_km)} multi-horizon pairs ({ndet} with a detectable cluster, {nsev} with a severity rule applied); minima unmet {[k for k, v in _min8.items() if not v]}; '
+              f'mismatches {bh}; max rel weight diff {wmax:.1e}; mismatching pairs {_ex8.get("T8h", [])}' + (f'; {MSG8}' if MSG8 else ''))
+    if done('T8'): return RES
     # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
     if os.path.exists(f'{D}/cand_prior.parquet'):
         def bcls(m, iw, inn):      # background per distance class (inner 800 m disk / ring), clipped as specified
@@ -1100,6 +1498,30 @@ def main():
                 _exp = all(gt['err_requested'][k] <= gt['err_2021'][k] and gt['err_requested'][k] <= gt['err_null'][k] for k in ('TPH', 'BA')) and _dep0 > 0 and _dep >= 0.5 * _dep0   # (G33: dep0 > 0)
                 check('T11d start-year gate decision = the pre-registered rule applied to its recorded errors / correlations', _exp == bool(gt.get('passed')) and y0b == (gt.get('requested') if _exp else 2021.0),
                       f'rule says {_exp} (dependence {_dep:.3f} vs 2021 {_dep0:.3f}), g04 recorded {gt.get("passed")}, map_y0 {y0b}')
+    # ======================= T11h (r14 G46.13) g05 maps with g04's validated estimator: the g04 slice g05 executes defines MS (= 32), calibrated_median and medoid_draw;
+    # g05 defines none of them itself, draws MS samples per production stand (USE_B = 0) and calls calibrated_median / medoid_draw; g04's map_path draws MS
+    # by default and no caller overrides it; calibrated_median(s, cf) = e^cf · (true median of s) (behavioural)
+    if _MAPCHK:
+        try:
+            ok_h, det_h = t11h_check(open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(), open(f'{ROOT}/scripts/g05_map_stands.py').read(), ns_)
+            check('T11h g05 maps with g04\'s validated estimator (MS = 32 draws, calibrated_median, medoid_draw; G46.13)', ok_h, det_h)
+        except Exception as e_: check('T11h g05 maps with g04\'s validated estimator (G46.13)', False, f'not testable ({type(e_).__name__}: {str(e_)[:200]})')
+    # ======================= T11i (r14 G46.11 / G46.12) g04's map acceptance re-derived: on validation the mapped estimator's calibrated median |log err| (TPH, BA)
+    # and medoid Bray must each be below the null's; the null baselines and calibration factors recomputed from g04's per-plot dumps
+    if _MAPCHK and os.path.exists(f'{D}/bayes_eval.json'):
+        be_i = json.load(open(f'{D}/bayes_eval.json')); xv_i = be_i.get('mapping_path_validation_crossfit', {}); why_i = []
+        me_i, co_i, nu_i = xv_i.get('median_abs_log_err', {}), xv_i.get('composition', {}), xv_i.get('null', {})
+        try:
+            rule_i = all(float(me_i[k]) < float(nu_i[k]) for k in ('TPH', 'BA')) and float(co_i['bray_medoid']) < float(nu_i['bray'])
+        except (KeyError, TypeError, ValueError) as e_: rule_i = None; why_i.append(f'bayes_eval.json lacks the validation numbers ({e_}; G46.12)')
+        if 'map_accept' not in be_i: why_i.append('input missing: bayes_eval.json map_accept (G46.12)')
+        elif rule_i is not None and bool(be_i['map_accept']) != rule_i: why_i.append(f"map_accept {be_i['map_accept']} != the rule {rule_i}")
+        if xv_i.get('set') != 'validation plots': why_i.append(f"decided on {xv_i.get('set')!r}, not the validation plots")
+        miss_i = [f for f in G04_DUMPS if not os.path.exists(f'{D}/{f}')] if G04_DUMPS else ['(g04 writes none yet)']
+        if miss_i: why_i.append(f'input missing: g04 per-plot dumps {miss_i} (G46.11 / G46.12: the null baselines and CAL cannot be recomputed)')
+        check('T11i g04 map acceptance (validation: calibrated TPH / BA error and medoid Bray below the null) re-derived; null baselines and CAL recomputed from the per-plot dumps',
+              not why_i and rule_i is True and be_i.get('map_accept') is True,
+              f"validation errors {me_i}, composition {co_i}, null {nu_i}; rule says {rule_i}, g04 map_accept {be_i.get('map_accept')}; problems {why_i}")
     # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
     if _MAPCHK and os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
         Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
@@ -1145,79 +1567,70 @@ def main():
                 Wv = np.stack([np.nan_to_num(np.nanmean(Wn[:, r - 1:r + 2, c - 1:c + 2].reshape(64, -1), 1)) for r, c in zip(rr[ok_], cc[ok_])]); Wv /= np.linalg.norm(Wv, axis=1, keepdims=True) + 1e-9
                 acc13.setdefault((dr, dc), []).append(float(np.median((Wv * M22[ok_]).sum(1))))
     med13 = {k: np.median(v) for k, v in acc13.items()}; best13 = max(med13, key=med13.get) if med13 else None
-    if best13 is None: print('SKIP  T13 no targeted AlphaEarth windows (g02c) in this table')
+    if best13 is None and R4: print('N/A   T13 Region 4: no targeted AlphaEarth windows (g02c is no driver stage and was not run for this table; the R4 footprints are checked by T3c2 / T3c2z)')
+    elif best13 is None: print('SKIP  T13 no targeted AlphaEarth windows (g02c) in this table')
     else: check('T13 targeted AlphaEarth windows are pixel-exact: agreement with the 2022 mosaic peaks at offset (0, 0) among ±2 px shifts', best13 == (0, 0),
           f'{nv13} windows; median cosine at (0,0) {med13[(0, 0)]:.4f}, best {best13} {med13[best13]:.4f}, at (+1,0) {med13[(1, 0)]:.4f}, (0,+1) {med13[(0, 1)]:.4f}')
     # ======================= T14 no leakage: the joint AlphaEarth location posterior (g08) exists only for TRAINING plots (spatial blocks + buffer of g03b)
     if os.path.exists(f'{D}/cand_loc_aef.parquet'):
         LA = pd.read_parquet(f'{D}/cand_loc_aef.parquet'); trp = set(ns_['vpid'][ns_['tr_v']]); bad14 = set(LA.pid) - trp
         check('T14 same-year AlphaEarth location posterior only for training plots (no held-out / buffer plot); file non-empty', len(LA) > 0 and not bad14, f'{LA.pid.nunique()} plots, outside training {len(bad14)}')
+    elif R4: print('N/A   T14 Region 4: no same-year AlphaEarth location posterior (g08 is no driver stage and was not run for this table; LOC=aef unused)')
     else: print('SKIP  T14 no cand_loc_aef.parquet (g08 not run; LOC=aef unused)')
-    # ======================= T12 g04 set hygiene (r13 E-F3): g04's own set construction (exec'd up to, not including, the MDN fit; its evaluation-set lines
-    # extracted by their statements) against sets recomputed here from g03b's tr_v / va_v / te_v and the plot coordinates (brute-force distances, not a KD-tree)
-    import re as _re12, textwrap as _tw12
-    G4s = open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(); ns12 = dict(ns_); _why12 = []
-    _v12, _vp12 = np.arange(len(V)), ns_['vpid']; ns12['XL'] = {p_: None for p_ in ns_['cand_of']}; ns12['vv'] = np.array([v for v in _v12 if _vp12[v] in ns12['XL']]); ns12['vi'] = {v: i for i, v in enumerate(ns12['vv'])}
-    try:
-        exec(compile(G4s[G4s.index('# calibration plots:'):G4s.index("print(f'MDN fit visits")], 'g04', 'exec'), ns12)
-    except Exception as e_: _why12.append(f'set construction not executable ({type(e_).__name__}: {e_})')
-    _L12 = [ln for ln in G4s.splitlines()]
-    for pre in ('lastv = V[fs_ok]', 'trp_ = set(', 'te_l = [', 'trs_v = [', 'p_trl = np.array(', 'rec = lambda', 'cal_m = rec(', '_cp = sorted(', 'hA = ['):
-        hit = [ln for ln in _L12 if ln.strip().startswith(pre)]
-        if not hit: _why12.append(f'statement {pre!r} not found in g04'); continue
-        try: exec(compile(_tw12.dedent(hit[0]).strip(), 'g04', 'exec'), ns12)
-        except Exception as e_: _why12.append(f'{pre!r}: {type(e_).__name__}: {e_}')
-    _nullx = bool(_re12.search(r'null_pred\(vyear\[cb\],\s*excl\s*=\s*set\(vpid\[cb\]\)\)', G4s))       # the gate's null pool leaves out the plots being judged
-    if _why12: check('T12 g04 set hygiene (calibration / buffer / MDN fit / gate halves / kNN-null pools)', False, '; '.join(_why12))
-    else:
-        trP, vaP, teP = set(_vp12[ns_['tr_v']]), set(_vp12[ns_['va_v']]), set(_vp12[ns_['te_v']]); have12 = set(ns_['cand_of'])
-        VS12 = os.environ.get('VAL_SPLIT', '0') == '1'; calE = (vaP & have12) if VS12 else set(ns12['cal_pid'])
-        _Pxy = P.set_index('pid')[['x', 'y']]; _cx = _Pxy.loc[sorted(calE)].values if calE else np.zeros((0, 2)); _dmin = np.full(len(_Pxy), np.inf)
-        for i_ in range(0, len(_cx), 500): _dmin = np.minimum(_dmin, np.sqrt(((_Pxy.values[:, None, :] - _cx[None, i_:i_ + 500, :]) ** 2).sum(-1)).min(1))
-        dmin12 = dict(zip(_Pxy.index.values, _dmin))
-        fitE = {int(v) for v in ns_['tr_v'] if _vp12[v] not in calE and dmin12[_vp12[v]] >= 3200 and _vp12[v] in ns12['XL']}; fitG = {int(ns12['vv'][i]) for i in ns12['trA']}
-        lastE = {}                                                    # last visit passing MIN_FSHARE of every plot (independent share)
-        for v in np.flatnonzero(FSOK):
-            p_ = _vp12[v]
-            if p_ not in lastE or V.year.values[v] > V.year.values[lastE[p_]]: lastE[p_] = v
-        gateE = {lastE[p_] for p_ in calE if p_ in lastE and 2022.0 <= V.year.values[lastE[p_]] < 2026.0}; gateG = set(ns12['cal_m'])
-        hA_, hB_ = {_vp12[v] for v in ns12['hA']}, {_vp12[v] for v in ns12['hB']}; hall = hA_ | hB_
-        par = np.mean([p_ % 2 == 0 for p_ in hA_]) if hA_ else np.nan; parity = len(hall) >= 20 and (par in (0.0, 1.0) or abs(len(hA_) - len(hB_)) > 1)
-        poolP = set(int(x) for x in ns12['p_trl']); knnE = {lastE[p_] for p_ in trP if p_ in lastE and lastE[p_] in ns12['vi']}
-        res12 = {'cal = validation plots': set(ns12['cal_pid']) == calE and (not VS12 or len(calE) > 0),
-                 'MDN fit visits = training visits outside the calibration plots + 3.2 km': fitG == fitE and (min(dmin12[_vp12[v]] for v in fitG) >= 3200 if fitG else False),
-                 'gate visits = last vetted visits 2022-25 of the calibration plots': gateG == gateE and len(gateG) > 0,
-                 'gate halves disjoint, cover the gate set, seeded random (not parity)': not (hA_ & hB_) and hall == {_vp12[v] for v in gateG} and not parity,
-                 'kNN / null pool = last vetted visits of training plots only': set(ns12['tr_l']) == knnE and poolP <= trP and not (poolP & (teP | vaP)),
-                 'gate null excludes the judged plots': _nullx and not (poolP & hall)}
-        check('T12 g04 set hygiene (calibration / buffer / MDN fit / gate halves / kNN-null pools) = sets recomputed from g03b splits + coordinates', all(res12.values()),
-              f"failing {[k for k, v in res12.items() if not v]}; calibration plots {len(calE)}, MDN fit visits {len(fitG)} (expected {len(fitE)}), gate visits {len(gateG)} (halves {len(hA_)} / {len(hB_)}, "
-              f"even-pid share of half A {par:.2f}), pool plots {len(poolP)}")
-    # ======================= T15 the enforced dynamics acceptance (g06, G7 / G29) re-derived from its recorded bins for the production seed (r13 E-F3)
-    _req15 = os.environ.get('GV_REQUIRE_MAP') == '1'; _ms15 = _re12.search(r'_s(\d+)\.pt$', os.environ.get('MODEL', ''))
+    # ======================= T12 g04 set hygiene (r13 E-F3, r14 G47.5): g04's own set construction (exec'd up to, not including, the MDN fit; its evaluation-set
+    # statements executed by their anchors) against sets recomputed here from g03b's tr_v / va_v / te_v and the plot coordinates (brute-force distances, not a
+    # KD-tree). Every anchored name must be assigned in g04 on its anchored line only (a later reassignment would go unseen: E14-6); the null pool's exclusion
+    # of the judged plots is tested BEHAVIOURALLY (g04's own null_pred and its own excl expressions, on a pool planted with the judged plots); the plot halves
+    # must not be a parity, sorted or first-half split (runs test on the sorted calibration plots)
+    G4s = open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(); ok12, det12 = t12_check(G4s, ns_, V, P, FSOK, os.environ.get('VAL_SPLIT', '0') == '1')
+    check('T12 g04 set hygiene (calibration / buffer / MDN fit / gate halves / kNN-null pools) = sets recomputed from g03b splits + coordinates; behavioural null exclusion', ok12, det12)
+    # ======================= T15 the enforced dynamics acceptance (g06, G7 / G46.8) re-derived for the production seed (r13 E-F3, r14 G47.4): the driver passes the
+    # exact record as GV_DYN_JSON (G45.8); unset or missing FAILs; the bins and medians are recomputed from g06's per-pair dump (t15_judge)
     if not _MAPCHK: print('SKIP  T15 vtab mode (GV_REQUIRE_MAP=0): the dynamics stage runs after training')
     else:
-        _f15 = [os.environ['GV_DYN_JSON']] if os.environ.get('GV_DYN_JSON') else (sorted(_g0.glob(f'{D}/dynamics_check_*_history_s{_ms15.group(1)}.json'), key=os.path.getmtime) if _ms15 else [])
-        if not _f15 or not os.path.exists(_f15[-1]):
-            if _req15: check('T15 dynamics acceptance file of the production seed present', False, f"MODEL={os.environ.get('MODEL')}: no dynamics_check_*_history_s<seed>.json in {D}")
-            else: print('SKIP  T15 no dynamics_check_*_history_s<seed>.json for MODEL (not required outside the verify stage)')
+        _f15 = os.environ.get('GV_DYN_JSON', '')
+        if not _f15 or not os.path.exists(_f15): check('T15 dynamics acceptance (production seed) re-derived and passed', False, f'input missing: GV_DYN_JSON {_f15!r} (unset or no such file; G45.8 / G47.4)')
         else:
-            dj = json.load(open(_f15[-1])); ua = dj.get('undisturbed_acceptance', {}); bins15 = {}
-            for k_, d_ in dj.items():          # the pre-registered G7 rule on the recorded per-horizon numbers (n >= 20, BA log change +-0.01 / yr, age ratio 0.7-1.3)
-                if k_.startswith('undisturbed_h') and isinstance(d_, dict) and d_.get('n', 0) >= 20:
-                    bins15[k_] = abs(d_['median_pred_logchange_per_yr'] - d_['median_obs_logchange_per_yr']) <= 0.01 and d_['median_obs_age_per_yr'] > 0 and \
-                                 0.7 <= d_['median_pred_age_per_yr'] / d_['median_obs_age_per_yr'] <= 1.3
-            lat15 = dj.get('latent', ua.get('latent')); lok15 = None; ldet = 'no latent key'
-            if isinstance(lat15, dict):        # G29: no non-clock latent dim with |mean| > 2.0, effective rank (participation ratio) >= D_Z / 4
-                mu_ = lat15.get('dim_mean', lat15.get('means', lat15.get('mean')))
-                mx_ = lat15.get('max_abs_mean_nonclock', lat15.get('max_abs_mean'))       # (g03b latent_stats: over the non-clock dims already)
-                if mx_ is None and isinstance(mu_, list) and mu_: mx_ = max(abs(float(x)) for x in (mu_[1:] if os.environ.get('AGE_CH') == '1' else mu_))   # (dim 0 = the age clock)
-                er_ = lat15.get('effective_rank', lat15.get('participation_ratio')); dz_ = float(lat15.get('dims', lat15.get('D_Z', os.environ.get('DZ', 16))))   # (dims: the non-clock dimensions)
-                lok15 = mx_ is not None and er_ is not None and float(mx_) <= 2.0 and float(er_) >= dz_ / 4; ldet = f'latent max |mean| {mx_}, effective rank {er_} (D_Z {dz_:.0f})'
-            pexp = bool(bins15) and all(bins15.values()) and (lok15 is not False)
-            if 'latent_ok' in ua and lok15 is not None and bool(ua['latent_ok']) != lok15: pexp = None          # g06's own latent verdict disagrees with the rule
-            check('T15 dynamics acceptance (production seed) = the pre-registered rule re-derived from its bins (+ G29 latent criteria if recorded), decided on the validation set, and passed',
-                  ua.get('set') == 'val' and pexp is not None and pexp == bool(ua.get('passed')) and pexp,
-                  f"{os.path.basename(_f15[-1])}: set {ua.get('set')}, bins {bins15}, {ldet}; rule says {pexp}, g06 recorded {ua.get('passed')}")
+            dj = json.load(open(_f15)); _p15 = g06_dump_path(_f15); dmp = pd.read_parquet(_p15) if os.path.exists(_p15) else None
+            ok15, vd15, why15, bins15 = t15_judge(dj, dmp, set(int(p_) for p_ in ns_['vpid'][ns_['va_v']]) if len(ns_['va_v']) else set())
+            lat15 = dj.get('latent', {}) if isinstance(dj.get('latent'), dict) else {}
+            check('T15 dynamics acceptance (production seed) = the pre-registered rule re-derived from the per-pair dump (G7 bins, true medians) and the G46.8 latent criteria, on the validation set, and passed',
+                  ok15, f"{os.path.basename(_f15)} (dump {os.path.basename(_p15)}{'' if dmp is not None else ' MISSING'}): set {dj.get('undisturbed_acceptance', {}).get('set')}; "
+                  f"bins {{(lo, hi): (n, ok)}} {bins15}; latent max |mean| {lat15.get('max_abs_mean')}, min sd {lat15.get('min_sd')}, share |z| > 2.9 {lat15.get('share_abs_gt_2p9')}; "
+                  f"rule says {vd15}, g06 recorded {dj.get('undisturbed_acceptance', {}).get('passed')}; problems {why15}")
+    # ======================= T4y (r14 G47.8) the checkpoint's training switches = the configured ones: every tensor name / shape of the checkpoint = the model g03b
+    # builds under this environment (ARCH, DZ, TOPK, SITE_ATTR, AGE_CH, JUMP_RESET, STATE_ATTR change them), and the switches it records (`switches`) = the
+    # environment's; the loss-only switches leave no trace in the weights, so a checkpoint without that record FAILs
+    NSW4 = ('SIGREG_MEAN', 'SIGREG_FLOW', 'AGE_FLOW', 'W_AGE', 'W_SUM', 'W_COMP', 'PAIR_ANCHOR', 'SEVERITY_ANCHOR', 'LOC', 'MIN_FSHARE', 'PAIR_ALL', 'PAIR_HMAX',
+            'T_PAIR', 'QD_WIN', 'KC', 'LR', 'EPOCHS', 'CURRIC', 'BATCH', 'VAL_SPLIT')
+    TSW4 = ('SIGREG_MEAN', 'SIGREG_FLOW', 'AGE_FLOW', 'W_AGE', 'W_SUM', 'W_COMP', 'PAIR_ANCHOR', 'SEVERITY_ANCHOR', 'LOC', 'MIN_FSHARE', 'PAIR_ALL', 'PAIR_HMAX',
+            'T_PAIR', 'QD_WIN', 'KC', 'LR', 'EPOCHS', 'CURRIC', 'BATCH', 'VAL_SPLIT', 'ARCH', 'DZ', 'SITE_ATTR', 'AGE_CH', 'JUMP_RESET', 'STATE_ATTR', 'SEED',
+            'TOPK', 'NCAND', 'RADIAL_P', 'CF16')                          # (every switch compared: a literal tuple of constant names, G45.10)
+    _mdl = os.environ.get('MODEL', '')
+    if not _MAPCHK or not _mdl: print('SKIP  T4y vtab mode / MODEL unset: no checkpoint before training')
+    elif not os.path.exists(f'{D}/{_mdl}'): check('T4y checkpoint switches = the configured ones', False, f'input missing: checkpoint {D}/{_mdl}')
+    else:
+        sd4 = torch.load(f'{D}/{_mdl}', weights_only=False, map_location='cpu'); shp4 = {}
+        for nm4, mod4 in (('enc', ns_['enc']), ('flow', ns_['flow']), ('dec', ns_['dec']), ('q', ns_['qn']), ('h22', ns_['h22']), ('h25', ns_['h25'])):
+            ex4 = {k: tuple(v.shape) for k, v in mod4.state_dict().items()}; got4 = {k: tuple(v.shape) for k, v in sd4.get(nm4, {}).items()}
+            if ex4 != got4: shp4[nm4] = {'names only one side': sorted(set(ex4) ^ set(got4))[:4], 'shapes': [(k, ex4[k], got4[k]) for k in sorted(set(ex4) & set(got4)) if ex4[k] != got4[k]][:3]}
+        rec4 = sd4.get('switches') if isinstance(sd4.get('switches'), dict) else None
+        def _same4(a, b):
+            try: return abs(float(a) - float(b)) < 1e-12
+            except (TypeError, ValueError): return str(a) == str(b)
+        dif4 = {k: (rec4[k], os.environ.get(k)) for k in TSW4 if k in (rec4 or {}) and os.environ.get(k) not in (None, '') and not _same4(rec4[k], os.environ.get(k))}
+        miss4 = [k for k in NSW4 if os.environ.get(k) not in (None, '') and k not in (rec4 or {})]
+        check('T4y checkpoint (MODEL) built under the configured switches: tensor names / shapes = the configured model; recorded loss switches = the environment',
+              not shp4 and rec4 is not None and not dif4 and not miss4,
+              f'{_mdl}: structure differs {shp4 or "no"}; ' + ('input missing: the checkpoint records no `switches` (the loss-only switches cannot be verified; G47.8)' if rec4 is None
+                                                            else f'recorded {len(rec4)} switches, differing (recorded, configured) {dif4}, configured but not recorded {miss4}, recorded but not compared {sorted(set(rec4) - set(TSW4))}'))
+    # ======================= T4x (r14 G46.7) converted plots carry no AlphaEarth term: g03b's own training step (exec'd for one batch, last: it updates the model)
+    # gives MIL = Q = Q-decode = 0 on a batch whose visits are flagged converted, and non-zero terms on the same batch unflagged; g04's B-likelihood set (trB)
+    # leaves converted visits out; their pairs are dropped (T8p)
+    try:
+        ok4x, det4x = t4x_check(ns_, open(f'{ROOT}/scripts/g03b_train_gafl.py').read(), open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(), V, BAtk)
+        check('T4x converted plots (G46.7): g03b\'s training step gives MIL = Q = Q-decode = 0 on a batch flagged converted (non-zero unflagged); g04 trB leaves converted visits out; pairs dropped (T8p)', ok4x, det4x)
+    except Exception as e_:
+        check('T4x converted plots carry no AlphaEarth term (G46.7)', False, f'not testable on this code ({type(e_).__name__}: {str(e_)[:200]})')
     nf = sum(1 for _, ok in RES if not ok); print(f'\n{len(RES) - nf} / {len(RES)} checks PASS'); sys.exit(1 if nf else 0)
 if __name__ == '__main__': main()
