@@ -422,14 +422,14 @@ def pair_set(v1, v2, blk=None, span=None):
     the span's part after it carries no constraint (G36 as a clip, G46.5). Also records UNDIST[(v1, v2)]."""
     blk = vblk[v2] if blk is None else blk; span = [v2] if span is None else span
     span = [u for u in span if fs_ok[u]] or [v2]                       # (G35) severity / collapse ratios only over visits passing MIN_FSHARE
-    if 'fsub' in V.columns and abs(float(V.fsub.values[v2]) - float(V.fsub.values[v1])) >= 0.25: blk = True   # (G38) end-to-end forest-share change
+    if 'fsub' in V.columns and abs(float(V.fsub.values[v2]) - float(V.fsub.values[v1])) >= G2.SHARE_DELTA - G2.SHARE_TOL: blk = True   # (G38 / G51.3 tie tolerance) end-to-end forest-share change
     p_ = vpid[v1]; y1, y2 = float(vyr[v1]), float(vyr[v2])
     ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2]), pair_ra(v1, v2)); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
     be_ = min(b, EVID_END - YEARS[0])                               # (G36 / G46.5) the constrained part of the span ends at the evidence window
     pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if detectable(c)]
     r_ = min(BAv.get(u, 0.0) for u in span) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
     # FIA-undisturbed (outcome-independent of the switches): no hiding code, no detectable record, a constrained part of the span, no measured collapse
-    UNDIST[(v1, v2)] = bool(not blk and not cl_ and be_ >= a and not (r_ is not None and r_ < 0.3))
+    UNDIST[(v1, v2)] = bool(not blk and not cl_ and be_ >= a and not (r_ is not None and r_ < 0.3) and not bool(VCONV[v1]))   # (G51.8) never a converted plot
     if p_ not in cand_of: return None
     if VCONV[v1]:                                       # (G46.7) converted plot: its candidates are mislocated and the pair code has no FIA-only path
         nanch['converted_dropped'] = nanch.get('converted_dropped', 0) + 1; return None
