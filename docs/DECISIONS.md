@@ -208,3 +208,41 @@ recommendations, but document the decision point and the different options"). Th
   - (b) drop 'unknown' everywhere;
   - (c) keep the GA+FL table.
 - **Chosen:** (a). Recorded in the restart run order.
+
+## G35 — Severity / collapse ratios over a span use only visits passing MIN_FSHARE (r13 F#5, agent)
+- **Chosen:** an intermediate visit that fails the forest-share vetting does not enter the span's minimum BA ratio, because its per-forested-area BA is inflated or noisy.
+- **Option rejected:** keep every visit.
+
+## G36 — Evidence-coverage end (r13 A-1, agent)
+- **Evidence:** Hansen GFC-2024 has lossyear 2001–2024. FY2025 LANDFIRE misses Oct–Dec 2025. The LANDFIRE harvest class is near-empty, so stand-replacing evidence is in practice Hansen. 2025 therefore carries no stand-replacing evidence; 2000 carries Hansen none either.
+- **Options:**
+  - (a) **treat 2025 as outside the evidence window**: negative-evidence periods and the neg / event-free / replacing rules are clipped to ≤ 2024; a span whose acting years reach 2025 cannot be "undisturbed"; documented for the map's end-2025 state;
+  - (b) map the end-2024 state;
+  - (c) acquire GFC v1.13 (lossyear 2025) when available.
+- **Chosen:** (a) now, plus (c) as a data-update TODO after the restart: check availability and re-run the rasters. 2000 needs nothing, because the mapping path starts AT 2000.
+
+## G37 — NONBLOCK DSTRBCD 41 and 60 (r13 A-2, agent)
+- **Evidence:** the share of v2 visits with BA ratio < 0.3 is 3.6 % for code 41 (beaver, incl. flooding) and 2.8 % for 60 (vegetation). That is close to the blocking codes 52 (3.6 %) and 53 (2.5 %), and far from "no code" (0.6 %).
+- **Chosen:** **both block**. NONBLOCK = {11, 21, 31, 40, 42, 43, 44, 45, 46}.
+- **Option rejected:** keep them as NONBLOCK.
+
+## G38 — Multi-horizon forest-share change (r13 A-3, agent)
+- **Chosen:** for multi-horizon pairs, an end-to-end |Δ forested share| ≥ 0.25 also blocks the undisturbed rules. Before, only consecutive steps were compared.
+
+## G39 — FIA lookback and initial installations (r13 A-4 / A-5, agent)
+- **Lookback:** the first visit's lookback period is (yr0 − 4, yr0 − 1), conservative. It used to be yr0 − 5, which included months before "visit − 5 yr".
+- **After a non-sampled visit:** a visit whose PREV_PLT_CN measurement was non-sampled (PLOT_STATUS_CD 3) uses the lookback rule, not the period since that unvisited measurement.
+
+## G40 — Bare visits and all-bare plots (r13 A-6 / A-7, agent)
+- **Bare test:** it counts live trees with TPA_UNADJ > 0 on forested conditions only.
+- **All-bare plots:** FIADB plots that are bare at every visit are included, when their L3 ecoregion is in the curated table's scope. Recently cleared stands were under-represented by about 30–37 %.
+- **Option rejected:** keep excluding them.
+
+## G41 — Plots converted to non-forest before the 2022 mask (r13 A-9, agent)
+- **Context:** a plot whose later FIADB visit is entirely non-forest likely has its true footprint outside the 2022 forest mask, so it has no candidate.
+- **Chosen:** these plots are excluded from the MIL (AlphaEarth) loss. Their visits still train the decoder and pair losses.
+- **Options rejected:** train them as now; drop them entirely.
+
+## G42 — T10 as a hard constraint (r13 A-12, agent; deferred)
+- **Evidence:** cuttings are mostly partial (median BA ratio 0.756), and the 'unknown' / Hansen base rate is about 15 % per 3-yr window.
+- **Chosen:** keep T10 as a hard constraint for now; the g09 lift evidence supports it. Revisit in the per-region evidence re-derivation (G34).
