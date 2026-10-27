@@ -4,24 +4,31 @@ the polygons, the stand-mapping internals (g05 landscape nodes), the Region 4 de
 exit 1 on any failure. VERIFY_INPUTS: the exact list of paths main() reads (the driver fingerprints it, G45.7); importing the module runs no check.
   python scripts/gv_verify_upstream.py [n_points=200]
 
-PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r14] = first set in audit round 14 (before any run of it; G47.8).
-  U1    exact (transform, size, CRS)       every derived raster is written on grid.json by construction
-  U1r   exact; offset a multiple of 3 px   Region 4 grids: grid_r4 on the TreeMap lattice, grid_r4_90 = grid_r4 aggregated 3x3
-  U6    agreement > 0.99                   the forest-land classes are a deterministic rule of their inputs; the residual is resampling ties at class edges
-  U6r   agreement > 0.99                   the same rule in Region 4 (CONUS TreeMap / EVT read by coordinates)
-  U7    id match > 0.99, median |area ratio − 1| < 0.02   rasterisation of the polygons (pixel-centre rule; small stands quantise)
-  U8    own-centroid agreement = 1; < 5 % of ALL descriptor dims with |t| > 3.5 [r14: every block — AlphaEarth means, cluster histogram, disturbance
-        class + Hansen fractions per period, soils]; mean |Δ| AlphaEarth < 0.02, disturbance / Hansen fractions < 0.03 [r14], standardised soils < 0.1 [r14]
-        g05 uses a uniform 256-footprint subsample of the disk: an unbiased estimate (signed errors across nodes), sampling noise ~0.01-0.03 per dim
-  U9    exact labels                       the FE display must show g07's units
-  U10r  [r14] Region 4 derived rasters against independent routes on sampled pixels (AEF90 only):
+PRE-REGISTERED THRESHOLDS (check — threshold {date set, 2026: the commit that first contains it} — rationale). [r14] / [r15] = audit round 14 / 15.
+  U1    exact (transform, size, CRS) {10-21}   every derived raster is written on grid.json by construction
+  U1r   exact; offset a multiple of 3 px {10-25; grid_r4_90 r13 10-27}   Region 4 grids: grid_r4 on the TreeMap lattice, grid_r4_90 = grid_r4 aggregated 3x3
+  U6    agreement > 0.99 {10-21}       the forest-land classes are a deterministic rule of their inputs; the residual is resampling ties at class edges
+  U6r   agreement > 0.99 {10-25}       the same rule in Region 4 (CONUS TreeMap / EVT read by coordinates)
+  U7    id match > 0.99, median |area ratio − 1| < 0.02 {10-21}   rasterisation of the polygons (pixel-centre rule; small stands quantise)
+  U8    own-centroid agreement = 1 {10-22}; < 5 % of ALL descriptor dims with |t| > 3.5 {r14 10-27}; [r15 10-27, G52.5, set before its first run] EVERY
+        block on its own — AlphaEarth 2022, AlphaEarth 2025 (mean |Δ| < 0.02 {r14}), cluster histogram (< 0.03 [r15]), LANDFIRE classes per period
+        (< 0.03 {r14}), Hansen loss per period (< 0.03 {r14}), standardised soils (< 0.1 {r14}) — and at most max(1, 5 % of the block's dims) with
+        |t| > 3.5 [r15]   g05 uses a uniform 256-footprint subsample of the disk: an unbiased estimate (signed errors across nodes), sampling noise
+        ~0.01-0.03 per dim; one block's error (two periods swapped, one source zeroed) is diluted in the whole-descriptor rule (E15-6)
+  U9    exact labels {10-21}           the FE display must show g07's units
+  U10r  {r14 10-27} Region 4 derived rasters against independent routes on sampled pixels (AEF90 only); [r15 10-27, G52.5] every sample is RANDOM
+        (no first-N of a row-sorted list: E15-9):
         (a) where the GA+FL products exist (the same sources through 03_hansen / 04c_lf_dist / 05_soils): dist and hansen_* equal on >= 99.5 % (treecover2000,
             GDAL `average`: within 1 — revised after the first run: its rounding depends on the warp window, the differences were exactly ±1 on 5.5 %),
             soils90 = the 30 m soils pixel at the 90 m block centre within rel 1e-3 on >= 99 %;
         (b) everywhere from the SOURCES: dist = the CONUS archive by coordinates (6 years) exactly on 100 %; hansen own reprojection (source pixels
             whose centres fall in the 30 m pixel: mode / mean / centre) — agreement must PEAK at offset (0, 0) among ±1 px shifts (lossyear on loss
             pixels, treecover by mean |Δ|), datamask agreement >= 0.99; restrdepth = own bilinear of SOLUS100 at the 90 m centre, rel 1e-3 on >= 99 %
-            of pixels with 4 valid neighbours. Every failing line ends with a provenance label (G47.9)."""
+            of pixels with 4 valid neighbours. (0.995: the first run showed lossyear (a) 0.9970; the history cannot tell whether 0.995 predates it.)
+  U10f  [r15 10-27, G52.8, set before its first run (shares 0.492-0.506)] Region 4 soils90/fill.json: per layer, at 20 000 random forest-land 90 m AOI
+        pixels with a valid value, share < fill <= 0.52 and share <= fill >= 0.48   the g02b nodata fill (T3d / U8 read it as given) is the region's
+        forest-land median; sd of a sampled share ~0.0035
+Every failing line ends with a provenance label (G47.9): these checks read rasters / map outputs that record no table provenance."""
 import sys, os, json, math, zipfile, re, numpy as np, pandas as pd, rasterio, yaml
 from rasterio.windows import Window
 from rasterio.transform import Affine
@@ -51,7 +58,7 @@ def _verify_inputs():
     if AEF90:
         out += [d_('grid/grid_r4.json'), d_('grid/grid_r4_90.json'), d_('grid/aoi_r4_mask90.tif'), d_('aef90/aef90_2022.tif'), d_('aef90/aef90_2025.tif'), f'{ROOT}/config/pilot.yml',
                 d_('r4/land.tif'), d_('r4/hansen_lossyear.tif'), d_('r4/hansen_treecover2000.tif'), d_('r4/hansen_datamask.tif'), *[d_(f'r4/dist/dist_{y}.tif') for y in (2000, 2012, 2024, 2025)],
-                *[d_(f'r4/soils90/{k}.tif') for k in soils], WS + '/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif', d_('landfire/raw/LF2022_EVT_CONUS/Tif/LF2022_EVT_CONUS.tif')]
+                *[d_(f'r4/soils90/{k}.tif') for k in soils], d_('r4/soils90/fill.json'), WS + '/FVSclaude/treemap/Data/TreeMap2022_CONUS.tif', d_('landfire/raw/LF2022_EVT_CONUS/Tif/LF2022_EVT_CONUS.tif')]
         # U10r: the GA+FL products, the sources (Hansen granules, the LANDFIRE archive, SOLUS100 restriction depth)
         import glob as _gl
         out += [d_(f'landfire/dist/dist_{y}.tif') for y in U10_YEARS] + [d_(f'r4/dist/dist_{y}.tif') for y in U10_YEARS] + [d_(DIST_ARCHIVE), WS + '/SOLUS/SOLUS100/resdept_all_cm_p.tif'] + \
@@ -59,10 +66,24 @@ def _verify_inputs():
     return sorted(set(out))
 VERIFY_INPUTS = _verify_inputs()
 VERIFY_CODE = [f'{ROOT}/scripts/{f}' for f in ('gv_verify.py', 'stand_runs.py')]     # (U8 imports gv_verify's LANDFIRE decoding; stand_runs: the stand run)
+def fill_check(rng, ia9, W9, land4, fill, n=20000, tol=0.02):
+    """(G52.8) fill.json = per soil layer the median over the Region 4 90 m pixels whose block-centre 30 m land class (data/r4/land.tif) is forest land
+    (1-4) and whose value is valid (> -9000): at n random AOI 90 m pixels (ia9: flat AOI indices, W9 the 90 m width) of forest land with a valid value,
+    the share below the fill <= 0.5 + tol and the share at or below it >= 0.5 - tol (sd of a share ~0.0035 at n = 20000). Returns (ok, detail)"""
+    q_ = rng.choice(ia9, min(4 * n, len(ia9)), replace=False); o_ = np.argsort(q_); lc = np.zeros(len(q_), int)       # (random order; read in row order)
+    lc[o_] = [land4.read(1, window=Window(3 * int(q % W9) + 1, 3 * int(q // W9) + 1, 1, 1))[0, 0] for q in q_[o_]]
+    q_ = np.sort(q_[(lc >= 1) & (lc <= 4)][:n]); r9, c9 = q_ // W9, q_ % W9; out, ok = {}, True       # (the first n forest-land pixels of the random order)
+    for k in SOILS6:
+        if k not in fill: out[k] = 'missing'; ok = False; continue
+        s9 = rasterio.open(f'{ROOT}/data/r4/soils90/{k}.tif'); v = np.array([float(s9.read(1, window=Window(int(c), int(r), 1, 1))[0, 0]) for r, c in zip(r9, c9)]); v = v[v > -9000]
+        lo_, le_ = float((v < fill[k]).mean()) if len(v) else np.nan, float((v <= fill[k]).mean()) if len(v) else np.nan
+        out[k] = (len(v), round(lo_, 4), round(le_, 4)); ok = ok and len(v) >= n // 2 and lo_ <= 0.5 + tol and le_ >= 0.5 - tol
+    return ok, f'{{layer: (forest-land pixels sampled, share < fill, share <= fill)}} {out}; fill {fill}'
 def main():
     NP = int(sys.argv[1]) if len(sys.argv) > 1 else 200; rng = np.random.default_rng(7); RES = []
     def check(name, ok, detail=''):          # (G47.9: these checks read rasters / map outputs, which carry no table code hash)
-        RES.append((name, bool(ok))); lab = '' if ok else '  [divergent (upstream rasters / map outputs carry no table code hash: the products disagree with the rule)]'
+        RES.append((name, bool(ok))); lab = '' if ok else ('  [divergent (upstream rasters / map outputs carry no table code hash: the products disagree with the rule'
+                                                          + ('; g05 outputs record no provenance: they may be stale' if name.startswith('U8') else '') + ')]')
         print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}{lab}", flush=True)
     G = json.load(open(f'{ROOT}/data/grid/grid.json')); TR = Affine(*G['transform']); CRS = G['crs']; W, H = G['width'], G['height']
     CFG = yaml.safe_load(open(f"{stands_run()['dir']}/config_resolved.yml"))   # the rules the stand run was built with
@@ -244,6 +265,10 @@ def main():
               okA and okB, f'(a) {len(inG)} pixels in both AOIs: equal share {eqa}; soils90 vs the 30 m pixel: rel <= 1e-3 on {(so_rel <= 1e-3).mean() if len(so_rel) else float("nan"):.4f} of {len(so_rel)}; '
               f'(b) dist vs the archive {{year: (pixels, equal share)}} {eqb}; lossyear agreement on loss pixels by offset {{(dr, dc): share}} {agree_l} (best {best_l}); '
               f'treecover mean |Δ| by offset {dtc} (best {best_t}); datamask agreement {np.mean(dm_):.4f}; restrdepth own bilinear rel <= 1e-3 on {(rel_r <= 1e-3).mean() if len(rel_r) else float("nan"):.4f} of {len(rel_r)}')
+    # ======================= U10f (r15 G52.8) Region 4 soils90/fill.json (the g02b nodata fill; T3d / U8 read it as given) = the region's forest-land medians
+    if AEF90:
+        ok_f, det_f = fill_check(np.random.default_rng(1012), ia9, W9, rasterio.open(f'{ROOT}/data/r4/land.tif'), json.load(open(f'{ROOT}/data/r4/soils90/fill.json')))
+        check('U10f Region 4 soils90/fill.json = the forest-land medians of the 90 m soil layers (sampled median test)', ok_f, det_f)
     # ======================= U7 stands raster vs the stand polygons (gpkg): pixel centre inside its stand's polygon; polygon area ≈ pixel area
     import geopandas as gpd
     from shapely.geometry import Point

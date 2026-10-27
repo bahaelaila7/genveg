@@ -5,86 +5,107 @@ instead of curated_trees for events) and compares. Output: PASS / FAIL / SKIP / 
 The paths it reads: VERIFY_INPUTS (data, the exact list the driver fingerprints: G45.7) and VERIFY_CODE (the pipeline code it execs / imports / scans),
 module constants the driver evaluates in a subprocess; importing this module runs no check (main() does). A test harness may call
 main(argv, force_pairs=[v1, ...], stop_after='T8') to put chosen pairs into every T8 sample and stop early (no environment switch).
-Every FAIL line ends with a provenance label (r14 G47.9): `stale` (a producing script's code hash recorded with the table — meta.json code_hash, the
-parquet provenance record of g02e / g02g / g02j, G46.6 — differs from the current script's, or none was recorded: the table predates G46.6) or
-`divergent` (the table was built by the current code, or the check reads no table: the code disagrees with the spec).
+Every FAIL line ends with a provenance label (r14 G47.9, r15 G52.6): `stale` (a producing stage's code hash (G51.5) recorded with its output differs from
+the current script's or none was recorded, or the output was made on another table instance than meta.json's build_id: rebuild / rerun before triage),
+else `outcome` (T15, T1k, T1l, T3i, T10: a model / data result — T15 / T10 only when the failure has no code problem), else `divergent` (current
+code on this table instance disagrees with the spec). Stages whose outputs record no provenance (g02f, g02c, g05, g07, g08) are named in the label.
 
-PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r13] / [r14] = first set in audit round 13 / 14 (before any run of it).
-  T0    0 hits; list unavailable = FAIL   a swallowed statement silently changes a stage (5 historical instances); list = the driver's pipeline_scripts() [r14: no fallback]
-  T1a/c exact equality                 the visit set / order is a deterministic function of FIADB + the curated table (G40 bare / all-bare rules [r13]; G46.1 incomplete visits out [r14])
-  T1r   0 table visits [r14]           G46.1: no table visit with FIADB live tallied trees >= 3 and curated ones < half of them (meta.json incomplete_visits: INFO)
-  T1b   exact                          species keys are a deterministic ranking (ties by symbol)
-  T1d-g rtol 1e-6 / 1e-9               the same arithmetic on the same records: only float noise may differ
-  T1o   max |Δ| 1e-6 [r13]             token A / CR: the same weighted means, float noise only
-  T1f   exact                          bare visits carry no tokens by construction
-  T1h/i exact                          pairs / planted flag are deterministic
-  T1j   < 2 % missing                  coarse (by MEASYEAR) sanity check of absent forested visits; allows sub-0.1-share visits
-  T1k   <= 1 % of bare visits          pre-registered r7: a bare table visit with live FIADB trees is a false clear-cut target
-  T1l   median 1 ± 0.02, < 2 % < 0.9   G14 (pre-registered r9): expansion factors identical by construction, residual should be ~0
-  T1m   <= 2 % absent [r13]            A-8: FIADB live-tree plots in the curated L3 scope missing from the table bias the training population
-  T1n   exact [r13; rule r14 G46.3 / G48.2]   plot_converted: the last SAMPLED FIADB visit dated <= 2022 is non-forest (non-forest land / water, no forest) after a forested one
-  T1q   exact [r13]                    E-F8: the table must be built with the configured TOPK / NCAND / RADIAL_P
-  T2a0  > 99.9 % keys within 0.2 km    annual-inventory coordinates of one plot key are one location
-  T2a/b allclose (1e-3 m)              deterministic transforms
-  T2c   > 99.5 % (R4, 2 km) / 99 %     FIA coordinate fuzz is < 1.6 km; state polygons simplified
-  T3a   1e-3 m, all <= 1600 m          deterministic geometry; the fuzz disk radius
-  T3b   all classes 1-4                candidates are forest land by construction
-  T3c   2e-3                           float16 storage of AlphaEarth values in [-1, 1]
-  T3c2  median max|Δ| < 0.02, cos q05 > 0.98, n > 50 (GA+FL mosaic), 2022 and 2025 [2022: r14 G47.8]; T3c2z [r13] every R4 UTM zone (15-18), >= 4 footprints, min cos > 0.999 (source COGs)  re-quantisation noise; a 1-block shift gives 0.77-0.996
-  T3d   err < 1e-3 relative            float16 storage of soils
-  T3e   |Δ| <= 2e-3                    float16 storage of fractions in ninths / severities in thirds
-  T3f   ratio spread < 1 + 2e-3        the prior is a product of the spec's factors; float16-free (float64) storage
-  T3g   rel err < 1e-4                 the inclusion weights sum to the disk's footprint count exactly
-  T3j   exact [r13]                    g02e fia_negs = the FIA-protocol periods of the spec (G36 evidence end, G37 NONBLOCK, G39 lookback)
-  T3h   all monotone, >= 10 plots [r13]  hi is a threshold; fewer than 10 plots with both classes is vacuous
-  T3i   per state, year cells n >= 30 [r13]; post max < pre min and < clean − 0.05   time-axis alignment; pooled states hid KY / TN (G34)
-        [r14 G47.2 / G48.1, set after seeing data] per detectable row (lr >= 4) of the REGION's table on its POOLED compatible classes; every class INFO
-  T3k   exact [r14]                    G47.2: the verifier has its own evidence table for the region (else FAIL) and it equals meta.json evk (classes, window, lr per kind)
-  T4a-c rtol 1e-4                      float32 model tensors
-  T4d   >= 3200 m; VAL_SPLIT -> val non-empty [r13]   two 1.6 km disks cannot overlap
-  T4e-m 1e-5 / 1e-7                    float32 closed forms of the flow
-  T4n/o/p/q 1e-5 / 1e-4; SIGReg ratio > 20, |Δ| <= 25 % [r13]   G29-G31 closed forms; the shifted-cloud ratio is ~100x when the location is tested
-        [r14] T4n bounded reset (G46.10: clamp(z_post + shift) target, states stay in ±3, clock >= age 0); T4q exact G46.8 verdicts
-  T4r   1e-6                           the loss vanishes at a perfect prediction
-  T4v   exact [r13]                    MIN_FSHARE vetting is deterministic
-  T4w   1e-6 [r14]                     G46.20 / A14-8: a 2026 visit's flow state = the end-2025 state (the YEARS[-1] clamp), 2026 events dropped
-  T4x   exact 0 [r14]                  G46.7: converted plots carry no MIL / Q / Q-decode weight, no g04 B-likelihood (trB) visit, no pair
-  T4y   exact [r14]                    G47.8 / G48.5: tensor names / shapes = the configured model; the checkpoint's `switches` = the configuration (T4Y_COMPARED;
-                                       unset = None; every recorded name known; SEED = the MODEL name's _s<seed>)
-  T4g   SIGReg(N) < 0.2 SIGReg(3N)     the test statistic must separate a scaled cloud
-  T4i   max |freq − prior| < 0.02      19 200 draws: binomial sd <= 0.0036
-  T4l   1e-3 yr                        float32 ages
-  T5    < 5 % of dims |t| > 3.5        an unbiased estimator; 3.5 sd keeps the family-wise false alarm low over ~200 dims
-  T5s   [r13] aggregate: weighted sum t^2 < unweighted when the latter > df + 3 sqrt(2 df) (decides); per dim (weighted |bias| <= 0.5 x unweighted where
-        unweighted |t| > 3.5) report-only [r14 G47.7]; plots with a NON-CONSTANT incl_w only [r14] (constant weights: weighted = unweighted)   E-F5 / E14-8; INFO when none
-  T6a-d exact / 2e-3 / err < 1 [r13 T6c, T6d]   as T3c-e (float16 storage); the stand offset is exact (500 stands)
-  T7a-c exact                          deterministic joins
-  T7e   rtol 1e-9 [r13]                the production LOC=history prior is a deterministic restriction + renormalisation
-  T8*   exact sets, weights rel 1e-6 (T8, T8c) / 1e-5 (T8h) [r13 weights, T8h, T8p]   deterministic pair rules; float32 / float64 renormalisation noise only
-        [r14 G47.1] records = every FIADB record made at a visit dated in (v1, v2], table visit or not; mismatching pairs printed (T8, T8f, T8c, T8h)
-        [r14 G46.5] undisturbed constraints clipped to the evidence end; [r14 G46.7] no pair of a converted plot (T8p)
-  T8b   (a) exact on 3000 + 1000 random pairs under the configured PAIR_ANCHOR + LOAD=1 [r13]; (b) 0 violations, >= 1 pair   the evaluation must never see outcome-informed sets
-        [r14 G47.6] PAIR_ANCHOR / SEVERITY_ANCHOR read from the environment; supported both / period and 0 / 1, any other value FAILs
-  T8c   PAIR_ALL=1 -> multi-horizon pairs exist [r13]   E-F6: an empty family is vacuous
-  T8h   [r14 G47.6] >= 300 consecutive pairs, >= 200 multi-horizon pairs (PAIR_ALL=1), >= 20 with a detectable cluster, >= 20 with a severity rule applied
-        (training config)   the sample must exercise the event and severity rules (the r13 size conditions were tautological)
-  T9    rel err < 1e-3                 float32 EM posterior
-  T10   exact, >= 1 constrained plot [r13]   deterministic; an all-unconstrained sample is vacuous
-  T11   max |Δ| < 0.11                 rounding to 0.1 / 0.01 in the FE layer (g07 uses 2.47105 since r13: E-F10)
-  T11b  1e-6                           the cohorts are scaled to the summary exactly
-  T11c/d exact                         G5 / G19 / G24 / G33 gate rule re-derived; missing keys FAIL [r13 F#10]
-  T11e/f/g exact, 1e-6 [r13]           g05 QMD / dominant key / coverage and g07 cohorts JSON are deterministic
-  T11h  exact [r14]                    G46.13: g05 maps with g04's estimator (the same `calibrated` helper and medoid draw, MS = 32 iid draws)
-  T11i  rel 1e-6 [r14]                 G46.11 / G46.12 / G48.5: CAL, CALF, the validation errors / medoid Bray, the null and map_accept recomputed from
-                                       g04_plots.parquet; every applied factor = the other half's fit; dumped nulls = an independent null (rel 1e-4)
-  T12   exact set equalities [r13]     E-F3: g04 calibration = validation plots, MDN fit outside them + 3.2 km, training-only pools, random halves
-        [r14 G47.5] every anchored statement assigned exactly once in g04 (else FAIL); behavioural null exclusion; halves not sorted / first-half / parity
-  T13   argmax at offset (0, 0)        pixel-exact windows peak at no shift; N/A (reason printed) in Region 4 [r14]
-  T14   no non-training plot, non-empty [r13 non-empty]   leakage; N/A in Region 4 [r14]
-  T15   [r14 G47.4 / G46.8 / G46.17] GV_DYN_JSON only (unset / missing: FAIL); latent key required: non-clock max |mean| <= 2, min sd >= 0.3, share
-        |z| > 2.9 <= 1 %; G7 per pre-registered horizon bin recomputed (true medians) from g06's per-pair dump: |Δ BA log change| <= 0.01 / yr, age
-        ratio 0.7-1.3, every bin n >= 20 by the verifier's own recount (recorded n must equal it); set = val checked against the split (dump pairs =
-        validation plots)"""
+PRE-REGISTERED THRESHOLDS (check — threshold {date set, 2026} — rationale). The date is that of the commit that first contains the threshold; [r13] /
+[r14] / [r15] = audit round. The history cannot show whether a development run preceded a commit; known cases: T3i's interim pooled rule (set after
+gvv_v4_head_1 at 10-27 06:05 had failed on 'fire', committed 06:12; superseded by G48.1); in gv_verify_upstream, U10r treecover ±1 (revised after the
+first run, G48.3) and U10r 0.995 (its first run showed lossyear (a) 0.9970: whether 0.995 predates that run cannot be told). The r15 thresholds were
+written before their first runs (2026-10-27 scratch runs), each first-run value noted where it was close.
+  T0    0 hits; list unavailable = FAIL {10-26; r14 no fallback 10-27}   a swallowed statement silently changes a stage (5 historical instances); list = the driver's pipeline_scripts()
+  T0h   exact {r15 10-27}              G51.5: the verifier's independent copy of the token-based code hash = common.code_hash on every stage script
+  T1a/c exact equality {10-20}         the visit set / order is a deterministic function of FIADB + the curated table (G40 bare / all-bare rules [r13]; G46.1
+                                       incomplete visits out [r14]; G51.1 rule widened, G51.2 canonical keys [r15])
+  T1r   0 table visits {r14 10-27}     G46.1 / G51.1 [r15]: no table visit with FIADB live tallied trees >= 3 and curated < half, or curated TPA < half of
+                                       FIADB's, or curated none while FIADB >= 1 (meta.json incomplete_visits / incomplete_by_rule: INFO)
+  T1b   exact {10-20}                  species keys are a deterministic ranking (ties by symbol)
+  T1d-g rtol 1e-6 / 1e-9 {10-20}       the same arithmetic on the same records: only float noise may differ
+  T1o   max |Δ| 1e-6 {r13 10-27}       token A / CR: the same weighted means, float noise only
+  T1f   exact {10-20}                  bare visits carry no tokens by construction
+  T1h/i exact {10-20}                  pairs / planted flag are deterministic
+  T1j   < 2 % missing {10-20; r15 10-27: incomplete visits excluded, G52.3}   coarse (by MEASYEAR) sanity check of absent forested visits; allows sub-0.1-share
+                                       visits; the G46.1 / G51.1 incomplete curated visits are left out of numerator and denominator (dropped by decision)
+  T1k   <= 1 % of bare visits {10-26, r7}   a bare table visit with live FIADB trees is a false clear-cut target (kept, G52.3; a failure is a data outcome)
+  T1l   median 1 ± 0.02, < 2 % < 0.9 {10-26, r9 G14}   expansion factors identical by construction, residual should be ~0 (kept, G52.3)
+  T1m   <= 2 % absent {r13 10-27}      A-8: FIADB live-tree plots in the curated L3 scope missing from the table bias the training population
+  T1n   exact {r13 10-27; rule r14 G46.3 / G48.2}   plot_converted: the last SAMPLED FIADB visit dated <= 2022 is non-forest after a forested one
+  T1q   exact {r13 10-27}              E-F8: the table must be built with the configured TOPK / NCAND / RADIAL_P
+  T2a0  > 99.9 % keys within 0.2 km {10-26}   annual-inventory coordinates of one FIADB plot key are one location
+  T2a/b allclose (1e-3 m) {10-20; r15 10-27 rule: the curated PLOT latest visit, else FIADB latest, G51.2}   deterministic transforms
+  T2c   > 99.5 % (R4, 2 km) {10-25} / 99 % {10-20}   FIA coordinate fuzz is < 1.6 km; state polygons simplified
+  T3a   1e-3 m, all <= 1600 m {10-20}  deterministic geometry; the fuzz disk radius
+  T3b   all classes 1-4 {10-20}        candidates are forest land by construction
+  T3c   2e-3 {10-20}                   float16 storage of AlphaEarth values in [-1, 1]
+  T3c2  median max|Δ| < 0.02, cos q05 > 0.98, n > 50 (GA+FL mosaic), 2022 and 2025 {10-25; 2022 and this form r14 10-27}; T3c2z {r13 10-27} every R4 UTM
+        zone (15-18), >= 4 footprints, min cos > 0.999 (source COGs; r15 10-27: the tile of the longitude's zone, G51.24)   re-quantisation noise; a 1-block shift gives 0.77-0.996
+  T3d   err < 1e-3 relative {10-20}    float16 storage of soils (R4: the fill values of soils90/fill.json, checked by gv_verify_upstream U10f [r15])
+  T3e   |Δ| <= 2e-3 {10-20}            float16 storage of fractions in ninths / severities in thirds
+  T3f   ratio spread < 1 + 2e-3 {10-20}   the prior is a product of the spec's factors (G51.7 [r15]: measured lr weights); float64 storage
+  T3g   rel err < 1e-4 {10-20}         the inclusion weights sum to the disk's footprint count exactly
+  T3j   exact {r13 10-27}; input missing = FAIL {r15 10-27}   g02e fia_negs = the FIA-protocol periods of the spec (G36 evidence end, G37 NONBLOCK, G39 lookback)
+  T3h   all monotone, >= 10 plots {10-20; >= 10 r13 10-27}   hi is a threshold; fewer than 10 plots with both classes is vacuous
+  T3i   per state, year cells n >= 30 {10-20; per state r13 10-27}; post max < pre min and < clean − 0.05   time-axis alignment; pooled states hid KY / TN (G34)
+        {r14 10-27, set after seeing data: G47.2 / G48.1} per detectable row (G51.7 [r15]: the row's detectable flag) on its POOLED compatible classes; every class INFO
+  T3k   exact {r14 10-27; + detectable and lr r15 10-27}   G47.2 / G51.7: the verifier's own evidence table for the region (else FAIL) = meta.json evk
+                                       (classes, window, lr, detectable per kind); not provisional (G51.6)
+  T4a-c rtol 1e-4 {10-20}              float32 model tensors
+  T4d   >= 3200 m {10-20}; VAL_SPLIT -> val non-empty {r13 10-27}; split = the seeded draws over sorted blocks, exact {r15 10-27, G51.22}   two 1.6 km disks cannot overlap
+  T4e-m 1e-5 / 1e-7 {10-20; T4k / T4l 10-26, T4m 10-26}   float32 closed forms of the flow; T4l 1e-3 yr (float32 ages)
+  T4n/o/p/q 1e-5 / 1e-4; SIGReg ratio > 20, |Δ| <= 25 % {r13 10-27}   G29-G31 closed forms; the shifted-cloud ratio is ~100x when the location is tested
+        T4n {r14 10-27: bounded reset G46.10; r15 10-27: the G51.10 clock target, clocks sampled near age 0 with shifts of both signs, the clock between
+        z0, age 0 and z0 + 0.25}; T4q {r14 10-27: exact G46.8 verdicts; r15 10-27: + G51.11 (effective rank >= 3, share |z| > 2.5 <= 5 %, the 25-yr
+        no-event flow on G46.8), a pathological clock column, the flowed statistics = an independent recomputation (rel 1e-4)}
+  T4r   1e-6 {r13 10-27}               the loss vanishes at a perfect prediction
+  T4v   exact {r13 10-27}              MIN_FSHARE vetting is deterministic
+  T4w   1e-6 {r14 10-27}               G46.20 / A14-8: a 2026 visit's flow state = the end-2025 state (the YEARS[-1] clamp), 2026 events dropped
+  T4x   exact 0, >= 8 visits {r14 10-27}   G46.7: converted plots carry no MIL / Q / Q-decode weight, no g04 B-likelihood (trB) visit, no pair
+  T4y   exact {r14 10-27; build_id and MODEL required r15 10-27}   G47.8 / G48.5: tensor names / shapes = the configured model; the checkpoint's `switches` =
+                                       the configuration (T4Y_COMPARED; unset = None; every recorded name known; SEED = the MODEL name's _s<seed>); G51.5:
+                                       the checkpoint's build_id = meta.json's; verify mode without MODEL FAILs (G52.5)
+  T4g   SIGReg(N) < 0.2 SIGReg(3N) {10-20}   the test statistic must separate a scaled cloud
+  T4i   max |freq − prior| < 0.02 {10-20}   19 200 draws: binomial sd <= 0.0036
+  T5    < 5 % of dims |t| > 3.5 {10-20}   an unbiased estimator; 3.5 sd keeps the family-wise false alarm low over ~200 dims; every subsampled plot (G52.5 [r15]:
+                                       the r14 restriction to non-constant incl_w, applied to T5 by mistake and not recorded, is T5s's only)
+  T5s   {r13 10-27} aggregate: weighted sum t^2 < unweighted when the latter > df + 3 sqrt(2 df) (decides); per dim report-only {r14 G47.7}; plots with a
+        NON-CONSTANT incl_w only {r14 10-27} (constant weights: weighted = unweighted)   E-F5 / E14-8; INFO when none
+  T6a-d exact / 2e-3 / err < 1 {10-20; T6c / T6d r13 10-27}   as T3c-e (float16 storage); the stand offset is exact (500 stands)
+  T7a-c exact {10-20}                  deterministic joins
+  T7e   rtol 1e-9 {r13 10-27}          the production LOC=history prior is a deterministic restriction + renormalisation
+  T8*   exact sets {T8 10-21, T8e / T8f 10-26, T8g 10-27}, weights rel 1e-6 (T8, T8c) / 1e-5 (T8h) {r13 10-27}   deterministic pair rules; float noise only
+        {r14 10-27 G47.1} records = every FIADB record made at a visit dated in (v1, v2]; {r14 G46.5} undisturbed constraints clipped to the evidence end;
+        {r14 G46.7} no pair of a converted plot (T8p {r13 10-27}); {r15 G51.3} share changes >= 0.25 − 1e-9; {r15 G51.7} detectable flags, lr compared to 1e-6
+  T8b   (a) exact on 3000 + 1000 random pairs under the configured PAIR_ANCHOR + LOAD=1 {10-21; r13}; (b) 0 violations, >= 1 pair   the evaluation must never
+        see outcome-informed sets; {r14 10-27 G47.6} PAIR_ANCHOR / SEVERITY_ANCHOR from the environment; supported both / period and 0 / 1, else FAIL
+  T8c   PAIR_ALL=1 -> multi-horizon pairs exist {10-26; r13}   E-F6: an empty family is vacuous
+  T8h   >= 300 consecutive, >= 200 multi-horizon (PAIR_ALL=1), >= 20 with a detectable cluster, >= 20 with a severity rule applied {r14 10-27 G47.6};
+        >= 20 in the stand-replacing (< 0.3) branch {r15 10-27, G52.8}   the sample must exercise the event and both severity branches
+  T9    rel err < 1e-3 {10-21}         float32 EM posterior (G51.6-7 [r15]: groups by the clusters' detectability)
+  T10   exact, >= 1 constrained plot {10-21; >= 1 r13 10-27}   deterministic; an all-unconstrained sample is vacuous (an outcome)
+  T11   max |Δ| < 0.11 {10-21}         rounding to 0.1 / 0.01 in the FE layer (g07 uses 2.47105 since r13: E-F10)
+  T11b  1e-6 {10-26}                   the cohorts are scaled to the summary exactly
+  T11c/d exact {10-26 / 10-27}         G5 / G19 / G24 / G33 gate rule re-derived; missing keys FAIL {r13 F#10}
+  T11e/f/g exact, 1e-6 {r13 10-27}     g05 QMD / dominant key / coverage and g07 cohorts JSON are deterministic
+  T11h  exact {r14 10-27}              G46.13: g05 maps with g04's estimator (the same `calibrated` helper and medoid draw, MS = 32 iid draws)
+  T11i  rel 1e-6 {r14 10-27}           G46.11 / G46.12 / G48.5: CAL (stocked visits, G51.17 [r15]), CALF, the validation errors / medoid Bray, the null and
+                                       map_accept recomputed from g04_plots.parquet; every applied factor = the other half's fit; dumped nulls = an
+                                       independent null (rel 1e-4 {r14 10-27}); {r15 10-27, G52.1 / G52.2 / G51.15 / G51.19}: set relations (a half's
+                                       factor fitted on that half only, judged visits = T12's gate set) exact; R = 8 replicates in each replicate set;
+                                       null Bray = an independent null composition (1e-4); bootstrap bound (B = 1000, level 0.9, plot clusters; G51.15
+                                       pre-registered) recomputed (|Δ| <= 1e-5) and < 0 for TPH, BA and Bray; bayes_eval.json model = MODEL / sha256 / build
+  T12   exact set equalities {r13 10-27; >= 20 gate plots r13}   E-F3: g04 calibration = validation plots, MDN fit outside them + 3.2 km, training-only pools,
+        random halves (runs test |z| < 4, |nA − nB| <= 1, both pid parities in half A {r14 10-27}); every anchored statement assigned exactly once {r14 G47.5};
+        behavioural null exclusion; {r15 10-27, G52.1} every name the exec'd set construction binds bound nowhere else, HALVES once as ((hA, hB), (hB, hA));
+        {r15 G51.21} no converted plot in the MDN fit or the gate set
+  T13   argmax at offset (0, 0) {10-21}   pixel-exact windows peak at no shift; N/A (reason printed) in Region 4 {r14}
+  T14   no non-training plot, non-empty {10-21; non-empty r13}   leakage; N/A in Region 4 {r14}
+  T15   {r14 10-27 G47.4 / G46.8 / G46.17} GV_DYN_JSON only (unset / missing: FAIL); per pre-registered horizon bin (G7): true medians, |Δ BA log change|
+        <= 0.01 / yr, age ratio 0.7-1.3, n >= 20; set = val on validation plots. {r15 10-27, G52.2}: the acceptance pairs = the verifier's own undisturbed
+        spec on the validation plots (exact), their observed side recomputed from the table (y1 / y2 / horizon / BA 1e-4, age gain 1e-3 per yr,
+        relative to max(1, |x|)) and used for the verdict; the record = its dump's medians (1e-9); the latent criteria G46.8 + G51.11 recomputed from
+        MODEL on the validation encodings (the record's statistics rel 1e-4); the record's model = MODEL / sha256 / build"""
 import sys, os, json, math, ast, hashlib, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
@@ -118,7 +139,7 @@ def _verify_inputs():
     return sorted(set([curated_db(), fiadb()] + dd + fe2 + rs + [SR_[k] for k in (('tif',) if AEF90 else ('land_clean', 'tif')) if k in SR_]))
 def _verify_code():
     """the pipeline code main() execs or imports, plus every script T0 scans (the driver's pipeline_scripts(): T0's verdict depends on all of them)"""
-    out = [f'{ROOT}/scripts/{f}' for f in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g05_map_stands.py', 'g02b_build_gafl.py', 'g02e_fia_records.py',
+    out = [f'{ROOT}/scripts/{f}' for f in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g05_map_stands.py', 'g06_dynamics_check.py', 'g02b_build_gafl.py', 'g02e_fia_records.py',
                                            'g02g_history_consistency.py', 'g02j_stand_footprints.py', 'check_comments.py', 'region.py', 'stand_runs.py', 'common.py',
                                            'features.py', 'stands_cfg.py')]
     try:
@@ -137,58 +158,98 @@ def g06_dump_path(dyn_json):
     return os.path.join(os.path.dirname(dyn_json), pf)
 # ---------------------------------------------------------------- T15: the enforced dynamics acceptance, re-derived (G7 / G46.8 / G46.17 / G47.4)
 DSHARE = 0.25 - 1e-9                           # (G51.3) a forest-share change counts from 0.25 down to float noise (ties)
+def lat_crit(zc):
+    """latent statistics of a set of NON-CLOCK states [n, d] (numpy, independent of g03b's code): max |mean|, min per-dimension sd, shares of |z| > 2.9 /
+    > 2.5, effective rank (participation ratio of the covariance eigenvalues)"""
+    zc = np.asarray(zc, dtype=np.float64); ev_ = np.clip(np.linalg.eigvalsh(np.cov(zc.T)), 0, None) if len(zc) > 1 else np.zeros(1)
+    return dict(n=len(zc), max_abs_mean=float(np.abs(zc.mean(0)).max()) if len(zc) else float('nan'), min_sd=float(zc.std(0, ddof=1).min()) if len(zc) > 1 else float('nan'),
+                share_abs_gt_2p9=float((np.abs(zc) > 2.9).mean()) if len(zc) else float('nan'), share_abs_gt_2p5=float((np.abs(zc) > 2.5).mean()) if len(zc) else float('nan'),
+                effective_rank=float(ev_.sum() ** 2 / max((ev_ ** 2).sum(), 1e-12)))
+def g468(c):
+    """the G46.8 latent criteria on lat_crit's statistics"""
+    return bool(c['max_abs_mean'] <= 2.0 and c['min_sd'] >= 0.3 and c['share_abs_gt_2p9'] <= 0.01)
+def g5111_enc(c):
+    """(G51.11 a) the encodings' criteria: G46.8 + effective rank >= 3 + share |z| > 2.5 <= 5 %"""
+    return g468(c) and c['effective_rank'] >= 3.0 and c['share_abs_gt_2p5'] <= 0.05
 T15_BINS = ((0, 8), (8, 15), (15, 99))        # pre-registered horizon bins (yr, lo <= horizon < hi; G7 r4, kept by G46.17); every bin must be populated
 T15_NMIN = 20                                  # pairs per bin
-def t15_judge(dj, dump, val_pids):
-    """(G47.4) the pre-registered acceptance of g06's record dj re-derived: G46.8 latent criteria on the recorded non-clock statistics (max |mean| <= 2,
-    min sd >= 0.3, share |z| > 2.9 <= 1 %; the `latent` key required); per pre-registered horizon bin the TRUE medians recomputed from the per-pair dump
-    (rows of the acceptance set): n >= 20, |median predicted − observed BA log change| <= 0.01 / yr, observed age gain > 0 and the age-gain ratio 0.7-1.3;
-    set = 'val' and every dump pair of that set on a validation plot (val_pids, from the split). Returns (ok, the rule's verdict, problems, per-bin numbers)"""
+T15_LAT = ('max_abs_mean', 'min_sd', 'share_abs_gt_2p9', 'share_abs_gt_2p5', 'effective_rank')      # latent statistics compared with g06's record
+def t15_judge(dj, dump, val_pids, obs_ref=None, latent_ref=None):
+    """(G47.4 / G52.2) the pre-registered acceptance of g06's record dj re-derived, trusting the dump for the PREDICTED side only:
+      membership: the dump's acceptance-set pairs = obs_ref's pairs (the verifier's own undisturbed spec on the validation plots; None: FAIL);
+      observed side: y1 / y2, the horizon y2 − y1, obs BA at v1 / v2, the observed BA log change and age gain per year = obs_ref's (recomputed from the
+      table) — the bins and medians below use the recomputed observed side;
+      latent: latent_ref = (encodings ok, flowed ok, encodings' statistics, flowed statistics) recomputed from MODEL on the validation encodings
+      (G46.8 + G51.11); g06's recorded statistics must equal them (None: FAIL);
+      per pre-registered horizon bin the TRUE medians: n >= 20, |median predicted − observed BA log change| <= 0.01 / yr, observed age gain > 0 and the
+      age-gain ratio 0.7-1.3; set = 'val' and every dump pair of that set on a validation plot (val_pids). Returns (ok, the rule's verdict, problems,
+      per-bin numbers); a False verdict with no problem is a model OUTCOME (G52.6)"""
     why = []; ua = dj.get('undisturbed_acceptance', {}) if isinstance(dj, dict) else {}; lat = dj.get('latent') if isinstance(dj, dict) else None; lok = False
-    if not isinstance(lat, dict): why.append('no latent key (G46.8)')
+    if latent_ref is None: why.append('input missing: the latent statistics recomputed from MODEL (G52.2)')
     else:
-        miss = [k for k in ('max_abs_mean', 'min_sd', 'share_abs_gt_2p9') if lat.get(k) is None]
-        if miss: why.append(f'latent lacks {miss} (G46.8)')
-        else: lok = float(lat['max_abs_mean']) <= 2.0 and float(lat['min_sd']) >= 0.3 and float(lat['share_abs_gt_2p9']) <= 0.01
-        if 'ok' in lat and bool(lat['ok']) != lok: why.append(f"g06's latent ok {lat['ok']} != the rule {lok}")
+        oke_, okf_, ce_, cf_ = latent_ref; lok = bool(oke_ and okf_)
+        if not isinstance(lat, dict): why.append('no latent key (G46.8)')
+        else:
+            dif_ = [k for k in T15_LAT if k in lat and lat[k] is not None and abs(float(lat[k]) - ce_[k]) > 1e-4 * max(1.0, abs(ce_[k]))]
+            miss_ = [k for k in T15_LAT if lat.get(k) is None]
+            fr_ = lat.get('flowed_25yr') if isinstance(lat.get('flowed_25yr'), dict) else None
+            if fr_ is None: miss_.append('flowed_25yr')
+            elif cf_ is not None: dif_ += [f'flowed {k}' for k in ('max_abs_mean', 'min_sd', 'share_abs_gt_2p9') if fr_.get(k) is None or abs(float(fr_[k]) - cf_[k]) > 1e-4 * max(1.0, abs(cf_[k]))]
+            if miss_: why.append(f'latent lacks {miss_} (G46.8 / G51.11)')
+            if dif_: why.append(f'latent statistics {dif_} differ from the recomputation from MODEL')
+            if 'ok' in lat and bool(lat['ok']) != lok: why.append(f"g06's latent ok {lat['ok']} != the rule {lok}")
     if ua.get('set') != 'val': why.append(f"acceptance set {ua.get('set')!r}, not 'val' (G7)")
     if [tuple(b_) for b_ in ua.get('bins_required', [])] != list(T15_BINS): why.append(f"recorded bins {ua.get('bins_required')} != pre-registered {list(T15_BINS)}")
     bins = {}
+    need = {'set', 'pid', 'v1', 'v2', 'y1', 'y2', 'horizon', 'pred_BA_logchange_per_yr', 'obs_BA_logchange_per_yr', 'pred_age_per_yr', 'obs_age_per_yr', 'obs_BA_v1', 'obs_BA_v2'}
     if dump is None: why.append('input missing: the per-pair dump (G46.17)')
+    elif not need <= set(dump.columns): why.append(f'dump lacks columns {sorted(need - set(dump.columns))}')
+    elif obs_ref is None: why.append('input missing: the observed side and membership recomputed from the table (G52.2)')
     else:
-        need = {'set', 'pid', 'horizon', 'pred_BA_logchange_per_yr', 'obs_BA_logchange_per_yr', 'pred_age_per_yr', 'obs_age_per_yr'}
-        if not need <= set(dump.columns): why.append(f'dump lacks columns {sorted(need - set(dump.columns))}')
-        else:
-            d_ = dump[dump.set == ua.get('set')]; off = sorted(set(int(p_) for p_ in d_.pid) - set(int(p_) for p_ in val_pids))
-            if off: why.append(f'{len(off)} acceptance-set plots are not validation plots, e.g. {off[:5]}')
-            for lo, hi in T15_BINS:
-                r_ = d_[(d_.horizon >= lo) & (d_.horizon < hi)]; n_ = len(r_); rec_ = dj.get(f'undisturbed_h{lo}_{hi}', {})
-                if rec_ and 'n' in rec_ and int(rec_['n']) != n_: why.append(f'bin {lo}-{hi}: recorded n {rec_["n"]} != recount {n_}')
-                if n_ < T15_NMIN: bins[(lo, hi)] = (n_, None); continue
-                mp, mo = float(np.median(r_.pred_BA_logchange_per_yr)), float(np.median(r_.obs_BA_logchange_per_yr))
-                ap, ao = float(np.median(r_.pred_age_per_yr)), float(np.median(r_.obs_age_per_yr))
-                ok_ = abs(mp - mo) <= 0.01 and ao > 0 and 0.7 <= ap / ao <= 1.3; bins[(lo, hi)] = (n_, ok_)
-                if rec_ and any(abs(float(rec_.get(k_, np.nan)) - v_) > 1e-9 for k_, v_ in (('median_pred_logchange_per_yr', mp), ('median_obs_logchange_per_yr', mo),
-                                                                                         ('median_pred_age_per_yr', ap), ('median_obs_age_per_yr', ao))):
-                    why.append(f'bin {lo}-{hi}: recorded medians != recomputed')
+        d_ = dump[dump.set == ua.get('set')].copy(); off = sorted(set(int(p_) for p_ in d_.pid) - set(int(p_) for p_ in val_pids))
+        if off: why.append(f'{len(off)} acceptance-set plots are not validation plots, e.g. {off[:5]}')
+        kd_ = list(zip(d_.v1.astype(int), d_.v2.astype(int))); ke_ = set(obs_ref)
+        if len(set(kd_)) != len(kd_): why.append(f'{len(kd_) - len(set(kd_))} duplicate dump pairs')
+        mis_, ext_ = sorted(ke_ - set(kd_)), sorted(set(kd_) - ke_)
+        if mis_ or ext_: why.append(f'membership: {len(mis_)} undisturbed validation pairs of the spec missing from the dump (e.g. {mis_[:3]}), {len(ext_)} dump pairs not in it (e.g. {ext_[:3]})')
+        d_ = d_[[k_ in ke_ for k_ in kd_]]; kd_ = list(zip(d_.v1.astype(int), d_.v2.astype(int)))
+        R_ = np.array([obs_ref[k_] for k_ in kd_]).reshape(-1, 7)          # (y1, y2, h, BA v1, BA v2, BA log change / yr, age gain / yr)
+        tol_ = {'y1': (0, 1e-4), 'y2': (1, 1e-4), 'horizon': (2, 1e-4), 'obs_BA_v1': (3, 1e-4), 'obs_BA_v2': (4, 1e-4), 'obs_BA_logchange_per_yr': (5, 1e-4), 'obs_age_per_yr': (6, 1e-3)}
+        bad_ = {c_: int((np.abs(d_[c_].values.astype(float) - R_[:, j_]) > t_ * np.maximum(1.0, np.abs(R_[:, j_]))).sum()) for c_, (j_, t_) in tol_.items()} if len(d_) else {}
+        if any(bad_.values()): why.append(f'observed side differs from the table recomputation (rows per column): { {k_: v_ for k_, v_ in bad_.items() if v_} }')
+        d_['h_'], d_['olc_'], d_['oag_'] = R_[:, 2], R_[:, 5], R_[:, 6]
+        for lo, hi in T15_BINS:
+            r_ = d_[(d_.h_ >= lo) & (d_.h_ < hi)]; n_ = len(r_); rec_ = dj.get(f'undisturbed_h{lo}_{hi}', {})
+            rd_ = dump[(dump.set == ua.get('set')) & (dump.horizon >= lo) & (dump.horizon < hi)]      # (g06's own dump rows of the bin)
+            if rec_ and 'n' in rec_ and int(rec_['n']) != len(rd_): why.append(f'bin {lo}-{hi}: recorded n {rec_["n"]} != the dump\'s {len(rd_)}')
+            if n_ < T15_NMIN: bins[(lo, hi)] = (n_, None); continue
+            mp, mo = float(np.median(r_.pred_BA_logchange_per_yr)), float(np.median(r_.olc_))       # (verdict: the recomputed observed side)
+            ap, ao = float(np.median(r_.pred_age_per_yr)), float(np.median(r_.oag_))
+            ok_ = abs(mp - mo) <= 0.01 and ao > 0 and 0.7 <= ap / ao <= 1.3; bins[(lo, hi)] = (n_, ok_)
+            if rec_ and any(abs(float(rec_[k_]) - float(np.median(rd_[c_]))) > 1e-9 * max(1.0, abs(float(np.median(rd_[c_])))) if rec_.get(k_) is not None and len(rd_) else True
+                            for k_, c_ in (('median_pred_logchange_per_yr', 'pred_BA_logchange_per_yr'), ('median_obs_logchange_per_yr', 'obs_BA_logchange_per_yr'),
+                                           ('median_pred_age_per_yr', 'pred_age_per_yr'), ('median_obs_age_per_yr', 'obs_age_per_yr'))):
+                why.append(f'bin {lo}-{hi}: recorded medians != the dump\'s')
     verdict = lok and len(bins) == len(T15_BINS) and all(v_[1] is True for v_ in bins.values())
     if 'passed' in ua and bool(ua['passed']) != verdict: why.append(f"g06 recorded passed {ua['passed']} != the rule {verdict}")
     return (not why) and verdict, verdict, why, bins
 # ---------------------------------------------------------------- the verifier's own FIA-record -> evidence tables, per region set (G47.2)
 def evidence_spec(region):
-    """{(record type 'T' / 'D', code): (evidence classes, (window lo, hi) around the record year, likelihood ratio)} for a region set (FIA state codes, any
-    order), written out from the specification independently of g02b's EVK_TABLES; None = the verifier has no table for that region (checks FAIL).
-    GA+FL: the STRICT data-derived rules (g09; 2026-10-22). 'H' = Hansen loss."""
+    """{(record type 'T' / 'D', code): (evidence classes, (window lo, hi) around the record year, evidence weight lr, detectable)} for a region set (FIA
+    state codes, any order), written out from the specification independently of g02b's EVK_TABLES; None = the verifier has no table for that region
+    (checks FAIL). GA+FL: the STRICT data-derived classes / windows (g09; 2026-10-22); (G51.7) detectable = the hard-constraint flag (T10-T40 and the
+    crown fire, unchanged), lr = the evidence weight measured by g09 on gafl_v4 (2026-10-27: the inner-zone lifts; data copied from that measurement,
+    the verifier does not re-measure them; T3k compares). 'H' = Hansen loss."""
     reg = tuple(sorted({int(x) for x in region}))
     if reg != (12, 13): return None
-    S = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 4), ('T', 20): (['harvest', 'chem', 'fire', 'unknown', 'H'], (-1, 1), 4),     # cutting / site prep / regeneration
-         ('T', 30): (['harvest', 'chem', 'unknown', 'H'], (-2, 1), 4), ('T', 40): (['harvest', 'fire', 'unknown', 'H'], (-2, 1), 4),           # accept LANDFIRE 'unknown' (2026-10-22)
-         ('T', 50): (['thin', 'chem'], (-1, 1), 2)}
-    for cd in range(10, 23): S[('D', cd)] = (['insdis'], (-1, 1), 2)
-    for cd in (30, 31): S[('D', cd)] = (['fire'], (-1, 1), 2)
-    S[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
-    for cd in range(50, 55): S[('D', cd)] = (['weather'], (-1, 1), 2)
-    S[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # no row for DSTRBCD 70 (unknown)
+    S = {('T', 10): (['harvest', 'thin', 'unknown', 'H'], (-1, 1), 2.456, True), ('T', 20): (['harvest', 'chem', 'fire', 'unknown', 'H'], (-1, 1), 2.526, True),   # cutting / site prep
+         ('T', 30): (['harvest', 'chem', 'unknown', 'H'], (-2, 1), 2.281, True), ('T', 40): (['harvest', 'fire', 'unknown', 'H'], (-2, 1), 2.291, True),       # regeneration
+         ('T', 50): (['thin', 'chem'], (-1, 1), 1.625, False)}                  # (T10-T40 accept LANDFIRE 'unknown', 2026-10-22)
+    for cd in range(10, 23): S[('D', cd)] = (['insdis'], (-1, 1), 2.183, False)
+    for cd in (30, 31): S[('D', cd)] = (['fire'], (-1, 1), 2.082, False)
+    S[('D', 32)] = (['fire', 'H'], (-1, 1), 2.407, True)
+    for cd in range(50, 55): S[('D', cd)] = (['weather'], (-1, 1), 2.445, False)
+    S[('D', 80)] = (['harvest', 'dev'], (-1, 1), 1.19, False)                 # no row for DSTRBCD 70 (unknown)
     return S
 def spec_kind(t_, cd):
     """the record kind (the name the table's evidence table uses) of an FIA code: TRTCD 10-50 -> T10-T50; DSTRBCD insects / disease 10-22, ground fire
@@ -197,13 +258,14 @@ def spec_kind(t_, cd):
     if t_ == 'T': return f'T{cd}' if cd in (10, 20, 30, 40, 50) else None
     return 'Dins' if 10 <= cd <= 22 else 'Dfire' if cd in (30, 31) else 'Dcrown' if cd == 32 else 'Dwx' if 50 <= cd <= 54 else 'Dhum' if cd == 80 else None
 def evk_divergence(spec, evk_meta, classes):
-    """(G47.2) the kinds whose evidence row differs between the verifier's spec and a table's meta.json evk (kind -> [class indices, [lo, hi], lr];
-    index len(classes) + 1 = Hansen loss, len(classes) = severity): [(kind, the spec's row(s), the table's row)], empty when they agree"""
+    """(G47.2 / G51.7) the kinds whose evidence row differs between the verifier's spec and a table's meta.json evk (kind -> [class indices, [lo, hi], lr,
+    detectable]; index len(classes) + 1 = Hansen loss, len(classes) = severity; a row without the detectable flag (before G51.7) differs):
+    [(kind, the spec's row(s), the table's row)], empty when they agree (lr to 1e-9)"""
     nc_ = len(classes); nm = lambda i: 'H' if int(i) == nc_ + 1 else (classes[int(i)] if 0 <= int(i) < nc_ else f'?{int(i)}')
     mine = {}
-    for (t_, cd), (cols, w, lr) in spec.items(): mine.setdefault(spec_kind(t_, cd), set()).add((frozenset(cols), (int(w[0]), int(w[1])), float(lr)))
-    theirs = {k: (frozenset(nm(c) for c in v[0]), (int(v[1][0]), int(v[1][1])), float(v[2])) for k, v in evk_meta.items()}
-    return [(k, sorted((sorted(a), w, l) for a, w, l in mine.get(k, ())), (sorted(theirs[k][0]), theirs[k][1], theirs[k][2]) if k in theirs else None)
+    for (t_, cd), (cols, w, lr, det) in spec.items(): mine.setdefault(spec_kind(t_, cd), set()).add((frozenset(cols), (int(w[0]), int(w[1])), round(float(lr), 9), bool(det)))
+    theirs = {k: (frozenset(nm(c) for c in v[0]), (int(v[1][0]), int(v[1][1])), round(float(v[2]), 9), bool(v[3]) if len(v) > 3 else None) for k, v in evk_meta.items()}
+    return [(k, sorted((sorted(a), w, l, d_) for a, w, l, d_ in mine.get(k, ())), (sorted(theirs[k][0]), theirs[k][1], theirs[k][2], theirs[k][3]) if k in theirs else None)
             for k in sorted(set(mine) | set(theirs)) if len(mine.get(k, ())) != 1 or k not in theirs or next(iter(mine[k])) != theirs[k]]
 def _assign_lines(tree, name):
     """line numbers of every statement of a parsed script that binds `name` (assignment / augmented / annotated / walrus / for / with targets, def / class,
@@ -233,9 +295,10 @@ def _bound_names(tree):
         for t in tg: out |= {m.id for m in ast.walk(t) if isinstance(m, ast.Name)}
     return out
 T12_HALVES = '((hA, hB), (hB, hA))'     # (G52.1) the only allowed cross-fit: each half judged with the factors fitted on the other
-def t12_check(G4s, ns_, V, P, FSOK, VS12):
-    """T12 (r13 E-F3, r14 G47.5) on g04's source G4s and the exec'd g03b namespace ns_: (ok, detail). FSOK: the independent MIN_FSHARE vetting per visit;
-    VS12: VAL_SPLIT. Module level so a test harness can call it on a planted g04."""
+def t12_check(G4s, ns_, V, P, FSOK, VS12, conv_pids=frozenset(), sets_out=None):
+    """T12 (r13 E-F3, r14 G47.5, r15 G52.1) on g04's source G4s and the exec'd g03b namespace ns_: (ok, detail). FSOK: the independent MIN_FSHARE vetting
+    per visit; VS12: VAL_SPLIT; conv_pids: the converted plots (independent T1n rule: G51.21 keeps them out of the MDN fit and the scoring sets);
+    sets_out: a dict that receives the expected sets (calibration plots, gate visits: T11i's set relations). Module level for the planted-defect harness."""
     import textwrap as _tw12, torch
     ns12 = dict(ns_); _why12 = []; T4G = ast.parse(G4s); _L12 = G4s.splitlines()
     _v12, _vp12 = np.arange(len(V)), ns_['vpid']; ns12['XL'] = {p_: None for p_ in ns_['cand_of']}; ns12['vv'] = np.array([v for v in _v12 if _vp12[v] in ns12['XL']]); ns12['vi'] = {v: i for i, v in enumerate(ns12['vv'])}
@@ -293,20 +356,22 @@ def t12_check(G4s, ns_, V, P, FSOK, VS12):
     _Pxy = P.set_index('pid')[['x', 'y']]; _cx = _Pxy.loc[sorted(calE)].values if calE else np.zeros((0, 2)); _dmin = np.full(len(_Pxy), np.inf)
     for i_ in range(0, len(_cx), 500): _dmin = np.minimum(_dmin, np.sqrt(((_Pxy.values[:, None, :] - _cx[None, i_:i_ + 500, :]) ** 2).sum(-1)).min(1))
     dmin12 = dict(zip(_Pxy.index.values, _dmin))
-    fitE = {int(v) for v in ns_['tr_v'] if _vp12[v] not in calE and dmin12[_vp12[v]] >= 3200 and _vp12[v] in ns12['XL']}; fitG = {int(ns12['vv'][i]) for i in ns12['trA']}
+    fitE = {int(v) for v in ns_['tr_v'] if _vp12[v] not in calE and dmin12[_vp12[v]] >= 3200 and _vp12[v] in ns12['XL'] and int(_vp12[v]) not in conv_pids}   # (G51.21)
+    fitG = {int(ns12['vv'][i]) for i in ns12['trA']}
     lastE = {}                                                    # last visit passing MIN_FSHARE of every plot (independent share)
     for v in np.flatnonzero(FSOK):
         p_ = _vp12[v]
         if p_ not in lastE or V.year.values[v] > V.year.values[lastE[p_]]: lastE[p_] = v
-    gateE = {lastE[p_] for p_ in calE if p_ in lastE and 2022.0 <= V.year.values[lastE[p_]] < 2026.0}; gateG = set(ns12['cal_m'])
+    gateE = {int(lastE[p_]) for p_ in calE if p_ in lastE and 2022.0 <= V.year.values[lastE[p_]] < 2026.0 and int(p_) not in conv_pids}; gateG = set(int(x) for x in ns12['cal_m'])   # (G51.21)
+    if sets_out is not None: sets_out.update(calE=set(int(p_) for p_ in calE), gateE=gateE, hA=set(int(x) for x in ns12['hA']), hB=set(int(x) for x in ns12['hB']))
     hA_, hB_ = {_vp12[v] for v in ns12['hA']}, {_vp12[v] for v in ns12['hB']}; hall = hA_ | hB_
     srt = sorted(hall); seq = np.array([p_ in hA_ for p_ in srt]); nA, nB = int(seq.sum()), int((~seq).sum()); runs = 1 + int((seq[1:] != seq[:-1]).sum()) if len(seq) else 0
     mu_r = 1 + 2 * nA * nB / max(nA + nB, 1); var_r = 2 * nA * nB * (2 * nA * nB - nA - nB) / max((nA + nB) ** 2 * (nA + nB - 1), 1); zr = (runs - mu_r) / math.sqrt(var_r) if var_r > 0 else np.inf
     par = np.mean([p_ % 2 == 0 for p_ in hA_]) if hA_ else np.nan
     poolP = set(int(x) for x in ns12['p_trl']); knnE = {lastE[p_] for p_ in trP if p_ in lastE and lastE[p_] in ns12['vi']}
     res12 = {'cal = validation plots': set(ns12['cal_pid']) == calE and (not VS12 or len(calE) > 0),
-             'MDN fit visits = training visits outside the calibration plots + 3.2 km': fitG == fitE and (min(dmin12[_vp12[v]] for v in fitG) >= 3200 if fitG else False),
-             'gate visits = last vetted visits 2022-25 of the calibration plots': gateG == gateE and len(gateG) > 0,
+             'MDN fit visits = training visits outside the calibration plots + 3.2 km, no converted plot (G51.21)': fitG == fitE and (min(dmin12[_vp12[v]] for v in fitG) >= 3200 if fitG else False),
+             'gate visits = last vetted visits 2022-25 of the non-converted calibration plots (G51.21)': gateG == gateE and len(gateG) > 0,
              'gate halves disjoint, cover the gate set, balanced, random (runs test |z| < 4, both pid parities in half A: not parity / sorted / first-half)': not (hA_ & hB_) and hall == {_vp12[v] for v in gateG}
                  and len(hall) >= 20 and abs(nA - nB) <= 1 and abs(zr) < 4 and 0.0 < par < 1.0,
              'kNN / null pool = last vetted visits of training plots only': set(ns12['tr_l']) == knnE and poolP <= trP and not (poolP & (teP | vaP)),
@@ -385,31 +450,98 @@ def t4y_switches(rec, env0, model_name):
     seed_ok = m_ is None or same(rec.get('SEED'), m_.group(1))
     return not dif and not unk and seed_ok, (f'{len(rec)} recorded switches; differing (recorded, configured) {dif}; recorded names the verifier does not know {unk}; '
                                             f'SEED recorded {rec.get("SEED")} vs MODEL name {m_.group(1) if m_ else "no _s<seed>"}')
-def t11i_check(be, dump, null_ref=None, tol=1e-6):
-    """(G46.11 / G46.12 / G48.5) g04's calibration and map acceptance recomputed from its per-plot dump (g04_plots.parquet), independently of g04's code:
-      CAL  = true median over the A_cal visits of log(obs + 1e-3) − log(median draw);
-      a factor fit (cf_fit) = the same over its STOCKED visits; CALF = the mean of the R_REP 'all' fits at map_y0; every score row's applied factors =
-      the fit of the other half (same y0 and replicate);
-      validation errors per replicate = mean over the two judged halves of the true median, over stocked visits, of |log((pred·e^cf + 1e-3) / (obs + 1e-3))|
-      (QMD from the calibrated TPH / BA), medoid Bray = mean of the per-visit Bray; the decision statistics = replicate means;
-      null = mean over the halves of the same median |log err| of the null prediction, null Bray = mean per-visit Bray;
-      map_accept = TPH and BA errors and the medoid Bray each below the null's.
-    null_ref: {vid: (TPH, BA, QMD)} independently recomputed null predictions (from the table) to compare with the dump's. Returns (ok, detail, numbers)"""
-    why = []; d = dump
+T11I_R = 8                       # (G46.11 / G51.19) replicates per replicate set
+T11I_BOOT = (1000, 0.9)          # (G51.15) plot-cluster bootstrap resamples, one-sided level of the upper bound
+def t11i_boot(sc2, bl, cfs, comp, B, seed, level):
+    """(G51.15) the one-sided upper bound of (model − null) for TPH, BA error and medoid Bray, recomputed from the dump: per judged half (A, B) the
+    visits grouped by plot (sorted plot ids); per resample numpy default_rng(seed), half A then half B, rng.integers(0, n_plots, n_plots) draws plots
+    with replacement (every visit of a drawn plot kept); statistic = mean over the halves of [mean over the replicates of the median |log err| over the
+    stocked drawn visits (Bray: mean)] − the same for the null; bound = numpy quantile(level). cfs: (replicate, half) -> applied factors; comp: vid ->
+    null Bray. Returns (point, bound, n plots per half)"""
+    H = {}
+    for hl_ in ('A', 'B'):
+        b_ = bl[bl.half == hl_]; vids = b_.vid.astype(int).values; ob = {k: b_[f'obs_{k}'].values for k in ('TPH', 'BA')}; sk = b_.stocked.values.astype(bool)
+        ne = {k: np.abs(np.log((b_[f'null_{k}'].values + 1e-3) / (ob[k] + 1e-3))) for k in ('TPH', 'BA')}; ne['bray'] = np.array([comp[int(v)] for v in vids])
+        me = {k: [] for k in ('TPH', 'BA', 'bray')}
+        for r_, g_ in sorted(sc2[sc2.half == hl_].groupby('rep'), key=lambda t: t[0]):
+            g_ = g_.set_index('vid').loc[vids]; f_ = cfs[(r_, hl_)]
+            for i, k in enumerate(('TPH', 'BA')): me[k].append(np.abs(np.log((g_[f'pred_{k}'].values * np.exp(f_[i]) + 1e-3) / (ob[k] + 1e-3))))
+            me['bray'].append(g_.bray_medoid.values.astype(float))
+        me = {k: np.array(v_) for k, v_ in me.items()}; pids = b_.pid.astype(int).values
+        H[hl_] = dict(me=me, ne=ne, sk=sk, members=[np.flatnonzero(pids == p_) for p_ in np.unique(pids)])
+    def stat(sel):
+        o_ = {}
+        for k in ('TPH', 'BA', 'bray'):
+            ag = np.mean if k == 'bray' else np.median; mm, nn = [], []
+            for hl_ in ('A', 'B'):
+                ix = sel[hl_][H[hl_]['sk'][sel[hl_]]]
+                if not len(ix): mm.append(np.nan); nn.append(np.nan); continue
+                mm.append(float(np.mean([ag(row[ix]) for row in H[hl_]['me'][k]]))); nn.append(float(ag(H[hl_]['ne'][k][ix])))
+            o_[k] = float(np.mean(mm) - np.mean(nn))
+        return o_
+    pt = stat({hl_: np.arange(len(H[hl_]['sk'])) for hl_ in H}); rg = np.random.default_rng(seed); dr = {k: [] for k in ('TPH', 'BA', 'bray')}
+    for _ in range(B):
+        sel = {}
+        for hl_ in ('A', 'B'):
+            mb = H[hl_]['members']; sel[hl_] = np.concatenate([mb[j] for j in rg.integers(0, len(mb), len(mb))]) if mb else np.zeros(0, int)
+        for k, x in stat(sel).items(): dr[k].append(x)
+    return pt, {k: float(np.quantile(np.array(x), level)) for k, x in dr.items()}, {hl_: len(H[hl_]['members']) for hl_ in H}
+def t11i_check(be, dump, null_ref=None, tol=1e-6, gate_vids=None, comp_ref=None, model_ref=None):
+    """(G46.11 / G46.12 / G48.5 / G51.15-G51.20, r15 G52.1 / G52.2) g04's calibration and map acceptance recomputed from its per-plot dump
+    (g04_plots.parquet), independently of g04's code:
+      CAL  = true median over the STOCKED A_cal visits of log(obs + 1e-3) − log(median draw) (G51.17);
+      a factor fit (cf_fit) = the same over its stocked visits; CALF = the mean of the R 'all' fits of replicate set 1 at map_y0; every score row's
+      applied factors = the fit of the other half (same replicate set, replicate, y0);
+      set relations (G52.1): each cf_fit half's visits = the score visits of the same half, disjoint from the half its factors are applied to; the score,
+      baseline and 'all' fit visits = the independent gate set (gate_vids: T12's); R replicates in each replicate set (selection 1: the 'all' fits, and the
+      gate when it ran; acceptance 2: the validation scores);
+      validation errors (replicate set 2) per replicate = mean over the two judged halves of the true median, over stocked visits, of
+      |log((pred·e^cf + 1e-3) / (obs + 1e-3))| (QMD from the calibrated TPH / BA), medoid Bray = mean of the per-visit Bray; = replicate means;
+      null = mean over the halves of the same median |log err| of the null prediction; null Bray from comp_ref (an independent null composition, G52.2);
+      map_accept (G51.15) = the plot-cluster bootstrap upper bound (t11i_boot, B = 1000, level 0.9) of (model − null) < 0 for TPH, BA and Bray;
+      decided on 'validation plots'; bayes_eval.json `model` = model_ref (MODEL, sha256, table build_id; G51.13 / G51.5).
+    null_ref: {vid: (TPH, BA, QMD)} independently recomputed null predictions; comp_ref: {vid: null Bray}. None -> FAIL (input missing).
+    Returns (ok, detail, numbers)"""
+    why = []; d = dump; nan3 = [float('nan')] * 3
     def tmed_(x): x = np.asarray(x, float); return float(np.median(x)) if len(x) else float('nan')
     def close(a, b): return (np.isnan(a) and np.isnan(b)) or abs(a - b) <= tol * max(1.0, abs(a), abs(b))
-    a_ = d[d.kind == 'A_cal']; cal = [tmed_(a_[f'obs_log_{k}'] - a_[f'pred_log_{k}']) for k in ('TPH', 'BA', 'QMD')]
+    if 'rset' not in d.columns: why.append('input missing: the dump has no replicate set column rset (G51.19)'); d = d.assign(rset=np.where(d.kind == 'score', 2, 1))
+    lbl = 'validation' if (be.get('mapping_path_validation_crossfit') or {}).get('set') == 'validation plots' else 'calibration'
+    a_ = d[(d.kind == 'A_cal') & d.stocked]; cal = [tmed_(a_[f'obs_log_{k}'] - a_[f'pred_log_{k}']) for k in ('TPH', 'BA', 'QMD')]
     rc = be.get('calibration_log_factors_TPH_BA_QMD')
     if rc is None or not all(close(x, y) for x, y in zip(cal, rc)): why.append(f'CAL {cal} != recorded {rc}')
-    y0u = float(be.get('map_y0', 2021.0)); cf = d[d.kind == 'cf_fit']
-    def fit(rows): r_ = rows[rows.stocked]; return [tmed_(r_[f'obs_log_{k}'] - r_[f'pred_log_{k}']) for k in ('TPH', 'BA', 'QMD')]
-    allf = [fit(g_) for _, g_ in cf[(cf.half == 'all') & np.isclose(cf.y0, y0u)].groupby('rep')]
-    calf = [float(np.mean([f_[i] for f_ in allf])) for i in range(3)] if allf else [float('nan')] * 3
+    y0u = float(be.get('map_y0', 2021.0)); cf = d[d.kind == 'cf_fit']; sc = d[(d.kind == 'score') & (d.set == lbl)]
+    def fit(rows): r_ = rows[rows.stocked]; return [tmed_(r_[f'obs_log_{k}'] - r_[f'pred_log_{k}']) for k in ('TPH', 'BA', 'QMD')] if len(r_) else nan3
+    allf = {r_: fit(g_) for r_, g_ in cf[(cf.half == 'all') & (cf.rset == 1) & np.isclose(cf.y0, y0u)].groupby('rep')}
+    calf = [float(np.mean([f_[i] for f_ in allf.values()])) for i in range(3)] if allf else nan3
     rf = be.get('calibration_log_factors_mapping_path')
     if rf is None or not all(close(x, y) for x, y in zip(calf, rf)): why.append(f'CALF {calf} != recorded {rf}')
-    sc = d[(d.kind == 'score') & (d.set == 'validation') & np.isclose(d.y0, y0u)]; reps = {}; badcf = 0
-    for (rep_, half), g_ in sc.groupby(['rep', 'half']):
-        other = {'A': 'B', 'B': 'A'}[half]; f_ = fit(cf[(cf.half == other) & (cf.rep == rep_) & np.isclose(cf.y0, y0u)])
+    # replicate counts per replicate set (G51.19)
+    gate_ran = float((be.get('map_y0_gate') or {}).get('requested', 2021.0)) != 2021.0 and 'fail_reasons' in (be.get('map_y0_gate') or {}) and 'err_requested' in (be.get('map_y0_gate') or {})
+    nrep = {'set 1 all-fits': len(allf), 'set 2 scores': sc[(sc.rset == 2) & np.isclose(sc.y0, y0u)].rep.nunique()}
+    if gate_ran: nrep.update({f'set 1 scores y0 {y_}': sc[(sc.rset == 1) & np.isclose(sc.y0, y_)].rep.nunique() for y_ in sorted({2021.0, float(be['map_y0_gate']['requested'])})})
+    if any(n_ != T11I_R for n_ in nrep.values()): why.append(f'replicates {nrep}, {T11I_R} required in each replicate set (G51.19)')
+    # set relations (G52.1): a half's factors are fitted on that half and applied to the other; the judged visits are the independent gate set
+    nrel, ngat = 0, 0; vs_ = lambda r_: set(int(x) for x in r_.vid)
+    for (rs_, rep_, y_), g_ in sc.groupby(['rset', 'rep', 'y0']):
+        cg_ = cf[(cf.rset == rs_) & (cf.rep == rep_) & np.isclose(cf.y0, y_)]
+        for X, O in (('A', 'B'), ('B', 'A')):
+            fX, sX, sO = vs_(cg_[cg_.half == X]), vs_(g_[g_.half == X]), vs_(g_[g_.half == O])
+            if fX != sX or (fX & sO) or not fX: nrel += 1
+        if gate_vids is not None and vs_(g_) != set(gate_vids): ngat += 1
+    if nrel: why.append(f'{nrel} (replicate set, replicate, y0, half) groups: the factor applied to a half is not fitted on exactly the OTHER half (fitted on the judged half, or on other visits; G52.1)')
+    if ngat: why.append(f'{ngat} (replicate set, replicate, y0) groups judge visits != the independent gate set (T12; G52.1)')
+    bl = d[(d.kind == 'baseline') & (d.set == lbl)]
+    if gate_vids is None: why.append('input missing: the independent gate set (T12; G52.1)')
+    else:
+        g0 = set(int(x) for x in gate_vids); hb_ = {h_: vs_(bl[bl.half == h_]) for h_ in ('A', 'B')}; ss_ = {h_: vs_(sc[(sc.half == h_) & (sc.rset == 2) & np.isclose(sc.y0, y0u)]) for h_ in ('A', 'B')}
+        if hb_ != ss_ or (hb_['A'] | hb_['B']) != g0 or (hb_['A'] & hb_['B']): why.append(f'baseline halves {[len(v_) for v_ in hb_.values()]} != the judged halves {[len(v_) for v_ in ss_.values()]} / the gate set {len(g0)}')
+        for r_, g_ in cf[(cf.half == 'all')].groupby(['rset', 'rep', 'y0']):
+            if vs_(g_) != g0: why.append(f"'all' fit {r_} visits != the gate set"); break
+    # validation metrics on replicate set 2 (acceptance), factors re-fitted here from the other half's fit rows
+    s2 = sc[(sc.rset == 2) & np.isclose(sc.y0, y0u)]; reps = {}; badcf = 0; cfs = {}
+    for (rep_, half), g_ in s2.groupby(['rep', 'half']):
+        other = {'A': 'B', 'B': 'A'}[half]; f_ = fit(cf[(cf.half == other) & (cf.rep == rep_) & (cf.rset == 2) & np.isclose(cf.y0, y0u)]); cfs[(rep_, half)] = f_
         badcf += int(sum((~np.isclose(g_[f'cf_{k}'].values, f_[i], rtol=tol, atol=tol)) for i, k in enumerate(('TPH', 'BA', 'QMD'))).astype(bool).sum())   # (counted per row)
         s_ = g_[g_.stocked]; P = {k: s_[f'pred_{k}'].values * np.exp(f_[i]) for i, k in enumerate(('TPH', 'BA', 'QMD'))}   # (the factors re-fitted here, not the dumped ones)
         P['QMD'] = np.where(P['TPH'] > 0, 100 * np.sqrt(P['BA'] / np.maximum(P['TPH'] * math.pi / 4, 1e-9)), 0.0)
@@ -418,11 +550,16 @@ def t11i_check(be, dump, null_ref=None, tol=1e-6):
     if badcf: why.append(f'{badcf} score rows apply factors that are not the other half\'s fit')
     if not reps or any(len(v_) != 2 for v_ in reps.values()): why.append(f'validation score rows: replicates {sorted(reps)} with {[len(v_) for v_ in reps.values()]} halves (2 each required)')
     xv = {k: float(np.mean([np.mean([h_[k] for h_ in v_]) for v_ in reps.values()])) if reps else float('nan') for k in ('TPH', 'BA', 'QMD', 'bray_medoid')}
-    bl = d[(d.kind == 'baseline') & (d.set == 'validation')]; nv = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray')}; nh = 0
+    comp = comp_ref if comp_ref is not None else {int(r_.vid): float(r_.bray_null) for r_ in bl.itertuples()}
+    if comp_ref is None: why.append('input missing: the independent null composition (G52.2)')
+    else:
+        ncomp = sum(1 for r_ in bl.itertuples() if int(r_.vid) not in comp_ref or abs(float(r_.bray_null) - comp_ref[int(r_.vid)]) > 1e-4)
+        if ncomp: why.append(f'{ncomp} of {len(bl)} dumped null Bray values differ from the independent null composition (G52.2)')
+    nv = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray')}; nh = 0
     for half, g_ in bl.groupby('half'):
         s_ = g_[g_.stocked]; nh += 1
         for k in ('TPH', 'BA', 'QMD'): nv[k] += tmed_(np.abs(np.log((s_[f'null_{k}'].values + 1e-3) / (s_[f'obs_{k}'].values + 1e-3))))
-        nv['bray'] += float(s_.bray_null.mean())
+        nv['bray'] += float(np.mean([comp.get(int(v), np.nan) for v in s_.vid])) if len(s_) else float('nan')
     nv = {k: v_ / nh if nh else float('nan') for k, v_ in nv.items()}
     if nh != 2: why.append(f'validation baseline halves {nh} (2 required)')
     xr = be.get('mapping_path_validation_crossfit', {}); rme, rco, rnu = xr.get('median_abs_log_err', {}), xr.get('composition', {}), xr.get('null', {})
@@ -432,16 +569,46 @@ def t11i_check(be, dump, null_ref=None, tol=1e-6):
     if not close(xv['bray_medoid'], float(rco.get('bray_medoid', np.nan))): why.append(f"medoid Bray {xv['bray_medoid']:.6f} != recorded {rco.get('bray_medoid')}")
     if not close(nv['bray'], float(rnu.get('bray', np.nan))): why.append(f"null Bray {nv['bray']:.6f} != recorded {rnu.get('bray')}")
     nnull = 0
-    if null_ref is not None:
+    if null_ref is None: why.append('input missing: the independent null predictions')
+    else:
         for r_ in bl.itertuples():
             ref = null_ref.get(int(r_.vid))
             if ref is None or not all(abs(float(getattr(r_, f'null_{k}')) - ref[i]) <= 1e-4 * max(1.0, abs(ref[i])) for i, k in enumerate(('TPH', 'BA', 'QMD'))): nnull += 1
         if nnull: why.append(f'{nnull} of {len(bl)} dumped null predictions differ from the independent null (training pool, ±3 yr, judged plots excluded)')
-    acc = all(math.isfinite(xv[k]) and math.isfinite(nv[k]) and xv[k] < nv[k] for k in ('TPH', 'BA')) and math.isfinite(xv['bray_medoid']) and xv['bray_medoid'] < nv['bray']
+    # (G51.15) map acceptance: the bootstrap bound recomputed here
+    bt = be.get('map_accept_bootstrap') or {}; ub = {}; pt = {}
+    if not bt: why.append('input missing: bayes_eval.json map_accept_bootstrap (G51.15)')
+    elif (int(bt.get('B', -1)), float(bt.get('level', -1))) != T11I_BOOT or bt.get('cluster') != 'plot': why.append(f"bootstrap B / level / cluster {bt.get('B')} / {bt.get('level')} / {bt.get('cluster')} != pre-registered {T11I_BOOT} / plot")
+    if bt and reps and nh == 2:
+        try:
+            pt, ub, npl = t11i_boot(s2, bl, cfs, comp, int(bt.get('B', 1000)), int(bt.get('seed', 0)), float(bt.get('level', 0.9)))
+            rub = bt.get('upper_bound_model_minus_null') or {}
+            if any(not (k in rub and abs(float(rub[k]) - ub[k]) <= 1e-5) for k in ub): why.append(f'bootstrap bound {ub} != recorded {rub}')
+        except Exception as e_: why.append(f'bootstrap not recomputable ({type(e_).__name__}: {e_})')
+    acc = bool(ub) and all(math.isfinite(xv[k]) and math.isfinite(nv[k]) for k in ('TPH', 'BA')) and math.isfinite(xv['bray_medoid']) and math.isfinite(nv['bray']) \
+          and all(math.isfinite(ub[k]) and ub[k] < 0 for k in ('TPH', 'BA', 'bray'))
     if be.get('map_accept') is None: why.append('input missing: bayes_eval.json map_accept (G46.12)')
     elif bool(be['map_accept']) != acc: why.append(f"map_accept {be['map_accept']} != the rule {acc}")
     if xr.get('set') != 'validation plots': why.append(f"decided on {xr.get('set')!r}, not the validation plots")
-    return not why and acc, f'CAL {np.round(cal, 4).tolist()}, CALF {np.round(calf, 4).tolist()}; validation {dict((k, round(v_, 4)) for k, v_ in xv.items())} vs null {dict((k, round(v_, 4)) for k, v_ in nv.items())}; rule {acc}, map_accept {be.get("map_accept")}; problems {why}', (cal, calf, xv, nv, acc)
+    if model_ref is not None:
+        mr = be.get('model') or {}
+        if (mr.get('MODEL'), mr.get('sha256'), mr.get('table_build_id')) != tuple(model_ref): why.append(f"bayes_eval.json model {(mr.get('MODEL'), mr.get('sha256'), mr.get('table_build_id'))} != MODEL / its sha256 / the table build {tuple(model_ref)} (G51.13 / G51.5)")
+    return not why and acc, (f'CAL {np.round(cal, 4).tolist()}, CALF {np.round(calf, 4).tolist()}; validation (set 2) {dict((k, round(v_, 4)) for k, v_ in xv.items())} vs null {dict((k, round(v_, 4)) for k, v_ in nv.items())}; '
+                             f'bootstrap upper bound of model − null {dict((k, round(v_, 4)) for k, v_ in ub.items())}; replicates {nrep}; rule {acc}, map_accept {be.get("map_accept")}; problems {why}'), (cal, calf, xv, nv, acc, ub)
+def t11i_comp_ref(ns_, V, FSOK, TK, KEYS, dump):
+    """{vid: null Bray} of every dumped baseline visit recomputed from the TOKENS (G52.2): the null composition = the mean BA shares by species key
+    (Σ N·QMD² per key / total) over the STOCKED pool visits (the last visit passing MIN_FSHARE of every training plot with candidates); a visit's Bray =
+    Σ |null share − its share| / 2 (a bare visit: all shares 0)"""
+    vp = ns_['vpid']; trP = set(int(x) for x in vp[ns_['tr_v']]); last = {}
+    for v in np.flatnonzero(FSOK):
+        p_ = int(vp[v])
+        if p_ in trP and p_ in ns_['cand_of'] and (p_ not in last or V.year.values[v] > V.year.values[last[p_]]): last[p_] = v
+    tk = TK[TK.N > 0].assign(w=lambda x: x.N * x.QMD ** 2); sh = tk.pivot_table(index='vid', columns='key', values='w', aggfunc='sum', fill_value=0.0).reindex(columns=range(len(KEYS)), fill_value=0.0)
+    sh = sh.div(sh.sum(1), axis=0); pool = [v for v in last.values() if v in sh.index]; nc = sh.loc[pool].values.mean(0) if pool else np.full(len(KEYS), np.nan)
+    out = {}
+    for v in dump[dump.kind == 'baseline'].vid.astype(int).unique():
+        x_ = sh.loc[v].values if v in sh.index else np.zeros(len(KEYS)); out[int(v)] = float(np.abs(nc - x_).sum() / 2)
+    return out
 def t11i_null_ref(ns_, V, FSOK, dump):
     """{vid: (TPH, BA, QMD)} the NULL prediction of every dumped validation baseline visit recomputed from the table: the true median of obs_summ over the
     pool = the last visit passing MIN_FSHARE of every training plot with candidates, within ±3 yr of the query visit, the judged half's plots excluded"""
@@ -479,57 +646,134 @@ def landfire_codes(path, classes):
     _sv = lambda r: SEVS['No Severity'] if pd.isna(r.SEVERITY) else SEVS[str(r.SEVERITY).strip()]
     lk = {(int(r.year), int(r.VALUE)): (cls_of(r), int(r.ey)) for r in codes.itertuples()}
     return lk, {(int(r.year), int(r.VALUE)): _sv(r) for r in codes.itertuples() if cls_of(r) is not None}
-# ---------------------------------------------------------------- provenance of the table (G46.6 / G47.9): stale vs divergent
+# ---------------------------------------------------------------- provenance (G46.6 / G47.9 / G51.5 / G52.6): stale vs divergent vs outcome
 PROV_KEY = b'genveg_provenance'
-SCRIPT_OF = {'g02b': 'g02b_build_gafl.py', 'g02e': 'g02e_fia_records.py', 'g02g': 'g02g_history_consistency.py', 'g02j': 'g02j_stand_footprints.py'}
-PROV_FILE = {'g02e': 'fia_events.parquet', 'g02g': 'cand_hist.parquet', 'g02j': 'stands.parquet'}        # (g02b: meta.json code_hash)
+SCRIPT_OF = {'g02b': 'g02b_build_gafl.py', 'g02e': 'g02e_fia_records.py', 'g02g': 'g02g_history_consistency.py', 'g02j': 'g02j_stand_footprints.py',
+             'g03b': 'g03b_train_gafl.py', 'g04': 'g04_bayes_downscale.py', 'g06': 'g06_dynamics_check.py'}
+PROV_FILE = {'g02e': 'fia_events.parquet', 'g02g': 'cand_hist.parquet', 'g02j': 'stands.parquet'}        # (g02b: meta.json code_hash / build_id)
+TABLE_STAGES = ('g02b', 'g02e', 'g02g', 'g02j')                    # the table scripts: code hash + build_id recorded with their outputs
+RUN_STAGES = ('g03b', 'g04', 'g06')                                # model / evaluation outputs recording the table build_id (checkpoint, bayes_eval.json, g06 record)
+def _local_imports(path):
+    """the script and every module of its directory it imports (level-0 `import m` / `from m import`, by the top-level name), transitively (G51.5)"""
+    d_ = os.path.dirname(os.path.abspath(path)); out, todo = set(), [os.path.abspath(path)]
+    while todo:
+        f_ = todo.pop()
+        if f_ in out: continue
+        out.add(f_); t_ = ast.parse(open(f_, encoding='utf-8').read())
+        mods = [a_.name for n in ast.walk(t_) if isinstance(n, ast.Import) for a_ in n.names] + [n.module for n in ast.walk(t_) if isinstance(n, ast.ImportFrom) and n.level == 0 and n.module]
+        todo += [os.path.join(d_, m_.split('.')[0] + '.py') for m_ in mods if os.path.exists(os.path.join(d_, m_.split('.')[0] + '.py'))]
+    return sorted(out)
+def _hash_tokens(src):
+    """the token stream G51.5 hashes, written out here from the definition: (type, text) of NAME / NUMBER / OP / STRING tokens with their exact source
+    text, NEWLINE / INDENT / DEDENT with no text, each f-string as ONE STRING token of its whole source text; comments, NL, ENCODING, ENDMARKER, every
+    docstring (a string-constant first statement of the module / a def / a class) and the NEWLINE right after it left out"""
+    import io as _io, tokenize as _tok
+    L_ = src.splitlines(keepends=True)
+    def col(ln, b_): return len(L_[ln - 1].encode('utf-8')[:b_].decode('utf-8'))
+    docs = [((n.body[0].lineno, col(n.body[0].lineno, n.body[0].col_offset)), (n.body[0].end_lineno, col(n.body[0].end_lineno, n.body[0].end_col_offset)))
+            for n in ast.walk(ast.parse(src)) if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body
+            and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant) and isinstance(n.body[0].value.value, str)]
+    def seg(a_, b_):
+        return L_[a_[0] - 1][a_[1]:b_[1]] if a_[0] == b_[0] else L_[a_[0] - 1][a_[1]:] + ''.join(L_[a_[0]:b_[0] - 1]) + L_[b_[0] - 1][:b_[1]]
+    toks, depth, f0 = [], 0, None
+    for t in _tok.generate_tokens(_io.StringIO(src).readline):
+        k = _tok.tok_name[t.type]
+        if k == 'FSTRING_START':
+            depth += 1; f0 = t.start if depth == 1 else f0; continue
+        if k == 'FSTRING_END':
+            depth -= 1
+            if depth == 0: toks.append(('STRING', seg(f0, t.end), t.start))
+            continue
+        if depth == 0 and k not in ('COMMENT', 'NL', 'ENCODING', 'ENDMARKER'): toks.append((k, '' if k in ('NEWLINE', 'INDENT', 'DEDENT') else t.string, t.start))
+    out, skip_nl = [], False
+    for k, x, st in toks:
+        if any(a_ <= st < b_ for a_, b_ in docs): skip_nl = True; continue
+        if skip_nl and k == 'NEWLINE': skip_nl = False; continue
+        skip_nl = False; out.append((k, x))
+    return out
 def code_hash(path):
-    """a script's provenance hash as G46.6 defines it: sha256 (hex) of ast.dump of the parsed module after removing the docstring of the module and of
-    every def / class (an emptied body becomes `pass`): comments, docstrings and formatting do not count"""
-    tree = ast.parse(open(path).read())
-    for n in ast.walk(tree):
-        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body and isinstance(n.body[0], ast.Expr) \
-                and isinstance(n.body[0].value, ast.Constant) and isinstance(n.body[0].value.value, str):
-            n.body = n.body[1:] or [ast.Pass()]
-    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
-def recorded_provenance(d_):
-    """{script: (code hash of that script recorded with the table, the g02b hash recorded with it)} from meta.json code_hash (g02b) and the parquet
-    provenance records of g02e / g02g / g02j (None: nothing recorded)"""
+    """(G51.5) a script's provenance hash, an independent copy of the definition (T0h compares it with common.code_hash): sha256 over the script and its
+    local imports in sorted path order, each as its file name + NUL, then type 0x1f text 0x1e per token of _hash_tokens, then 0x1d"""
+    h_ = hashlib.sha256()
+    for f_ in _local_imports(path):
+        h_.update(os.path.basename(f_).encode() + b'\0')
+        for k, x in _hash_tokens(open(f_, encoding='utf-8').read()): h_.update(k.encode() + b'\x1f' + x.encode('utf-8') + b'\x1e')
+        h_.update(b'\x1d')
+    return h_.hexdigest()
+def recorded_provenance(d_, model=None, dyn_json=None):
+    """{stage: {'code_hash', 'g02b_hash', 'build_id'}} recorded with the table and the run outputs: meta.json (g02b), the parquet provenance records of
+    g02e / g02g / g02j, the checkpoint (g03b, the MODEL file), bayes_eval.json (g04), the g06 record (dyn_json); None = nothing recorded / no file"""
     out = {}
-    try: out['g02b'] = (json.load(open(f'{d_}/meta.json')).get('code_hash', {}).get('g02b'), None)
-    except Exception: out['g02b'] = (None, None)
+    try: m_ = json.load(open(f'{d_}/meta.json')); out['g02b'] = {'code_hash': (m_.get('code_hash') or {}).get('g02b'), 'g02b_hash': None, 'build_id': m_.get('build_id')}
+    except Exception: out['g02b'] = None
     import pyarrow.parquet as pq_
     for s_, f_ in PROV_FILE.items():
         try:
             md_ = pq_.read_schema(f'{d_}/{f_}').metadata or {}; pr_ = json.loads(md_[PROV_KEY]) if PROV_KEY in md_ else {}
-            out[s_] = (pr_.get('code_hash', {}).get(s_), pr_.get('code_hash', {}).get('g02b'))
-        except Exception: out[s_] = (None, None)
+            out[s_] = {'code_hash': (pr_.get('code_hash') or {}).get(s_), 'g02b_hash': (pr_.get('code_hash') or {}).get('g02b'), 'build_id': pr_.get('build_id')}
+        except Exception: out[s_] = None
+    def run_rec(r_, s_):        # (the checkpoint records build_id; bayes_eval.json / the g06 record: model.table_build_id, G51.5 / G51.13)
+        if not isinstance(r_, dict): return None
+        mo_ = r_.get('model'); b_ = r_.get('build_id') or (mo_.get('table_build_id') if isinstance(mo_, dict) else None)
+        return {'code_hash': (r_.get('code_hash') or {}).get(s_) if isinstance(r_.get('code_hash'), dict) else None, 'g02b_hash': None, 'build_id': b_}
+    try:
+        import torch as _t; out['g03b'] = run_rec(_t.load(f'{d_}/{model}', weights_only=False, map_location='cpu'), 'g03b') if model and os.path.exists(f'{d_}/{model}') else None
+    except Exception: out['g03b'] = None
+    for s_, f_ in (('g04', f'{d_}/bayes_eval.json'), ('g06', dyn_json)):
+        try: out[s_] = run_rec(json.load(open(f_)), s_) if f_ and os.path.exists(f_) else None
+        except Exception: out[s_] = None
     return out
-def provenance_label(scripts, rec, cur):
-    """the stale / divergent label of a failing check whose inputs the given table scripts produced (rec: recorded_provenance, cur: current hashes)"""
-    if not scripts: return 'divergent (the check reads current pipeline code / outputs without a table code hash: the code disagrees with the spec)'
-    miss = [s_ for s_ in scripts if rec.get(s_, (None, None))[0] is None]
-    if miss: return f'stale (no code hash recorded for {", ".join(miss)}: the table predates G46.6; rebuild before triage)'
-    old = [s_ for s_ in scripts if rec[s_][0] != cur.get(s_)]
-    if old: return f'stale ({", ".join(old)} changed since the table was built)'
-    lag = [s_ for s_ in scripts if s_ != 'g02b' and rec[s_][1] is not None and rec[s_][1] != rec['g02b'][0]]
-    if lag: return f'stale ({", ".join(lag)} ran on an older g02b table)'
-    return f'divergent (built by the current {", ".join(scripts)}: the code disagrees with the spec)'
-# which table scripts produced the inputs of each check (by check id); checks absent here read no table output
-PRODUCERS = {**{k: ('g02b',) for k in ('T1a', 'T1b', 'T1c', 'T1d', 'T1e', 'T1f', 'T1g', 'T1h', 'T1i', 'T1j', 'T1k', 'T1l', 'T1m', 'T1o', 'T1q', 'T1r',
-                                       'T2a0', 'T2a', 'T2b', 'T2c', 'T3a', 'T3b', 'T3c', 'T3c0', 'T3c2', 'T3c2z', 'T3d', 'T3e', 'T3f', 'T3g', 'T3h', 'T3i', 'T3k',
-                                       'T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T5', 'T5s', 'T7a')},
-             'T1n': ('g02b', 'g02e'), 'T3j': ('g02b', 'g02e'), 'T6a': ('g02b', 'g02j'), 'T6b': ('g02b', 'g02j'), 'T6c': ('g02b', 'g02j'),
-             'T6d': ('g02b', 'g02j'), 'T7b': ('g02b', 'g02e', 'g02g'), 'T7e': ('g02b', 'g02e', 'g02g'), 'T10': ('g02b', 'g02e', 'g02g'),
-             **{k: ('g02b', 'g02e') for k in ('T8p', 'T8', 'T8e', 'T8f', 'T8g', 'T8c', 'T8b', 'T8d')}, 'T8h': ('g02b', 'g02e', 'g02g')}
+def provenance_label(sources, rec, cur, outcome=False):
+    """the label of a failing check whose inputs the given stages produced (rec: recorded_provenance, cur: current code hashes): `stale` (a stage's code
+    changed since it ran, nothing recorded, or it ran on another table instance than meta.json's build_id: rebuild before triage), else `outcome` (checks
+    whose failure is a model / data result, G52.6), else `divergent` (current code on this table disagrees with the spec)"""
+    if not sources: return 'divergent (the check reads current pipeline code / outputs without a recorded provenance: the code disagrees with the spec)'
+    b0 = (rec.get('g02b') or {}).get('build_id'); why, unrec = [], []
+    for s_ in sources:
+        r_ = rec.get(s_, 'unrecorded')
+        if r_ == 'unrecorded': unrec.append(s_); continue
+        if r_ is None: why.append(f'{s_}: no output / provenance record'); continue
+        if s_ in TABLE_STAGES:
+            if r_['code_hash'] is None: why.append(f'{s_}: no code hash recorded (predates G46.6)')
+            elif r_['code_hash'] != cur.get(s_): why.append(f'{s_} changed since it ran (G51.5 code hash)')
+            if s_ != 'g02b':
+                if r_['build_id'] is not None or b0 is not None:
+                    if r_['build_id'] != b0: why.append(f'{s_} ran on table build {r_["build_id"]}, the table is {b0}')
+                elif r_['g02b_hash'] is not None and r_['g02b_hash'] != (rec.get('g02b') or {}).get('code_hash'): why.append(f'{s_} ran on an older g02b table')
+        else:
+            if r_['build_id'] is None: why.append(f'{s_} output records no table build_id (predates G51.5)')
+            elif r_['build_id'] != b0: why.append(f'{s_} output made on table build {r_["build_id"]}, the table is {b0}')
+            if r_['code_hash'] is not None and r_['code_hash'] != cur.get(s_): why.append(f'{s_} changed since it ran (G51.5 code hash)')
+    nu = f'; {", ".join(unrec)} outputs record no provenance (they may be stale)' if unrec else ''
+    if why: return f'stale ({"; ".join(why)}: rebuild / rerun before triage{nu})'
+    if outcome: return f'outcome (current code on this table instance ({", ".join(s_ for s_ in sources if s_ not in unrec)}): a model / data result, not a code divergence{nu})'
+    return f'divergent (current {", ".join(s_ for s_ in sources if s_ not in unrec)} on this table instance: the code disagrees with the spec{nu})'
+# which stages produced the inputs of each check (check id -> stages); checks absent here read no stage output. visits.parquet is g02b's with g02e's
+# plot_converted column; g03b reads cand_hist (g02g) under LOC=history; g02f / g02c / g05 / g07 / g08 outputs record no provenance (`unrecorded`)
+_TB, _TBG = ('g02b', 'g02e'), ('g02b', 'g02e', 'g02g')
+PRODUCERS = {**{k: _TB for k in ('T1a', 'T1b', 'T1c', 'T1d', 'T1e', 'T1f', 'T1g', 'T1h', 'T1i', 'T1j', 'T1k', 'T1l', 'T1m', 'T1n', 'T1o', 'T1q', 'T1r',
+                                  'T2a0', 'T2a', 'T2b', 'T2c', 'T3a', 'T3b', 'T3c', 'T3c0', 'T3c2', 'T3c2z', 'T3d', 'T3e', 'T3f', 'T3g', 'T3h', 'T3i', 'T3j', 'T3k',
+                                  'T5', 'T5s', 'T7a', 'T7c', 'T8p', 'T8', 'T8e', 'T8f', 'T8g', 'T8c')},
+             **{k: _TBG for k in ('T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T4x', 'T7b', 'T7e', 'T8b', 'T8d', 'T8h', 'T10', 'T11h', 'T12')},
+             **{k: _TB + ('g02j',) for k in ('T6a', 'T6b', 'T6c', 'T6d')}, 'T9': _TB + ('g02f',), 'T13': _TB + ('g02c',), 'T14': _TBG + ('g08',),
+             'T4y': _TBG + ('g03b',), 'T15': _TBG + ('g03b', 'g06'), 'T11i': _TBG + ('g03b', 'g04'), 'T11d': _TBG + ('g03b', 'g04'),
+             'T11c': _TBG + ('g03b', 'g04', 'g05'), **{k: _TBG + ('g03b', 'g04', 'g05') for k in ('T11b', 'T11e', 'T11f')},
+             **{k: _TBG + ('g03b', 'g04', 'g05', 'g07') for k in ('T11', 'T11g', 'T11z')}}
+OUTCOME = {'T15', 'T1k', 'T1l', 'T3i', 'T10'}          # (G52.6) checks whose failure can be a model / data result (T15 / T10: only without a code problem)
 VERIFY_INPUTS = _verify_inputs()
 VERIFY_CODE = _verify_code()
 def main(argv=None, force_pairs=(), stop_after=None):
     argv = sys.argv if argv is None else argv; NS = int(argv[1]) if len(argv) > 1 else 300; FORCE = [int(x) for x in force_pairs]
-    rng = np.random.default_rng(42); RES = []; _rec0 = recorded_provenance(D); ENV0 = env_snapshot()
-    _cur0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}') if os.path.exists(f'{ROOT}/scripts/{f_}') else None) for s_, f_ in SCRIPT_OF.items()}
-    def check(name, ok, detail=''):
-        RES.append((name, bool(ok))); lab = '' if ok else f'  [{provenance_label(PRODUCERS.get(name.split()[0], ()), _rec0, _cur0)}]'
+    rng = np.random.default_rng(42); RES = []; ENV0 = env_snapshot()
+    _rec0 = recorded_provenance(D, os.environ.get('MODEL') if os.environ.get('GV_REQUIRE_MAP') != '0' else None, os.environ.get('GV_DYN_JSON') if os.environ.get('GV_REQUIRE_MAP') != '0' else None)
+    _cur0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}') if os.path.exists(f'{ROOT}/scripts/{f_}') else None) for s_, f_ in SCRIPT_OF.items()}      # (at the start, G51.5)
+    CODE = {f_: open(f'{ROOT}/scripts/{f_}').read() for f_ in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g05_map_stands.py')}    # every exec / scan reads
+    # the source as it was at the start (an edit during the run must not mix two versions)
+    def check(name, ok, detail='', outcome=None):
+        """one result line; a FAIL carries the provenance label (G47.9 / G52.6): outcome=None -> an OUTCOME check's failure is labelled `outcome` when
+        current, outcome=False -> it is a code problem (`divergent`)"""
+        cid_ = name.split()[0]; oc_ = cid_ in OUTCOME and (outcome is None or bool(outcome))
+        RES.append((name, bool(ok))); lab = '' if ok else f'  [{provenance_label(PRODUCERS.get(cid_, ()), _rec0, _cur0, outcome=oc_)}]'
         print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}{lab}", flush=True)
     def done(tag):                                                        # (test harness: stop after the named block)
         if stop_after == tag:
@@ -540,6 +784,13 @@ def main(argv=None, force_pairs=(), stop_after=None):
     except Exception as e_: _f0 = []; _e0 = f'; the driver\'s list is unavailable ({type(e_).__name__}: {e_})'
     _h0 = [(os.path.basename(f), ln) for f in _f0 for ln, _ in _cc0.swallowed(f)]
     check('T0 no code swallowed by an inline comment in the pipeline scripts (static scan of the driver\'s pipeline_scripts(), G47.8)', len(_f0) > 0 and not _h0, f'{len(_f0)} files; hits {_h0}{_e0}')
+    # T0h (G51.5 / G52.6) the verifier's own copy of the code hash = common.code_hash (the stages' definition) on every stage script: a mismatch would
+    # label every failure stale; the copy also gives the same hash under any interpreter (token-based, no ast.dump)
+    try:
+        import common as _cm0; _hd0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}'), _cm0.code_hash(f'{ROOT}/scripts/{f_}')) for s_, f_ in SCRIPT_OF.items()}; _he0 = ''
+    except Exception as e_: _hd0, _he0 = {}, f'input missing: common.code_hash ({type(e_).__name__}: {e_}; G51.5)'
+    check('T0h code hash (G51.5): the verifier\'s independent copy = common.code_hash on every stage script', bool(_hd0) and all(a_ == b_ for a_, b_ in _hd0.values()),
+          _he0 or f'{len(_hd0)} scripts; differing {[s_ for s_, (a_, b_) in _hd0.items() if a_ != b_]}')
     M = json.load(open(f'{D}/meta.json')); from region import region_check; region_check(M); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
     # T1q (r13 E-F8): the table's recorded build switches = the configured ones (the driver passes the table config keys TOPK / NCAND / RADIAL_P; absent -> skipped)
     _m8 = {'TOPK': len(KEYS) - 2, 'NCAND': M.get('ncand'), 'RADIAL_P': M.get('radial_p')}; _e8 = {k: os.environ[k] for k in _m8 if os.environ.get(k) not in (None, '')}
@@ -558,14 +809,15 @@ def main(argv=None, force_pairs=(), stop_after=None):
     elif 'evk' not in M: check('T3k the verifier has an evidence table for the region, = meta.json evk', False, 'input missing: meta.json has no evk (G46.4)')
     else:
         _dv = evk_divergence(SPEC, M['evk'], M['classes'])
-        check('T3k the verifier has an evidence table for the region, = meta.json evk (classes / window / likelihood ratio per record kind); evidence end 2024 (G36)',
-              not _dv and M.get('evid_end') == 2024, f'{len(M["evk"])} kinds in the table; diverging (kind, spec, table): {_dv}; meta.json evid_end {M.get("evid_end", "absent")}')
+        check('T3k the verifier has an evidence table for the region, = meta.json evk (classes / window / evidence weight lr / detectable per record kind, G51.7); evidence end 2024 (G36); '
+              'not a provisional table (G51.6)', not _dv and M.get('evid_end') == 2024 and not M.get('evk_provisional'),
+              f'{len(M["evk"])} kinds in the table; diverging (kind, spec, table): {_dv}; meta.json evid_end {M.get("evid_end", "absent")}, evk_provisional {M.get("evk_provisional", "absent")}')
     SPEC_CHECKS = {'T3f', 'T3j', 'T3i', 'T8', 'T8e', 'T8f', 'T8g', 'T8c', 'T8b', 'T8d', 'T8h', 'T9', 'T10'}
     if NOSPEC:
         _check0 = check
-        def check(name, ok, detail=''):
-            if name.split()[0] in SPEC_CHECKS: return _check0(name, False, f'no verifier evidence table for region {sorted(set(REGION))} (G47.2); with the GA+FL table: {"PASS" if ok else "FAIL"} {detail}')
-            return _check0(name, ok, detail)
+        def check(name, ok, detail='', outcome=None):
+            if name.split()[0] in SPEC_CHECKS: return _check0(name, False, f'no verifier evidence table for region {sorted(set(REGION))} (G47.2); with the GA+FL table: {"PASS" if ok else "FAIL"} {detail}', outcome=False)
+            return _check0(name, ok, detail, outcome)
     LAND = f'{ROOT}/data/r4/land.tif' if AEF90 else stands_run()['land_clean']
     AEFP = {y: f'{ROOT}/data/aef90/aef90_{y}.tif' if AEF90 else f'{ROOT}/data/aef/aef_{y}.tif' for y in (2022, 2025)}
     SOILP = (lambda k: f'{ROOT}/data/r4/soils90/{k}.tif') if AEF90 else (lambda k: f'{ROOT}/data/soils/{k}.tif')
@@ -576,11 +828,27 @@ def main(argv=None, force_pairs=(), stop_after=None):
     con = duckdb.connect(curated_db(), read_only=True)
     # ======================= T1 visits and cohort tokens (SQL aggregation, independent of the pandas builder)
     # (r11 M-4: ranked over live trees on FORESTED conditions only — the cohort table describes forested conditions — FIADB COND_STATUS_CD by plot / date / CONDID)
+    # (G51.2) the curated CANONICAL plot keys: a FIADB visit (PLOT CN) whose curated PLOT row carries another plot key than FIADB's (the curation chain files
+    # a plot's later segments under one canonical key) is read under the curated key — every FIADB read keyed by plot below goes through canon() (events,
+    # negative evidence and visits of every chain segment belong to the canonical plot); none in a curated DB without remapped plots
+    _qk = f"select CN::varchar cn, STATECD st, UNITCD u, COUNTYCD c, PLOT p from PLOT where STATECD in {ST_SQL}"
+    _rk = con.execute(_qk).df().merge(duckdb.connect(fiadb(), read_only=True).execute(_qk).df(), on=['cn', 'st'], suffixes=('', '_f'))
+    _rk = _rk[(_rk.u != _rk.u_f) | (_rk.c != _rk.c_f) | (_rk.p != _rk.p_f)]
+    CANON = {str(cn_): (int(u_), int(c_), int(p_)) for cn_, u_, c_, p_ in zip(_rk.cn, _rk.u, _rk.c, _rk.p)}
+    def canon(df_, cn_='cn'):
+        """FIADB rows with their PLOT CN under the canonical plot key (the CN column is kept)"""
+        if not CANON or not len(df_): return df_
+        hit_ = df_[cn_].astype(str).map(CANON); ix_ = hit_.notna().values
+        if ix_.any():
+            df_ = df_.copy()
+            for j_, k_ in enumerate(('u', 'c', 'p')): df_.loc[ix_, k_] = [t_[j_] for t_ in hit_[ix_]]
+        return df_
+    print(f'   (G51.2 canonical keys: {len(CANON)} FIADB visits of {len(set(map(tuple, _rk[["st", "u", "c", "p"]].values)))} curated plots read under the curated key)')
     _lt = con.execute(f"""select r.SPECIES_SYMBOL sym, t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, t.CONDID cond from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD
                            where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01' and t.STATUSCD=1""").df()
-    _cs = duckdb.connect(fiadb(), read_only=True).execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p,
+    _cs = canon(duckdb.connect(fiadb(), read_only=True).execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p,
                 (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md, c.CONDID cond, c.COND_STATUS_CD cs
-                from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+                from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()).drop(columns='cn')
     _lt['md'] = pd.to_datetime(_lt.md); _cs['md'] = pd.to_datetime(_cs.md); _lt = _lt.merge(_cs, on=['st', 'u', 'c', 'p', 'md', 'cond'], how='left')
     _vc = _lt[_lt.cs == 1].groupby('sym').size().reset_index(name='n').sort_values(['n', 'sym'], ascending=[False, True]); top = list(_vc.sym[:len(KEYS) - 2])
     check(f'T1b species keys = top-{len(KEYS) - 2} live species on forested conditions (SQL + FIADB COND) + _H/_S', sorted(top) + ['_H', '_S'] == KEYS, f'{sorted(top)[:5]}…')
@@ -596,7 +864,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     _fx = duckdb.connect(fiadb(), read_only=True)
     _cc = _fx.execute(f"""select p.CN pcn, p.MEASYEAR my, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, printf('%04d-%02d-%02d', p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) ds,
             c.CONDID cond, c.COND_STATUS_CD cs, c.SUBPPROP_UNADJ sp, c.MICRPROP_UNADJ mp, c.STDORGCD org from PLOT p join COND c on c.PLT_CN = p.CN
-            where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+            where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df(); _cc = canon(_cc, 'pcn')
     # (G40) a bare visit has no live TALLIED tree on a forested condition (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4, COND_STATUS_CD 1): a correlated subquery here
     _nl = _fx.execute(f"""select t.PLT_CN pcn, count(*) nl, sum(t.TPA_UNADJ) tl from TREE t where t.STATECD in {ST_SQL} and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4
                           and exists (select 1 from COND c where c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID and c.COND_STATUS_CD = 1) group by 1""").df()
@@ -619,6 +887,10 @@ def main(argv=None, force_pairs=(), stop_after=None):
     _tvk = _tv.merge(INC[key + ['ds']].assign(_x=1), on=key + ['ds'], how='left'); _tvk = _tvk[_tvk._x.isna()][key + ['ds']]
     # (G40) + FIADB plots bare at EVERY forested visit whose EPA L3 ecoregion (FIADB data_plot_eco) is in the curated table's L3 scope (the L3s of its plots)
     _eco = _fx.execute(f"select statecd st, unitcd u, countycd c, plot p, epa_l3 l3 from data_plot_eco where statecd in {ST_SQL}").df()
+    if len(_rk):          # (G51.2) a remapped segment's ecoregion row also counts for its canonical plot
+        _eco = pd.concat([_eco, _rk[['st', 'u_f', 'c_f', 'p_f', 'u', 'c', 'p']].drop_duplicates().rename(columns={'u': 'u_c', 'c': 'c_c', 'p': 'p_c'})
+                          .merge(_eco.rename(columns={'u': 'u_f', 'c': 'c_f', 'p': 'p_f'}), on=['st', 'u_f', 'c_f', 'p_f'])[['st', 'u_c', 'c_c', 'p_c', 'l3']]
+                          .rename(columns={'u_c': 'u', 'c_c': 'c', 'p_c': 'p'})]).drop_duplicates()
     L3S = set(_tv[key].drop_duplicates().merge(_eco, on=key).l3.dropna()); _ab = _f.groupby(key).nl.max(); _ab = _ab[_ab == 0].reset_index()[key].merge(_eco, on=key)
     _ab = _ab[_ab.l3.isin(L3S)][key]
     _bare = _f[_f.nl == 0].merge(pd.concat([_tv[key].drop_duplicates(), _ab]).drop_duplicates(), on=key).merge(_tv.assign(_i=1), on=key + ['ds'], how='left')
@@ -678,9 +950,9 @@ def main(argv=None, force_pairs=(), stop_after=None):
     check('T1f visits without qualifying live trees have no tokens (and are kept)', not (emp & tkv) and emp <= set(V.vid), f'empty in sample {len(emp)}')
     # T1k (audit r7 M2: T1f is circular): every table visit WITHOUT cohort tokens has no live FIADB tree (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on a forested
     # condition — else the curated table lost live trees and the "bare" visit is a false clear-cut target
-    _lv = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, count(*) n, sum(t.TPA_UNADJ) tpa
+    _lv = canon(_fx.execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, count(*) n, sum(t.TPA_UNADJ) tpa
                           from TREE t join PLOT p on p.CN = t.PLT_CN join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID
-                          where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df()
+                          where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df())
     LIVE = {(int(a), int(b), int(c_), int(d), int(k)): int(n) for a, b, c_, d, k, n in zip(_lv.st, _lv.u, _lv.c, _lv.p, _lv.vk, _lv.n) if pd.notna(k)}
     LIVET = {(int(a), int(b), int(c_), int(d), int(k)): float(x) for a, b, c_, d, k, x in zip(_lv.st, _lv.u, _lv.c, _lv.p, _lv.vk, _lv.tpa) if pd.notna(k)}
     _bare = V[~V.vid.isin(set(TK[TK.N > 0].vid.astype(int)))]; _md = pd.to_datetime(_bare.md)
@@ -705,11 +977,11 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # >= 5 in, MICRPROP_UNADJ for saplings, of COND_STATUS_CD 1) — catches live trees lost by the curation on visits that still have some
     _ft = _fx.execute(f"""with sh as (select PLT_CN, sum(case when COND_STATUS_CD = 1 then SUBPPROP_UNADJ else 0 end) fs, sum(case when COND_STATUS_CD = 1 then MICRPROP_UNADJ else 0 end) fm
                                      from COND group by PLT_CN)
-                          select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
+                          select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
                                  sum(t.TPA_UNADJ * 2.47105 / case when t.DIA < 5 then nullif(sh.fm, 0) else nullif(sh.fs, 0) end) tph,
                                  sum(t.TPA_UNADJ * 2.47105 * pi() / 4 * power(t.DIA * 0.0254, 2) / case when t.DIA < 5 then nullif(sh.fm, 0) else nullif(sh.fs, 0) end) ba
                           from TREE t join PLOT p on p.CN = t.PLT_CN join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID join sh on sh.PLT_CN = p.CN
-                          where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df()
+                          where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df(); _ft = canon(_ft)
     FT = {(int(a), int(b), int(c_), int(d), int(k)): (x, y) for a, b, c_, d, k, x, y in zip(_ft.st, _ft.u, _ft.c, _ft.p, _ft.vk, _ft.tph, _ft.ba) if pd.notna(k)}
     _tk = TK[TK.N > 0].assign(ba=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').agg(tph=('N', 'sum'), ba=('ba', 'sum'))
     _sv = V[V.vid.isin(_tk.index)].sample(min(1500, len(_tk)), random_state=12); _md = pd.to_datetime(_sv.md); rt, rb = [], []
@@ -727,8 +999,8 @@ def main(argv=None, force_pairs=(), stop_after=None):
     check('T1h pairs = consecutive visits of each plot', set(zip(PR.v1, PR.v2)) == exp_pairs, f'{len(PR)} pairs')
     pl_ind = EX.set_index('vid').org.fillna(0) == 1
     check('T1i planted flag = COND STDORGCD 1 (forested conditions) of the visit', (V.set_index('vid').planted.reindex(pl_ind.index) == pl_ind).all(), f'planted share {pl_ind.mean():.3f}')
-    fv = duckdb.connect(fiadb(), read_only=True).execute(f"""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
-          from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
+    fv = canon(duckdb.connect(fiadb(), read_only=True).execute(f"""select distinct p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
+          from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()).drop(columns='cn').drop_duplicates()
     ours = V[key].assign(my=V.year.astype(int)).drop_duplicates(); inplots = fv.merge(V[key].drop_duplicates(), on=key)
     # (G52.3) the incomplete curated visits (G46.1 / G51.1: INC, all shares) are left out by decision before the rebuild: neither missing nor counted
     _inc_j = INC[key].assign(my=INC.ds.str[:4].astype(int)).drop_duplicates(); _ni = len(inplots)
@@ -743,9 +1015,16 @@ def main(argv=None, force_pairs=(), stop_after=None):
     _sp = pl.groupby(key).agg(la0=('lat', 'min'), la1=('lat', 'max'), lo0=('lon', 'min'), lo1=('lon', 'max')).reset_index()
     check('T2a0 a plot key\'s annual-inventory rows (MEASYEAR >= 2000) agree on the coordinates (< 0.2 km)', ((_sp.la1 - _sp.la0) * 111 < 0.2).mean() > 0.999 and ((_sp.lo1 - _sp.lo0) * 92 < 0.2).mean() > 0.999,
           f'{len(_sp)} keys; spread > 0.2 km: {int((((_sp.la1 - _sp.la0) * 111 >= 0.2) | ((_sp.lo1 - _sp.lo0) * 92 >= 0.2)).sum())}')
-    pl = pl.groupby(key).agg(lat=('lat', 'mean'), lon=('lon', 'mean')).reset_index()
+    # (G51.2) a plot's coordinates = the curated PLOT row of its LATEST visit since 2000 (the curation's D28 location), else (no curated PLOT row) FIADB's
+    # latest row under the canonical key; latest = the latest MEASYEAR / MEASMON / MEASDAY (ties: INVYR, then CN); rows with coordinates only
+    _q2 = f"""select CN::varchar cn, STATECD st, UNITCD u, COUNTYCD c, PLOT p, MEASYEAR my, coalesce(MEASMON, 0) mm, coalesce(MEASDAY, 0) dd, INVYR iy, LAT lat, LON lon
+              from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000 and LAT is not null and LON is not null"""
+    _late = lambda df_: df_.sort_values(key + ['my', 'mm', 'dd', 'iy', 'cn']).groupby(key).tail(1)[key + ['lat', 'lon']]
+    _p2c = _late(con.execute(_q2).df()); _p2f = _late(canon(fc.execute(_q2).df()))
+    pl = pd.concat([_p2c.assign(src='curated'), _p2f.merge(_p2c[key].assign(_c=1), on=key, how='left').query('_c != _c').drop(columns='_c').assign(src='fiadb')])
     m = P.merge(pl, on=key, suffixes=('', '_f'))
-    check('T2a plot lat/lon = FIADB PLOT mean of the annual-inventory rows', np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f), f'n {len(m)}')
+    check('T2a plot lat/lon = the curated PLOT row of the latest visit since 2000, else FIADB\'s latest (G51.2 / D28)', len(m) == len(P) and np.allclose(m.lat, m.lat_f) and np.allclose(m.lon, m.lon_f),
+          f'n {len(m)} of {len(P)} plots (curated PLOT {int((m.src == "curated").sum())}, FIADB {int((m.src == "fiadb").sum())}); max |Δ| {float(np.max(np.abs(m.lat - m.lat_f))) if len(m) else 0:.1e} deg lat')
     land = rasterio.open(LAND); tf = Transformer.from_crs(4326, land.crs, always_xy=True); x, y = tf.transform(m.lon.values, m.lat.values)
     check('T2b projected x/y (EPSG:5070) recomputed', np.allclose(x, m.x, atol=1e-3) and np.allclose(y, m.y, atol=1e-3))
     if AEF90:          # point in the state's polygon (TIGER counties dissolved), 2 km tolerance (FIA coordinate fuzz)
@@ -876,24 +1155,24 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # SPEC: the region's evidence table (evidence_spec, G47.2; module level, written out independently of g02b's EVK_TABLES)
     HARMLESS = {11, 21, 31, 40, 42, 43, 44, 45, 46}   # (G37: 41 beaver / flooding and 60 vegetation block) FIADB v9.4 DSTRBCD: 11 / 21 insect / disease damage to UNDERSTORY vegetation (12 / 22 = to trees),
     # 31 ground fire, 40 and 42-46 animal — the EVALIDATOR variable library's labels (audit r6 I1: the old set had 12 / 22); 41 beaver / flooding and 60 vegetation are NOT harmless (G37)
-    evr = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy, q.PLOT_STATUS_CD pst,
+    evr = _fx.execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd, c.COND_STATUS_CD cs, q.MEASYEAR pmy, q.PLOT_STATUS_CD pst,
                         c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
                         from COND c join PLOT p on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
-    evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
+    evr = canon(evr); evr = evr[evr.cs == 1]; evr['vk'] = evr.my * 10000 + evr.mm * 100 + evr.dd
     # FIA's previous measurement of every visit (PREV_PLT_CN, any plot status): the period a visit's codes describe starts there
     # (+ G46.2) its plot status and its forested share of the whole plot (COND 1 SUBPPROP_UNADJ; unknown when none of its conditions carries one)
-    _pm = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk,
+    _pm = _fx.execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, q.MEASYEAR * 10000 + q.MEASMON * 100 + q.MEASDAY pvk,
                                  q.PLOT_STATUS_CD qps, (select sum(case when c2.COND_STATUS_CD = 1 then c2.SUBPPROP_UNADJ else 0 end) from COND c2 where c2.PLT_CN = q.CN) qf1,
                                  (select count(c2.SUBPPROP_UNADJ) from COND c2 where c2.PLT_CN = q.CN) qn
-                          from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
+                          from PLOT p left join PLOT q on q.CN = p.PREV_PLT_CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df(); _pm = canon(_pm)
     PREVK = {(int(a), int(b), int(c), int(d), int(k)): (int(q) if pd.notna(q) else None) for a, b, c, d, k, q in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.pvk)}
     # forest -> non-forest conversion: the forested share of the plot (COND_STATUS_CD 1 SUBPPROP_UNADJ) changed by >= 0.25 since the previous forested visit —
     # no TRT / DSTRB code can record it (codes are on forested conditions), so the visit hides possible clearing. (G46.2) also against FIA's PREVIOUS
     # measurement (PREV_PLT_CN): a pre-2000 one (the first visit since 2000), and an entirely non-forest one (PLOT_STATUS_CD 2) counts as share 0; a
     # non-sampled one (3) or one whose conditions carry no share says nothing
-    _fs = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
+    _fs = canon(_fx.execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk,
                                  sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1
-                          from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()
+                          from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()).drop(columns='cn')
     _fs = _fs[_fs.f1 > 0].sort_values(['st', 'u', 'c', 'p', 'vk']); CONV = set()
     for k4, g4 in _fs.groupby(['st', 'u', 'c', 'p']):
         f_, v_ = g4.f1.values, g4.vk.values
@@ -920,10 +1199,10 @@ def main(argv=None, force_pairs=(), stop_after=None):
             if pd.notna(r.vk) and k_ + (int(r.vk),) in CONV: hiding.add(r.vk)
         cl = []                                       # chain records by year (gap <= 2)
         for yr, t_, cd in sorted(recs):
-            cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if k == 'H' else ix[k] for k in cols_}
-            if cl and yr - cl[-1][4] <= 2: a = cl[-1]; cl[-1] = (a[0] | cs_, min(a[1], yr + lo), max(a[2], yr + hi), max(a[3], lr), yr, a[5] or (t_ == 'T' and cd == 10))
-            else: cl.append((cs_, yr + lo, yr + hi, lr, yr, t_ == 'T' and cd == 10))
-        for cs_, lo, hi, lr, _, cut in cl:
+            cols_, (lo, hi), lr, det_ = SPEC[(t_, cd)]; cs_ = {HH if k == 'H' else ix[k] for k in cols_}      # (G51.7: lr weight, det_ the hard-constraint flag)
+            if cl and yr - cl[-1][4] <= 2: a = cl[-1]; cl[-1] = (a[0] | cs_, min(a[1], yr + lo), max(a[2], yr + hi), max(a[3], lr), yr, a[5] or (t_ == 'T' and cd == 10), a[6] or det_)
+            else: cl.append((cs_, yr + lo, yr + hi, lr, yr, t_ == 'T' and cd == 10, det_))
+        for cs_, lo, hi, lr, _, cut, _ in cl:
             a, b = max(lo - 2000, 0), min(hi - 2000, NY - 1)
             if b < a: continue
             w = w * np.where(Xg[:, a:b + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0, lr, 1.0)
@@ -957,14 +1236,14 @@ def main(argv=None, force_pairs=(), stop_after=None):
     else: check('T3j negative-evidence periods (g02e fia_negs) = the spec', False, f'input missing: {D}/fia_negs.parquet (g02e; G52.5)')
     # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose evidence falls in 2023-2025
     # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). (r14 G47.2 / G48.1, set after seeing data) per state, every
-    # DETECTABLE row of the region's table (lr >= 4) is judged on the POOLED cells of its compatible classes (a footprint counts in year y when any of the
+    # DETECTABLE row of the region's table (G51.7: its detectable flag) is judged on the POOLED cells of its compatible classes (a footprint counts in year y when any of the
     # row's classes covers >= half of it: the row claims its record kind is detectable, not that each class is); every class is also reported on its own
     # (INFO; in GA+FL prescribed 'fire' never lowers the cosine). A year cell counts with >= 30 single-event candidates; a (state, row) is judged when it
     # has >= 1 pre (2017-21) and post (2023-24) cell, else INFO. LANDFIRE classes 2017-2025, Hansen 2017-2024
     _rows3 = {}
-    for (t_, cd_), (cols_, _, lr_) in SPEC.items():
-        if lr_ >= 4: _rows3[spec_kind(t_, cd_)] = tuple(sorted(cols_))
-    _cls3 = sorted({c_ for cols_, _, _ in SPEC.values() for c_ in cols_})
+    for (t_, cd_), (cols_, _, _, det_) in SPEC.items():
+        if det_: _rows3[spec_kind(t_, cd_)] = tuple(sorted(cols_))           # (G51.7: the detectable flag, not lr >= 4)
+    _cls3 = sorted({c_ for cols_, *_ in SPEC.values() for c_ in cols_})
     _st3 = C.pid.map(P.set_index('pid').st).values; _r3 = np.random.default_rng(33); res3i = {}; _w3 = 128 + NY * (NC + 2)
     for st3 in sorted(set(int(x) for x in np.unique(_st3))):
         idx3 = np.flatnonzero(_st3 == st3); smp = np.sort(_r3.choice(idx3, min(120000, len(idx3)), replace=False)); XX = np.asarray(CF[smp, :_w3], dtype=np.float32)
@@ -1009,10 +1288,10 @@ def main(argv=None, force_pairs=(), stop_after=None):
     if done('T3'): return RES
     # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
     os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT=os.environ.get('NT', '4')); _a = sys.argv; sys.argv = ['g03b']
-    SRC = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
+    SRC = CODE['g03b_train_gafl.py']; SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
     exec(compile(SRC, 'g03b', 'exec'), ns_); sys.argv = _a; import torch
     tv = samp.vid.values[:200]
-    G4 = open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(); exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'), ns_)
+    G4 = CODE['g04_bayes_downscale.py']; exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'), ns_)
     o = ns_['obs_summ'](torch.tensor(tv)); ba_t = pd.Series(o[1].numpy(), index=tv)
     ba_i = ba_ind.reindex(tv).fillna(0.0)
     check('T4a obs_summ BA (model targets) = FIA-formula BA (independent)', np.allclose(ba_t.values, ba_i.values, rtol=1e-4, atol=1e-6), f'max abs diff {np.max(np.abs(ba_t.values - ba_i.values)):.2e}')
@@ -1151,7 +1430,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     finally: ns_.update(_sw0)
     # T4n-q the r13 model switches (G29-G31), each unit-tested on an independently-built flow / statistic of the exec'd g03b (whatever the configured switches)
     nso = ns_['SOIL'].shape[1]
-    if 'JUMP_RESET' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
+    if 'JUMP_RESET' in CODE['g03b_train_gafl.py']:
         try:
             for age_ in (False, True):          # T4n JUMP_RESET (G30, bounded by G46.10, clock target G51.10): the jump is r ⊙ (zt − z), r = sigmoid(reset logits);
                 # non-clock target zt = clamp(z_post + 0.5 tanh(shift), ±3), z_post the P network's 3·tanh output; (AGE_CH) the clock target is the convex blend
@@ -1193,7 +1472,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
                       ej < 1e-5 and el < 1e-5 and eb < 1e-6 and ec < 1e-6, f'max |jump − spec| {ej:.1e}; |landed − z_post| {el:.1e}; beyond ±3 by {eb:.1e}' + (f'; clock outside its bounds / below age 0 by {ec:.1e}' if age_ else ''))
         finally: ns_.update(_sw0)
     else: print('SKIP  T4n g03b has no JUMP_RESET switch')
-    if 'STATE_ATTR' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
+    if 'STATE_ATTR' in CODE['g03b_train_gafl.py']:
         try:                                     # T4o STATE_ATTR (G31): attractor A + Am([soil, z]) frozen within each year (exact exponential step), ltau clamped to [−5, 10]
             sw(True, False, False, True); torch.manual_seed(6); fo = type(ns_['flow'])()
             with torch.no_grad():
@@ -1225,24 +1504,20 @@ def main(argv=None, force_pairs=(), stop_after=None):
         check('T4p SIGREG_MEAN: sigreg(N(0, I) + 3) >> sigreg(N(0, I)) with SIGREG_MEAN = 1; about equal with 0', on3 > 20 * max(on0, 1e-6) and abs(of3 - of0) <= 0.25 * max(of0, of3) + 1e-4,
               f'SIGREG_MEAN 1: {on0:.5f} vs shifted {on3:.5f}; 0: {of0:.5f} vs {of3:.5f}')
     else: print('SKIP  T4p g03b has no SIGREG_MEAN switch')
+    # the G51.11 latent rule's pieces, shared by T4q (latent_stats on test clouds) and T15 (the production model on the validation encodings)
+    _ac = 1 if ns_.get('AGE_CH') else 0
+    _ba4 = TK[TK.N > 0].assign(b=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').b.sum()          # (BA per visit from the tokens)
+    def _sv4(vs):        # (G51.11 b) the stocked visits of vs: observed BA > 5 m2/ha, plot with candidates; each one's highest-prior candidate (first maximum)
+        sv_ = [int(v) for v in vs if float(_ba4.get(int(v), 0.0)) > 5.0 and int(ns_['vpid'][int(v)]) in ns_['cand_of']]
+        return sv_, [int(ns_['cand_of'][int(ns_['vpid'][v])][0][int(np.argmax(ns_['cand_of'][int(ns_['vpid'][v])][1]))]) for v in sv_]
+    def lat_rule(ze, zf):   # (G46.8 + G51.11) on the encodings ze and their 25-yr no-event flow zf (both incl. the clock column, dropped here)
+        ce = lat_crit(ze[:, _ac:]); cf = lat_crit(zf[:, _ac:]) if len(zf) > 1 else None; return g5111_enc(ce), bool(cf is not None and g468(cf)), ce, cf
+    def flow25(fl_, z_, c0_):   # the 25-yr no-event flow (G51.11 b): from 2000.5 to the end of 2025, no event, on each visit's highest-prior candidate's soil
+        t_ = torch.full((len(z_),), 2000.5)
+        with torch.no_grad(): return fl_(z_, t_, [YEARS[-1]], torch.zeros(len(z_), NY, NC + 2), ns_['SOIL'][torch.tensor(c0_, dtype=torch.long)])[YEARS[-1]]
     if 'latent_stats' in ns_:                   # T4q latent_stats (G46.8 + G51.11): its verdict = the rule re-derived here on each test cloud
         import copy as _cp4
-        _enc0, _flow0 = ns_['enc'], ns_['flow']; _ac = 1 if ns_.get('AGE_CH') else 0; _nq = min(4096, len(V)); _dq = Dz - _ac; torch.manual_seed(8)
-        _ba4 = TK[TK.N > 0].assign(b=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').b.sum()          # (BA per visit from the tokens)
-        def _sv4(vs):        # (G51.11 b) the stocked visits of vs: observed BA > 5 m2/ha, plot with candidates; each one's highest-prior candidate (first maximum)
-            sv_ = [int(v) for v in vs if float(_ba4.get(int(v), 0.0)) > 5.0 and int(ns_['vpid'][int(v)]) in ns_['cand_of']]
-            return sv_, [int(ns_['cand_of'][int(ns_['vpid'][v])][0][int(np.argmax(ns_['cand_of'][int(ns_['vpid'][v])][1]))]) for v in sv_]
-        def lat_crit(zc):    # the latent statistics of non-clock states (numpy, independent of g03b's): max |mean|, min sd, |z| shares, effective rank
-            zc = np.asarray(zc, dtype=np.float64); ev_ = np.clip(np.linalg.eigvalsh(np.cov(zc.T)), 0, None)
-            return dict(n=len(zc), max_abs_mean=float(np.abs(zc.mean(0)).max()), min_sd=float(zc.std(0, ddof=1).min()), share_abs_gt_2p9=float((np.abs(zc) > 2.9).mean()),
-                        share_abs_gt_2p5=float((np.abs(zc) > 2.5).mean()), effective_rank=float(ev_.sum() ** 2 / max((ev_ ** 2).sum(), 1e-12)))
-        def g468(c): return c['max_abs_mean'] <= 2.0 and c['min_sd'] >= 0.3 and c['share_abs_gt_2p9'] <= 0.01
-        def lat_rule(ze, zf):   # (G46.8 + G51.11) on the encodings ze and their 25-yr no-event flow zf (both incl. the clock column, dropped here)
-            ce = lat_crit(ze[:, _ac:]); ok_e = g468(ce) and ce['effective_rank'] >= 3.0 and ce['share_abs_gt_2p5'] <= 0.05
-            cf = lat_crit(zf[:, _ac:]) if len(zf) > 1 else None; return ok_e, bool(cf is not None and g468(cf)), ce, cf
-        def flow25(fl_, z_, c0_):   # the 25-yr no-event flow (G51.11 b): from 2000.5 to the end of 2025, no event, on each visit's highest-prior candidate's soil
-            t_ = torch.full((len(z_),), 2000.5)
-            with torch.no_grad(): return fl_(z_, t_, [YEARS[-1]], torch.zeros(len(z_), NY, NC + 2), ns_['SOIL'][torch.tensor(c0_, dtype=torch.long)])[YEARS[-1]]
+        _enc0, _flow0 = ns_['enc'], ns_['flow']; _nq = min(4096, len(V)); _dq = Dz - _ac; torch.manual_seed(8)
         def _lat(Zn, fl_):      # (G52.5) the clock column (AGE_CH) is pathological (constant 2.95: mean, sd and saturation all fail): a verdict equals the
                                 # non-clock rule only if latent_stats leaves the clock out
             Zf = torch.cat([torch.full((len(Zn), _ac), 2.95), Zn], 1) if _ac else Zn; ns_['enc'] = lambda v, yr: Zf[torch.as_tensor(v, dtype=torch.long)]; ns_['flow'] = fl_
@@ -1393,7 +1668,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     else: print(f'SKIP  T7e LOC={LOC7}: only the history / prior location priors are re-derived here')
     CAND_OF_PROD = ns_['cand_of']; CAND_HIST_PROD = ns_.get('cand_hist', {})      # (T8h: the production prior; T8 below swaps in g02b's)
     # ======================= T8 FIA-anchored remeasurement pairs (g03b.pair_cand) vs an independent recomputation from FIADB + the spec
-    src8 = open(f'{ROOT}/scripts/g03b_train_gafl.py').read(); ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); _ENV8 = {k: os.environ.get(k) for k in ('PAIR_ANCHOR', 'SEVERITY_ANCHOR', 'LOAD')}
+    src8 = CODE['g03b_train_gafl.py']; ns_['V'] = pd.read_parquet(f'{D}/visits.parquet'); _ENV8 = {k: os.environ.get(k) for k in ('PAIR_ANCHOR', 'SEVERITY_ANCHOR', 'LOAD')}
     def run_pairs(anchor, sev, load, cand_of_):
         """exec g03b's pair block (vpair .. pair_cand / pair_cand2) under the given switches and location prior; returns (pair_cand, pair_cand2)"""
         os.environ.update(PAIR_ANCHOR=anchor, SEVERITY_ANCHOR=sev, LOAD=load); ns_['cand_of'] = cand_of_; ns_['cand_hist'] = CAND_HIST_PROD
@@ -1436,17 +1711,17 @@ def main(argv=None, force_pairs=(), stop_after=None):
         f1, f2 = math.floor(y1), math.floor(y2); a = f1 if (not rs and (y1 <= f1 + 0.5 or ra)) else f1 + 1; b = f2 if (y2 >= f2 + 0.5 or re_) else f2 - 1
         cl = []
         for yr, t_, cd in recs:
-            cols_, (lo, hi), lr = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}
-            if cl and yr - cl[-1][4] <= 2: a0 = cl[-1]; cl[-1] = (a0[0] | cs_, min(a0[1], yr + lo), max(a0[2], yr + hi), max(a0[3], lr), yr)
-            else: cl.append((cs_, yr + lo, yr + hi, lr, yr))
+            cols_, (lo, hi), lr, det_ = SPEC[(t_, cd)]; cs_ = {HH if kk == 'H' else ix[kk] for kk in cols_}
+            if cl and yr - cl[-1][4] <= 2: a0 = cl[-1]; cl[-1] = (a0[0] | cs_, min(a0[1], yr + lo), max(a0[2], yr + hi), max(a0[3], lr), yr, a0[5] or det_)
+            else: cl.append((cs_, yr + lo, yr + hi, lr, yr, det_))
         clc = []
         if b >= a:
-            for cs_, lo, hi, lr, _ in cl:
+            for cs_, lo, hi, lr, _, det_ in cl:
                 lo2, hi2 = max(lo, a), min(hi, b)
                 if hi2 < lo2: lo2 = hi2 = (a if hi < a else b)
-                clc.append((cs_, lo2, hi2, lr))
+                clc.append((cs_, lo2, hi2, lr, det_))
         g = C[C.pid == pid]; Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2)
-        return dict(g=g, Xg=Xg, cl=clc, det=any(c[3] >= 4 for c in clc), hid=hid, a=a, b=b, pid=pid)
+        return dict(g=g, Xg=Xg, cl=clc, det=any(c[4] for c in clc), hid=hid, a=a, b=b, pid=pid)
     def _srw(Xg, lo, hi):
         """stand-replacing evidence (harvest class or Hansen loss on >= half the footprint) in calendar years [lo, hi] clipped to the evidence end (G36)"""
         a0, b0 = max(lo - 2000, 0), min(min(hi, EVID_END) - 2000, NY - 1)
@@ -1465,15 +1740,15 @@ def main(argv=None, force_pairs=(), stop_after=None):
           a constraint that would leave no candidate is skipped. Weights: the location prior restricted to the set (else g02b's prior there, else uniform)."""
         q = pair_spec(v1, v2, span); g, Xg, m = q['g'], q['Xg'], np.ones(len(q['g']), bool)
         nar = lambda m_, new: (m_ & new) if (m_ & new).any() else m_
-        dcl = [c for c in q['cl'] if c[3] >= 4]
-        for cs_, lo, hi, lr in dcl:
+        dcl = [c for c in q['cl'] if c[4]]                           # (G51.7: detectable clusters)
+        for cs_, lo, hi, lr, _ in dcl:
             a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
             if b0 >= a0: m = nar(m, Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0)
         r_ = (min(float(BAtk.get(u, 0.0)) for u in span if FSOK[u] or u == v2) / float(BAtk[v1])) if float(BAtk.get(v1, 0.0)) > 1.0 else None
         loss = False
         if sev and dcl and r_ is not None:
             srw = np.zeros(len(g), bool)
-            for cs_, lo, hi, lr in dcl: srw |= _srw(Xg, lo, hi)
+            for cs_, lo, hi, lr, _ in dcl: srw |= _srw(Xg, lo, hi)
             if r_ < 0.3: m = nar(m, srw); loss = True
             elif r_ > 0.6: m = nar(m, ~srw)
         collapse = sev and r_ is not None and r_ < 0.3
@@ -1481,7 +1756,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
             m = nar(m, ~_srw(Xg, q['a'], q['b']))
             if not q['det']:
                 Xe = Xg.copy()
-                for cs_, lo, hi, lr in q['cl']: Xe[:, max(lo - 2000, 0):min(hi - 2000, NY - 1) + 1, sorted(cs_)] = 0
+                for cs_, lo, hi, lr, _ in q['cl']: Xe[:, max(lo - 2000, 0):min(hi - 2000, NY - 1) + 1, sorted(cs_)] = 0
                 a0, b0 = max(q['a'] - 2000, 0), min(min(q['b'], EVID_END) - 2000, NY - 1)
                 m = nar(m, ~((Xe[:, a0:b0 + 1, :NC].sum(-1) + Xe[:, a0:b0 + 1, HH]) > 0).any(1))
         if both:
@@ -1533,7 +1808,8 @@ def main(argv=None, force_pairs=(), stop_after=None):
     for v1 in [x for x in FORCE if x in PC] + [x for x in rng8.choice(list(PC), min(400, len(PC)), replace=False) if x not in FORCE]:
         v2 = ns_['vpair'][v1]; q = pair_spec(v1, v2, [v2]); y1, y2 = float(V.year.values[v1]), float(V.year.values[v2])
         ya, yb = ns_['act_span'](y1, y2, bool(ns_['VREC'][v1]), bool(ns_['VREC'][v2]), ns_['pair_ra'](v1, v2)); pc_ = ns_['pair_clusters'](int(V.pid.values[v1]), y1, y2, ya, yb)
-        mine = sorted((c[1], c[2], c[3], tuple(sorted(c[0]))) for c in q['cl']); theirs = sorted((c['lo'], c['hi'], int(c['lr']), tuple(sorted(c['cols']))) for c in pc_)
+        mine = sorted((c[1], c[2], round(float(c[3]), 6), bool(c[4]), tuple(sorted(c[0]))) for c in q['cl'])
+        theirs = sorted((c['lo'], c['hi'], round(float(c['lr']), 6), bool(c['det']) if 'det' in c else float(c['lr']) >= 4, tuple(sorted(c['cols']))) for c in pc_)
         n8f += 1; bad_ = (ya, yb) != (q['a'], q['b']) or mine != theirs; bad8f += bad_
         if bad_ or v1 in FORCE:
             print(f"   T8f {'mismatch' if bad_ else 'forced pair agrees'}: pair {int(v1)} -> {int(v2)}: acting years spec {(q['a'], q['b'])} g03b {(ya, yb)}; clusters spec {mine} g03b {theirs}", flush=True)
@@ -1584,10 +1860,10 @@ def main(argv=None, force_pairs=(), stop_after=None):
         else: os.environ[k_] = v_
     def strong_set(v1, v2, span):
         """event-consistent candidates with stand-replacing evidence (harvest class or Hansen loss on >= half the footprint, <= the evidence end) in a detectable cluster's window"""
-        q = pair_spec(v1, v2, span); cl_ = [c for c in q['cl'] if c[3] >= 4]
+        q = pair_spec(v1, v2, span); cl_ = [c for c in q['cl'] if c[4]]
         if not cl_: return None
         Xp, allc = q['Xg'], q['g'].cid.values; w_ = np.zeros(len(allc), bool); m_ev = np.ones(len(allc), bool)
-        for cs_, lo, hi, lr in cl_:
+        for cs_, lo, hi, lr, _ in cl_:
             lo_, hi_ = max(lo - 2000, 0), min(hi - 2000, NY - 1) + 1
             if hi_ > lo_:
                 w_ |= _srw(Xp, lo, hi)
@@ -1663,7 +1939,8 @@ def main(argv=None, force_pairs=(), stop_after=None):
             for c_ in cl:
                 cs_, lo, hi, lr = c_[0], c_[1], c_[2], c_[3]; a0, b0 = max(lo - 2000, 0), min(hi - 2000, NY - 1)
                 if b0 < a0: continue
-                m = Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0; qq = th['q'][GRPV[int(lr)]]
+                m = Xg[:, a0:b0 + 1][:, :, sorted(cs_)].sum(-1).sum(-1) > 0
+                qq = th['q']['detectable' if c_[6] else 'weak'] if 'detectable' in th['q'] else th['q'][GRPV[int(lr)]]    # (G51.6-7: groups by detectability)
                 if 0 < (iw * m).sum() / iw.sum() < 1: bf = bcls(m, iw, inn); lw = lw + np.where(m, np.log(qq / bf), np.log((1 - qq) / (1 - bf)))
             srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5
             for a0, b0 in per_:
@@ -1682,7 +1959,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
             Xg = np.asarray(CF[g.cid.values], dtype=np.float32)[:, 128:128 + NY * (NC + 2)].reshape(len(g), NY, NC + 2); cl, per_ = REC[pid]; m = np.ones(len(g), bool)
             srv = np.maximum(Xg[:, :, ix['harvest']], Xg[:, :, HH]) >= 0.5; cons10 = []
             for c_ in cl:
-                if c_[3] < 4: continue
+                if not c_[6]: continue                              # (G51.7: only detectable clusters constrain)
                 a0, b0 = max(c_[1] - 2000, 0), min(c_[2] - 2000, NY - 1)
                 if b0 >= a0: cons10.append((c_[1], Xg[:, a0:b0 + 1][:, :, sorted(c_[0])].sum(-1).sum(-1) > 0))
             for a0, b0 in per_:
@@ -1692,7 +1969,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
                 if (m & x).any(): m = m & x
             bad10 += int((CH.loc[g.cid.values].cons.values != m).sum() > 0); ne10 += int(not m.any()); nc10 += int(m.any() and not m.all())
         check('T10 FIA-history-consistent candidates (g02g) = independent recomputation (detectable clusters + undisturbed periods, time order, unsatisfiable skipped); some plots constrained',
-              bad10 == 0 and nc10 > 0, f'{Cs.pid.nunique()} plots, constrained (a strict non-empty subset) {nc10}, mismatching plots {bad10}, empty sets {ne10}')
+              bad10 == 0 and nc10 > 0, f'{Cs.pid.nunique()} plots, constrained (a strict non-empty subset) {nc10}, mismatching plots {bad10}, empty sets {ne10}', outcome=bad10 == 0)
     else: print('SKIP  T10 no cand_hist.parquet (g02g not run for this table)')
     # ======================= T11 Forest Explorer export (g07): GEN_* = stand map x unit conversions
     FEJ = os.environ.get('FE_GEOJSON', os.path.join(os.path.dirname(ROOT), 'fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson'))   # genveg_pipeline: config fe.geojson
@@ -1743,21 +2020,9 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # by default and no caller overrides it; calibrated_median(s, cf) = e^cf · (true median of s) (behavioural)
     if _MAPCHK:
         try:
-            ok_h, det_h = t11h_check(open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(), open(f'{ROOT}/scripts/g05_map_stands.py').read(), ns_)
+            ok_h, det_h = t11h_check(CODE['g04_bayes_downscale.py'], CODE['g05_map_stands.py'], ns_)
             check('T11h g05 maps with g04\'s validated estimator (MS = 32 draws, calibrated_median, medoid_draw; G46.13)', ok_h, det_h)
         except Exception as e_: check('T11h g05 maps with g04\'s validated estimator (G46.13)', False, f'not testable ({type(e_).__name__}: {str(e_)[:200]})')
-    # ======================= T11i (r14 G46.11 / G46.12 / G48.5) g04's calibration factors (CAL, CALF), validation errors / medoid Bray, null baselines and
-    # map_accept recomputed from its per-plot dump (t11i_check); the dumped null predictions against an independent null from the table (the last visit
-    # passing MIN_FSHARE of every training plot with candidates, within ±3 yr of the query visit, judged plots excluded; true medians of obs_summ)
-    if _MAPCHK and os.path.exists(f'{D}/bayes_eval.json'):
-        be_i = json.load(open(f'{D}/bayes_eval.json')); pf_i = be_i.get('plot_dump', G04_DUMPS[0])
-        if pf_i not in G04_DUMPS or not os.path.exists(f'{D}/{pf_i}'):
-            check('T11i g04 calibration / map acceptance re-derived from its per-plot dump', False, f'input missing: {pf_i} (bayes_eval.json plot_dump; G48.5)')
-        else:
-            try: ok_i, det_i, _ = t11i_check(be_i, pd.read_parquet(f'{D}/{pf_i}'), t11i_null_ref(ns_, V, FSOK, pd.read_parquet(f'{D}/{pf_i}')))
-            except Exception as e_: ok_i, det_i = False, f'not testable ({type(e_).__name__}: {str(e_)[:200]})'
-            check('T11i g04 calibration (CAL, CALF), validation errors / Bray, null baselines and map_accept re-derived from its per-plot dump; nulls = an independent recomputation',
-                  ok_i, det_i)
     # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
     if _MAPCHK and os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
         Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
@@ -1818,41 +2083,104 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # KD-tree). Every anchored name must be assigned in g04 on its anchored line only (a later reassignment would go unseen: E14-6); the null pool's exclusion
     # of the judged plots is tested BEHAVIOURALLY (g04's own null_pred and its own excl expressions, on a pool planted with the judged plots); the plot halves
     # must not be a parity, sorted or first-half split (runs test on the sorted calibration plots)
-    G4s = open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(); ok12, det12 = t12_check(G4s, ns_, V, P, FSOK, os.environ.get('VAL_SPLIT', '0') == '1')
-    check('T12 g04 set hygiene (calibration / buffer / MDN fit / gate halves / kNN-null pools) = sets recomputed from g03b splits + coordinates; behavioural null exclusion', ok12, det12)
-    # ======================= T15 the enforced dynamics acceptance (g06, G7 / G46.8) re-derived for the production seed (r13 E-F3, r14 G47.4): the driver passes the
-    # exact record as GV_DYN_JSON (G45.8); unset or missing FAILs; the bins and medians are recomputed from g06's per-pair dump (t15_judge)
+    # ======================= the checkpoint (MODEL), read once: T11i compares bayes_eval.json's model record with it, T15 recomputes the latent statistics from
+    # it, T4y checks its structure / switches / table
+    _mdl = os.environ.get('MODEL', ''); SD4 = torch.load(f'{D}/{_mdl}', weights_only=False, map_location='cpu') if _MAPCHK and _mdl and os.path.exists(f'{D}/{_mdl}') else None
+    G4s = CODE['g04_bayes_downscale.py']; _set12 = {}; _cvp12 = set(int(p_) for p_, k_ in zip(P.pid.values, P[key].astype(int).values) if tuple(k_) in CONVP)
+    ok12, det12 = t12_check(G4s, ns_, V, P, FSOK, os.environ.get('VAL_SPLIT', '0') == '1', conv_pids=_cvp12, sets_out=_set12)
+    check('T12 g04 set hygiene (calibration / buffer / MDN fit / gate halves / kNN-null pools) = sets recomputed from g03b splits + coordinates; behavioural null exclusion; '
+          'set-construction names and HALVES bound once (G52.1)', ok12, det12)
+    # ======================= T11i (r14 G46.11 / G46.12 / G48.5, r15 G51.15-G51.20 / G52.1 / G52.2) g04's calibration factors (CAL, CALF), validation errors / medoid
+    # Bray, null baselines and map_accept (its bootstrap bound) recomputed from its per-plot dump (t11i_check); the set relations against T12's independent gate
+    # set; the replicate counts of both replicate sets; the dumped null predictions and null composition against independent recomputations from the table
+    if _MAPCHK and os.path.exists(f'{D}/bayes_eval.json'):
+        be_i = json.load(open(f'{D}/bayes_eval.json')); pf_i = be_i.get('plot_dump', G04_DUMPS[0])
+        if pf_i not in G04_DUMPS or not os.path.exists(f'{D}/{pf_i}'):
+            check('T11i g04 calibration / map acceptance re-derived from its per-plot dump', False, f'input missing: {pf_i} (bayes_eval.json plot_dump; G48.5)')
+        else:
+            try:
+                dmp_i = pd.read_parquet(f'{D}/{pf_i}'); _mf = f'{D}/{_mdl}' if _mdl else None
+                _mr = (_mdl, hashlib.sha256(open(_mf, 'rb').read()).hexdigest() if _mf and os.path.exists(_mf) else None, M.get('build_id'))
+                ok_i, det_i, _ = t11i_check(be_i, dmp_i, t11i_null_ref(ns_, V, FSOK, dmp_i), gate_vids=_set12.get('gateE'), comp_ref=t11i_comp_ref(ns_, V, FSOK, TK, KEYS, dmp_i), model_ref=_mr)
+            except Exception as e_: ok_i, det_i = False, f'not testable ({type(e_).__name__}: {str(e_)[:200]})'
+            check('T11i g04 calibration (CAL, CALF), validation errors / Bray, null baselines and map_accept (bootstrap bound, G51.15) re-derived from its per-plot dump; set relations vs the '
+                  'independent gate set, replicate counts (G52.1); nulls and null composition = independent recomputations (G52.2)', ok_i, det_i)
+    # ======================= T15 the enforced dynamics acceptance (g06, G7 / G46.8 / G51.11) re-derived for the production seed (r13 E-F3, r14 G47.4, r15 G52.2): the
+    # driver passes the exact record as GV_DYN_JSON (G45.8); unset or missing FAILs. The dump is trusted for the PREDICTED side only: the acceptance pairs
+    # are the verifier's own undisturbed spec on the validation plots, their observed side is recomputed from the table, and the latent statistics from
+    # MODEL on the validation encodings (t15_judge)
+    def t15_obs_ref():
+        """{(v1, v2): (y1, y2, horizon, BA v1, BA v2, BA log change / yr, age gain / yr)} of every FIA-undisturbed validation pair by the spec: the model pairs
+        (consecutive table visits both passing MIN_FSHARE; with PAIR_ALL every later visit within PAIR_HMAX yr) of validation plots with candidates that
+        are not converted (G46.7 / G51.8), BA(v1) >= 1 m2/ha, pair_spec not blocked, no detectable cluster, a constrained part of the span up to the
+        evidence end (G36 / G46.5), no measured collapse (min BA ratio over the span's MIN_FSHARE visits < 0.3); BA from the tokens, age = the BA-weighted
+        mean cohort age of the visit (T4l), log change on BA + 0.5"""
+        hmax_ = float(os.environ.get('PAIR_HMAX', 25.0)); yv_ = V.year.values; out_ = {}
+        _tk = TK[TK.N > 0].assign(w=lambda x: x.N * x.QMD ** 2); _tk = _tk.assign(wa=_tk.w * _tk.A).groupby('vid')[['w', 'wa']].sum(); AG_ = (_tk.wa / _tk.w).to_dict()
+        for pid_ in sorted(set(int(x) for x in ns_.get('val_pid', set()))):
+            if pid_ not in COF_G2 or pid_ in _cv8: continue
+            sq_ = vs_of8.get(pid_, []); cand_ = [(a_, b_, [b_]) for a_, b_ in zip(sq_[:-1], sq_[1:])]
+            if PAIR_ALL8: cand_ += [(sq_[i_], sq_[j_], sq_[i_ + 1:j_ + 1]) for i_ in range(len(sq_)) for j_ in range(i_ + 2, len(sq_)) if yv_[sq_[j_]] - yv_[sq_[i_]] <= hmax_]
+            for a_, b_, sp_ in cand_:
+                if not (FSOK[a_] and FSOK[b_]) or float(BAtk.get(a_, 0.0)) < 1.0: continue
+                q_ = pair_spec(a_, b_, sp_); r_ = min(float(BAtk.get(u, 0.0)) for u in sp_ if FSOK[u] or u == b_) / float(BAtk[a_]) if float(BAtk[a_]) > 1.0 else None
+                if q_['hid'] or q_['det'] or min(q_['b'], EVID_END) < max(q_['a'], YEARS[0]) or (r_ is not None and r_ < 0.3): continue
+                y1_, y2_ = float(yv_[a_]), float(yv_[b_]); h_ = y2_ - y1_; o1_, o2_ = float(BAtk.get(a_, 0.0)), float(BAtk.get(b_, 0.0))
+                out_[(int(a_), int(b_))] = (y1_, y2_, h_, o1_, o2_, math.log((o2_ + 0.5) / (o1_ + 0.5)) / h_, (AG_.get(int(b_), 0.0) - AG_.get(int(a_), 0.0)) / h_)
+        return out_
+    def t15_latent_ref(sd_):
+        """(G46.8 + G51.11) the latent rule on the production model: encodings of the validation visits (g03b va_v), their 25-yr no-event flow (lat_rule)"""
+        if sd_ is None: return None
+        import copy as _cp15
+        em_, fm_ = _cp15.deepcopy(ns_['enc']), _cp15.deepcopy(ns_['flow']); em_.load_state_dict(sd_['enc']); fm_.load_state_dict(sd_['flow'])
+        va_ = np.asarray(ns_['va_v'], dtype=int); sv_, c0_ = _sv4(va_)
+        with torch.no_grad():
+            ze_ = torch.cat([em_(torch.tensor(va_[i:i + 2048]), ns_['vyear'][va_[i:i + 2048]]) for i in range(0, len(va_), 2048)]) if len(va_) else torch.zeros(0, Dz)
+            zf_ = flow25(fm_, em_(torch.tensor(sv_, dtype=torch.long), torch.full((len(sv_),), 2000.5)), c0_) if sv_ else torch.zeros(0, Dz)
+        return lat_rule(ze_.numpy(), zf_.numpy())
     if not _MAPCHK: print('SKIP  T15 vtab mode (GV_REQUIRE_MAP=0): the dynamics stage runs after training')
     else:
         _f15 = os.environ.get('GV_DYN_JSON', '')
         if not _f15 or not os.path.exists(_f15): check('T15 dynamics acceptance (production seed) re-derived and passed', False, f'input missing: GV_DYN_JSON {_f15!r} (unset or no such file; G45.8 / G47.4)')
         else:
             dj = json.load(open(_f15)); _p15 = g06_dump_path(_f15); dmp = pd.read_parquet(_p15) if os.path.exists(_p15) else None
-            ok15, vd15, why15, bins15 = t15_judge(dj, dmp, set(int(p_) for p_ in ns_['vpid'][ns_['va_v']]) if len(ns_['va_v']) else set())
-            lat15 = dj.get('latent', {}) if isinstance(dj.get('latent'), dict) else {}
-            check('T15 dynamics acceptance (production seed) = the pre-registered rule re-derived from the per-pair dump (G7 bins, true medians) and the G46.8 latent criteria, on the validation set, and passed',
+            try: _lr15 = t15_latent_ref(SD4); _le15 = '' if SD4 is not None else f'; MODEL {_mdl!r} not readable'
+            except Exception as e_: _lr15, _le15 = None, f'; latent not recomputable from MODEL ({type(e_).__name__}: {str(e_)[:120]})'
+            _or15 = t15_obs_ref()
+            ok15, vd15, why15, bins15 = t15_judge(dj, dmp, set(int(p_) for p_ in ns_['vpid'][ns_['va_v']]) if len(ns_['va_v']) else set(), obs_ref=_or15, latent_ref=_lr15)
+            _m15 = dj.get('model') if isinstance(dj.get('model'), dict) else {}; _x15 = (_mdl, hashlib.sha256(open(f'{D}/{_mdl}', 'rb').read()).hexdigest() if SD4 is not None else None, M.get('build_id'))
+            if (_m15.get('MODEL'), _m15.get('sha256'), _m15.get('table_build_id')) != _x15:
+                why15.append(f"the record's model {(_m15.get('MODEL'), _m15.get('sha256'), _m15.get('table_build_id'))} != MODEL / its sha256 / the table build {_x15} (G51.13 / G51.5)"); ok15 = False
+            _lt15 = {} if _lr15 is None else {'encodings ok': _lr15[0], 'flowed ok': _lr15[1], **{k_: round(_lr15[2][k_], 4) for k_ in T15_LAT},
+                                               'flowed': None if _lr15[3] is None else {k_: round(_lr15[3][k_], 4) for k_ in ('n', 'max_abs_mean', 'min_sd', 'share_abs_gt_2p9')}}
+            check('T15 dynamics acceptance (production seed) = the pre-registered rule re-derived (G7 bins, true medians; the verifier\'s own undisturbed validation pairs and observed side; '
+                  'the G46.8 + G51.11 latent criteria recomputed from MODEL), and passed',
                   ok15, f"{os.path.basename(_f15)} (dump {os.path.basename(_p15)}{'' if dmp is not None else ' MISSING'}): set {dj.get('undisturbed_acceptance', {}).get('set')}; "
-                  f"bins {{(lo, hi): (n, ok)}} {bins15}; latent max |mean| {lat15.get('max_abs_mean')}, min sd {lat15.get('min_sd')}, share |z| > 2.9 {lat15.get('share_abs_gt_2p9')}; "
-                  f"rule says {vd15}, g06 recorded {dj.get('undisturbed_acceptance', {}).get('passed')}; problems {why15}")
-    # ======================= T4y (r14 G47.8) the checkpoint's training switches = the configured ones: every tensor name / shape of the checkpoint = the model g03b
+                  f"{len(_or15)} undisturbed validation pairs by the spec; bins {{(lo, hi): (n, ok)}} {bins15}; latent recomputed {_lt15}{_le15}; "
+                  f"rule says {vd15}, g06 recorded {dj.get('undisturbed_acceptance', {}).get('passed')}; problems {why15}", outcome=not why15)
+    # ======================= T4y (r14 G47.8, r15 G52.5) the checkpoint's training switches = the configured ones: every tensor name / shape of the checkpoint = the model g03b
     # builds under this environment (ARCH, DZ, TOPK, SITE_ATTR, AGE_CH, JUMP_RESET, STATE_ATTR change them), and the switches it records (`switches`) = the
-    # environment's; the loss-only switches leave no trace in the weights, so a checkpoint without that record FAILs
-    _mdl = os.environ.get('MODEL', '')
-    if not _MAPCHK or not _mdl: print('SKIP  T4y vtab mode / MODEL unset: no checkpoint before training')
-    elif not os.path.exists(f'{D}/{_mdl}'): check('T4y checkpoint switches = the configured ones', False, f'input missing: checkpoint {D}/{_mdl}')
+    # environment's; the loss-only switches leave no trace in the weights, so a checkpoint without that record FAILs. (G51.5) the checkpoint was trained on
+    # THIS table instance: its recorded build_id = meta.json's. In verify mode MODEL is required (the driver passes it)
+    if not _MAPCHK: print('SKIP  T4y vtab mode: no checkpoint before training')
+    elif not _mdl: check('T4y checkpoint (MODEL) switches / table = the configured ones', False, 'input missing: MODEL unset (the driver passes the production checkpoint; G52.5)')
+    elif SD4 is None: check('T4y checkpoint (MODEL) switches / table = the configured ones', False, f'input missing: checkpoint {D}/{_mdl}')
     else:
-        sd4 = torch.load(f'{D}/{_mdl}', weights_only=False, map_location='cpu'); shp4 = {}
+        sd4 = SD4; shp4 = {}
         for nm4, mod4 in (('enc', ns_['enc']), ('flow', ns_['flow']), ('dec', ns_['dec']), ('q', ns_['qn']), ('h22', ns_['h22']), ('h25', ns_['h25'])):
             ex4 = {k: tuple(v.shape) for k, v in mod4.state_dict().items()}; got4 = {k: tuple(v.shape) for k, v in sd4.get(nm4, {}).items()}
             if ex4 != got4: shp4[nm4] = {'names only one side': sorted(set(ex4) ^ set(got4))[:4], 'shapes': [(k, ex4[k], got4[k]) for k in sorted(set(ex4) & set(got4)) if ex4[k] != got4[k]][:3]}
         ok4y, det4y = t4y_switches(sd4.get('switches'), ENV0, _mdl)
-        check('T4y checkpoint (MODEL) built under the configured switches: tensor names / shapes = the configured model; recorded `switches` = the configuration (G48.5)',
-              not shp4 and ok4y, f'{_mdl}: structure differs {shp4 or "no"}; {det4y}')
+        _b4m, _b4c = M.get('build_id'), sd4.get('build_id'); _b4ok = bool(_b4m) and _b4m == _b4c
+        check('T4y checkpoint (MODEL) built under the configured switches on this table: tensor names / shapes = the configured model; recorded `switches` = the configuration (G48.5); '
+              'recorded build_id = meta.json\'s (G51.5)',
+              not shp4 and ok4y and _b4ok, f'{_mdl}: structure differs {shp4 or "no"}; {det4y}; build_id checkpoint {_b4c} vs table {_b4m}'
+              + ('' if _b4m else ' (input missing: meta.json build_id, G51.5)') + ('' if _b4c else ' (input missing: the checkpoint records no build_id, G51.5)'))
     # ======================= T4x (r14 G46.7) converted plots carry no AlphaEarth term: g03b's own training step (exec'd for one batch, last: it updates the model)
     # gives MIL = Q = Q-decode = 0 on a batch whose visits are flagged converted, and non-zero terms on the same batch unflagged; g04's B-likelihood set (trB)
     # leaves converted visits out; their pairs are dropped (T8p)
     try:
-        ok4x, det4x = t4x_check(ns_, open(f'{ROOT}/scripts/g03b_train_gafl.py').read(), open(f'{ROOT}/scripts/g04_bayes_downscale.py').read(), V, BAtk)
+        ok4x, det4x = t4x_check(ns_, CODE['g03b_train_gafl.py'], CODE['g04_bayes_downscale.py'], V, BAtk)
         check('T4x converted plots (G46.7): g03b\'s training step gives MIL = Q = Q-decode = 0 on a batch flagged converted (non-zero unflagged); g04 trB leaves converted visits out; pairs dropped (T8p)', ok4x, det4x)
     except Exception as e_:
         check('T4x converted plots carry no AlphaEarth term (G46.7)', False, f'not testable on this code ({type(e_).__name__}: {str(e_)[:200]})')
