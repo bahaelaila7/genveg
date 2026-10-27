@@ -296,3 +296,68 @@ Options weighed per item; the chosen one is first.
 10. **Small items.** stands_stages.py and stands_cfg.py are scanned (D-15); ENV_READ becomes AST-based (setdefault / pop / subscript / get with constant names; a non-constant name read is refused) and the five unread switches are removed from STAGE_SWITCHES (D-16); inputs are resolved only for the stages being run or checked and their ups (D-17); `snap()` prefix check uses a path-component compare (D-19); fe.geojson paths in configs are relative to the checkout, not WORKSPACE (D-12); docs precision items (D-20).
 11. **Tee (D-11).** A new `--log FILE` option tees the driver's output to a file excluded by inode; GENVEG_PIPELINE.md tells users to use it instead of a shell tee into the data dir. Rejected: detecting a file that changes in every stage window (heuristic, misattributes real outputs).
 12. **Library env (D-16).** PROJ_* / GDAL_* / thread counts / CUDA_VISIBLE_DEVICES stay unhashed performance-or-environment knobs (like NT); documented. A failing gate leaving downstream "current" (D-21) stays by design (G21); the status print marks such stages "current (gate FAILED)".
+
+## G46 — Round-14 model / data / evaluation decisions (r14 A / B / C / F slices, coordinator)
+Chosen option first; rejected options after "Rejected".
+**Data (g02b / g02e / g02g)**
+1. **Incomplete curated visits (A14-1, IMPORTANT).** g02b vets every curated visit against FIADB: n_cur = curated live tallied trees, n_fia = FIADB live tallied trees on forested conditions (`FV.n`). A visit with n_fia ≥ 3 and n_cur < 0.5·n_fia is *incomplete*: it is dropped from the table (no tokens, not a pair endpoint, not a bare visit); it stays a FIADB visit for records and negative evidence. Counts go to meta.json. The defect itself goes to the curation loop (the new curated_v2 must be checked the same way). Rejected: flag-only (the decoder would still train on false-bare targets); filling the visit from FIADB (bypasses curation).
+2. **Share change against older / non-forest predecessors (A14-2).** The |Δ forest share| ≥ 0.25 block also compares a first post-2000 visit with its pre-2000 FIADB predecessor, and treats an entirely non-forest predecessor (PLOT_STATUS 2) as share 0.
+3. **G41 converted plots, refined (F3 / A14-3).** A plot is converted iff its last FIADB visit dated ≤ 2022 (the mask year) is non-forest — non-forest land or water — and an earlier visit was forested. Plots forested again by 2022 are not converted; non-forest only after 2022 is not converted. g03b refuses a table without `plot_converted` (F9; no VCONV = 0 fallback).
+4. **Evidence table per region (A14-5, E14-2).** EVK becomes `EVK_TABLES` keyed by the sorted region set (GA+FL = today's EVK). g02b refuses a region with no entry; this replaces the EVK_REGION_OK switch, which is removed. g02b writes the resolved EVK and its hash to meta.json, and g02e / g02g / g03b read EVK from meta.json, not from g02b's module. REGION is compared as a sorted set; AEF90 with GA+FL is refused.
+5. **G36 becomes a clip (A14-6).** A pair whose acting span passes EVID_END keeps its negative / event-free constraints over the part ≤ EVID_END, and the part after it is unconstrained, matching the location prior and g02g. This replaces the block, and `cand_hist` follows the same rule.
+6. **Provenance (E14 triage).** g02b, g02e, g02g and g02j record a code hash (the script's AST hash) in meta.json, so the verifier can label a failure stale vs divergent.
+
+**Model (g03b)**
+7. **Converted plots out of every AlphaEarth term (F2 / B14-2 / B14-3 / A14-4 / B14-8).** They are excluded from MIL, Q, Q-decode, g04's B likelihood (trB), and from the candidate-history-derived pair constraints. If the pair code has no FIA-only path, their pairs are dropped and the count is reported. Rejected: MIL-only (G41's rationale, mislocated footprints, applies to every term reading AlphaEarth candidates).
+8. **Latent acceptance replaced (B14-1, IMPORTANT; supersedes G29's rank part).** latent_ok requires, on validation over the non-clock dims, all three of: max |mean| ≤ 2; min per-dim sd ≥ 0.3; share of values with |z| > 2.9 ≤ 1 %. Effective rank stays as a report only. The implementer checks this against the existing evidence: all 22 collapsed v3 checkpoints and B's OFF run must fail, and B's ON run must pass. If any does not, report rather than retune. Rejected: keeping the rank ≥ dims/4 rule (it is non-discriminative: the collapsed OFF run scores 6.10, the healthy ON run 5.86).
+9. **Flow contraction and age lag (B14-4, IMPORTANT).** Two new switches, on in the production configs:
+   - SIGREG_FLOW: the SIGReg term is also applied to the flowed states at the pair end, so the flowed population stays on the encoder's distribution.
+   - AGE_FLOW: the age loss is also applied to the decoded age of the flowed state at v2.
+   Acceptance evidence: B's 1200-step ON harness (audit_r14/B_model) re-run with the switches. NN ratio, latent-variance retention over 25 yr, decoded age rate and composition Bray must improve, and nothing in B's table may regress. Otherwise report. Rejected: waiting for full training (g06 would fail late, after hours of compute).
+10. **Bounded resets (F10 / B14-6).** JUMP_RESET target zt = clamp(zp + 0.5·tanh(shift), −3, 3); the clock component of zt is ≥ the age-0 value. The jump is then a strict convex combination and is bounded. EncV4.cls is initialised N(0, 0.02) (B14-5). Old checkpoints load unchanged.
+
+**Evaluation (g04 / g05 / g06)**
+11. **Gate and calibration replicated (C1, IMPORTANT).** R = 8 replicate draws. The gate statistics (dep0, dep, errors) and CALF are the replicate means; per-replicate values and sd are recorded. The gate shuffle is a derangement, fresh per replicate (C13).
+12. **Mapped-estimator acceptance (C2, IMPORTANT).** Null and kNN baselines are computed on validation too. The map is accepted only if, on validation, the chosen path's calibrated median |log err| for BA and TPH and its medoid composition Bray are each below the null's. kNN is reported, not gated. g04 writes `map_accept`; g05 refuses to map unless it is true. Pre-registered here, before any production run.
+13. **One estimator (C3 / C8 / F5).** g04 and g05 share the draw count (MS = 32 iid) and one `calibrated` helper (e^CF · lmed(s), the validated form).
+14. **Visit-date vs end-2025 (C4).** Accepted as a documented residual. g04 reports the median shift between the visit-date and end-2025 flows on validation.
+15. **True medians everywhere (C7)**: CF, err / bias, predA / CAL, AxB, the null, g03b metrics, g06 reconstruction.
+16. **Undisturbed set (C5 / F4).** g06 uses g03b's pair_set "undisturbed" rule (G36 clip, G38, the collapse block) through the shared exec'd code.
+17. **Required horizon bins (C13 / E14-5c).** g06 acceptance fails if any pre-registered horizon bin has n < 20 on validation. The bins are fixed from table counts (not model results) before training. g06 writes a per-pair dump (pair ids, horizon, predicted / observed values) so the verifier can recompute the bins.
+18. **Counters (C10 / F11)** are kept per query set; a NaN gate statistic is an explicit FAIL with its reason.
+19. **Report-only diagnostics (C12):** a bare-visit metric for the mapping path, and an age-class Wasserstein of the mapped cohorts vs observed, on validation.
+20. **Accepted, documented:**
+    - transductive unsupervised statistics (C9: no labels);
+    - the USE_B = 1 calibration mismatch (C11: non-production, documented in g05);
+    - the 2026-visit clamp (A14-8: negligible; a verifier test is added).
+    - G37's region dependence (A14-7) is noted: the decision holds in both regions.
+21. **Stale text (F12 / C15 / F6 / B14-7):** fixed with the code; G29's rank text is superseded by item 8.
+
+## G47 — Round-14 verifier decisions (r14 E / F slices, coordinator)
+1. **pair_spec records (E14-1, IMPORTANT).** The spec takes every FIA record with y1 < ry ≤ y2 from the verifier's own FIADB visits, including non-table visits. T8, T8f, T8c and T8h print the mismatching pairs.
+2. **Per-region spec (E14-2, IMPORTANT).** The verifier keeps its own independently written EVK per region set and FAILs (not SKIPs) for a region it has none for. T3i re-derives the evidence for every row and every class of that table, per state. It also checks that the verifier's spec equals the table's meta.json EVK (any divergence FAILs).
+3. **Inputs list (E14-3):** VERIFY_INPUTS gets aef_index.parquet and drops what is not read. The driver consumes it (G45.7). VERIFY_CODE is removed or used.
+4. **T15 (E14-4 / E14-5):**
+   - reads only GV_DYN_JSON (FAIL if unset or missing);
+   - requires the `latent` key;
+   - applies the G46.8 criteria;
+   - recomputes the bins and medians from g06's per-pair dump (G46.17) and requires every pre-registered bin;
+   - checks `set == 'val'` against the split.
+5. **T12 (E14-6):** every anchored name must have exactly one assignment in g04 (else FAIL). The regex parts are replaced by behavioural tests. The halves test rejects sorted and first-half splits too.
+6. **Configured switches (E14-7):** T8h / T8b read PAIR_ANCHOR / SEVERITY_ANCHOR and FAIL on an unsupported value. Their tautological size conditions are replaced by real minima.
+7. **T5s power (E14-8):** it subsamples only plots with non-constant incl_w. The per-dim rule stays report-only; the aggregate χ² decides.
+8. **Coverage (E14-9 / E14-10 and the coverage gaps):**
+   - T3c2 covers AEF90 2022.
+   - gv_verify_upstream gets a pre-registration table, and U8 compares every XL block (AEF, disturbance, Hansen, soil).
+   - T0 scans the driver's `pipeline_scripts()` list (single source).
+   - T13 / T14 print N/A (with reason) in R4, not SKIP.
+   - New checks:
+     - g05 calls the same estimator with the same MS as g04;
+     - g04's null baselines and CAL are recomputed from per-plot dumps;
+     - the checkpoint's training switches equal the config's;
+     - the G41 exclusions (all terms, G46.7) are unit-tested;
+     - the R4 derived rasters (dist, hansen_*, soils90) are compared with an independent reprojection on sampled windows;
+     - the 2026 clamp;
+     - the A14-1 vetting is re-derived independently (no table visit with n_cur < 0.5·n_fia);
+     - G46.2, G46.3 and G46.5 are mirrored in the spec.
+9. **Stale vs divergent:** every failing check prints whether the table's meta.json code hash equals the current script's hash (G46.6).
