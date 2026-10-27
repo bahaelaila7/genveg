@@ -159,7 +159,8 @@ def main():
         import zipfile, glob as _gl
         AOI9 = rasterio.open(f'{ROOT}/data/grid/aoi_r4_mask90.tif'); a9 = AOI9.read(1); ia9 = np.flatnonzero(a9.ravel() == 1); W9 = a9.shape[1]; del a9
         r10 = np.random.default_rng(1010); pk9 = r10.choice(ia9, 3000, replace=False)
-        P10 = sorted((3 * (q // W9) + int(r10.integers(0, 3)), 3 * (q % W9) + int(r10.integers(0, 3))) for q in pk9)       # random 30 m AOI pixels (row order)
+        P10 = [(3 * (q // W9) + int(r10.integers(0, 3)), 3 * (q % W9) + int(r10.integers(0, 3))) for q in pk9]       # random 30 m AOI pixels, in RANDOM order (G52.5:
+        # every first-N subset below is itself a random sample, not the northernmost rows of a row-sorted list)
         XY10 = np.array([TR4 * (c + 0.5, r + 0.5) for r, c in P10]); st10 = {}
         # (a) the GA+FL products (03_hansen / 04c_lf_dist / 05_soils on the TreeMap lattice): exact equality where both exist inside both AOIs
         gaoi = rasterio.open(f'{ROOT}/data/grid/aoi_mask.tif'); inG = []
@@ -175,7 +176,7 @@ def main():
         so_rel = []
         for k in SOILS6:                                  # the 90 m soil pixel = the 30 m soils pixel at the 90 m block centre (bilinear of the same SOLUS grid at the same point)
             s9, sg_ = rasterio.open(f'{ROOT}/data/r4/soils90/{k}.tif'), rasterio.open(f'{ROOT}/data/soils/{k}.tif')
-            for r, c, _, _ in inG[:300]:
+            for r, c, _, _ in [inG[i] for i in np.random.default_rng(1011).permutation(len(inG))[:300]]:
                 x9, y9 = TR4 * (3 * (c // 3) + 1.5, 3 * (r // 3) + 1.5); rg, cg = sg_.index(x9, y9)
                 v9 = float(s9.read(1, window=Window(c // 3, r // 3, 1, 1))[0, 0]); vg = float(sg_.read(1, window=Window(cg, rg, 1, 1))[0, 0])
                 if v9 > -9000 and vg > -9000: so_rel.append(abs(v9 - vg) / max(abs(vg), 1e-3))
@@ -184,14 +185,15 @@ def main():
         # (b) from the SOURCES, everywhere: the LANDFIRE CONUS archive by coordinates; Hansen granules (EPSG:4326) by an own reprojection; SOLUS100 restriction depth by own bilinear
         AOI_ok = lambda r, c: AOI9.read(1, window=Window(c // 3, r // 3, 1, 1))[0, 0] == 1
         zo = zipfile.ZipFile(f'{ROOT}/data/{DIST_ARCHIVE}'); nm10 = {int(re.search(r'Dist(\d\d)_CONUS', n).group(1)): n for n in zo.namelist() if n.endswith('_CONUS.zip')}
-        eqb = {}; P10d = P10[::5]
+        eqb = {}; _i10d = sorted(r10.permutation(len(P10))[:len(P10) // 5], key=lambda i: P10[i])      # (a random fifth, read in row order: the archive is strip-organised)
+        P10d = [P10[i] for i in _i10d]; XY10d = XY10[_i10d]
         for y in U10_YEARS:
             yy = y - 2000 if y >= 2000 else y - 1900; n_ = nm10.get(yy)
             if n_ is None: eqb[y] = (0, np.nan); continue
             tif = [m for m in zipfile.ZipFile(zo.open(n_)).namelist() if m.lower().endswith('.tif')][0]
             s4_ = rasterio.open(f'{ROOT}/data/r4/dist/dist_{y}.tif'); agr = []
             with rasterio.open('/vsizip/{/vsizip/' + f'{ROOT}/data/{DIST_ARCHIVE}/{n_}' + '}/' + tif) as so_:
-                for (r, c), (x_, y_) in zip(P10d, XY10[::5]):
+                for (r, c), (x_, y_) in zip(P10d, XY10d):
                     rs_, cs_ = so_.index(x_, y_); v = int(so_.read(1, window=Window(cs_, rs_, 1, 1))[0, 0]) if 0 <= rs_ < so_.height and 0 <= cs_ < so_.width else 0
                     v = 0 if (v < 0 or (so_.nodata is not None and v == so_.nodata) or not AOI_ok(r, c)) else v
                     agr.append(int(s4_.read(1, window=Window(c, r, 1, 1))[0, 0]) == v)
@@ -320,15 +322,24 @@ def main():
                 e22, e25 = m3(A2), m3(A5); AR, AC = rr + r - RP, cc + c - RP
             hist = np.bincount(km.predict(e25.astype(np.float32)), minlength=32) / len(rr)
             x_ind = np.r_[e22.mean(0), e25.mean(0), hist, fp_desc(np.asarray(AR), np.asarray(AC))]; dd8.append(NZ['XL'][i] - x_ind)
-        dd8 = np.array(dd8).reshape(-1, nxl); ok8 = len(dd8) >= 10
+        dd8 = np.array(dd8).reshape(-1, nxl); ok8 = len(dd8) >= 10; blk8 = {}
+        # (G52.5, E15-6) EVERY block judged on its own: an error confined to one block (two periods swapped, one source zeroed) is diluted in the whole-descriptor
+        # rule. Blocks: AlphaEarth 2022 / 2025 means, the cluster histogram, per period the LANDFIRE class fractions, the Hansen loss fractions (one per
+        # period), the soils; per block mean |Δ| below its tolerance and at most max(1, 5 % of the block's dims) with |t| > 3.5
+        _w8 = NC8 + 1; B8 = {'AEF 2022': (list(range(0, 64)), 0.02), 'AEF 2025': (list(range(64, 128)), 0.02), 'cluster histogram': (list(range(128, 160)), 0.03),
+                             **{f'LANDFIRE {lo}-{hi}': (list(range(160 + k_ * _w8, 160 + k_ * _w8 + NC8)), 0.03) for k_, (lo, hi) in enumerate(BINS8)},
+                             'Hansen (per period)': ([160 + k_ * _w8 + NC8 for k_ in range(len(BINS8))], 0.03), 'soils': (list(range(nxl - len(SO8), nxl)), 0.1)}
         if ok8:
-            sd8 = dd8.std(0, ddof=1); okd = sd8 > 1e-9; t8 = np.abs(dd8.mean(0)[okd]) / (sd8[okd] / np.sqrt(len(dd8))); i_d = slice(160, 160 + len(BINS8) * (NC8 + 1)); i_s = slice(nxl - len(SO8), nxl)
-            mA, mD, mS = np.abs(dd8[:, :128]).mean(), np.abs(dd8[:, i_d]).mean(), np.abs(dd8[:, i_s]).mean(); fsig = float((t8 > 3.5).mean())
-        check('U8 g05: every stand landscape is centred on the stand centroid; landscape (every block: AlphaEarth means, cluster histogram, disturbance / Hansen period fractions, soils) = independent full-disk recomputation (unbiased)',
-              shp8 and ok8 and okn == 1.0 and fsig < 0.05 and mA < 0.02 and mD < 0.03 and mS < 0.1,
+            sd8 = dd8.std(0, ddof=1); okd = sd8 > 1e-9; tt8 = np.zeros(nxl); tt8[okd] = np.abs(dd8.mean(0)[okd]) / (sd8[okd] / np.sqrt(len(dd8))); t8 = tt8[okd]
+            fsig = float((t8 > 3.5).mean())
+            for nm_, (ix_, tol_) in B8.items():
+                ns_ = int((tt8[ix_] > 3.5).sum()); md_ = float(np.abs(dd8[:, ix_]).mean()); blk8[nm_] = (round(md_, 4), ns_, md_ < tol_ and ns_ <= max(1, int(0.05 * len(ix_))))
+        check('U8 g05: every stand landscape is centred on the stand centroid; landscape = independent full-disk recomputation (unbiased), every block on its own (AlphaEarth 2022 / 2025, '
+              'cluster histogram, LANDFIRE classes per period, Hansen, soils) and all dims together',
+              shp8 and ok8 and okn == 1.0 and fsig < 0.05 and all(v_[2] for v_ in blk8.values()),
               f'own-centroid agreement {okn:.3f}; descriptor width {NZ["XL"].shape[1]} (expected {nxl}); {len(dd8)} nodes' +
-              (f': dims with significant bias {fsig:.3f} (of {int(okd.sum())}; by block AEF {(t8[:int(okd[:128].sum())] > 3.5).mean():.3f}), mean |Δ| AEF {mA:.4f}, '
-               f'disturbance / Hansen {mD:.4f}, soils {mS:.4f}' if ok8 else ' (fewer than 10 usable nodes)'))
+              (f': dims with significant bias {fsig:.3f} (of {int(okd.sum())}); {{block: (mean |Δ|, dims |t| > 3.5, ok)}} {blk8}; failing blocks {[k_ for k_, v_ in blk8.items() if not v_[2]]}'
+               if ok8 else ' (fewer than 10 usable nodes)'))
     else:
         print('   (U8 skipped: stand_nodes.npz / stand_veg_v3.node not yet written by g05)')
         if os.environ.get('GV_REQUIRE_MAP') == '1': check('U8 stand-mapping outputs present (required after the map stage)', False, 'stand_nodes.npz / stand_veg_v3.parquet node column missing')

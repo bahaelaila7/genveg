@@ -136,6 +136,7 @@ def g06_dump_path(dyn_json):
     if not pf: pf = ('dynamics_pairs_' + b_[len('dynamics_check_'):] if b_.startswith('dynamics_check_') else b_)[:-len('.json')] + '.parquet' if b_.endswith('.json') else b_ + '.parquet'
     return os.path.join(os.path.dirname(dyn_json), pf)
 # ---------------------------------------------------------------- T15: the enforced dynamics acceptance, re-derived (G7 / G46.8 / G46.17 / G47.4)
+DSHARE = 0.25 - 1e-9                           # (G51.3) a forest-share change counts from 0.25 down to float noise (ties)
 T15_BINS = ((0, 8), (8, 15), (15, 99))        # pre-registered horizon bins (yr, lo <= horizon < hi; G7 r4, kept by G46.17); every bin must be populated
 T15_NMIN = 20                                  # pairs per bin
 def t15_judge(dj, dump, val_pids):
@@ -187,7 +188,7 @@ def evidence_spec(region):
     for cd in (30, 31): S[('D', cd)] = (['fire'], (-1, 1), 2)
     S[('D', 32)] = (['fire', 'H'], (-1, 1), 4)
     for cd in range(50, 55): S[('D', cd)] = (['weather'], (-1, 1), 2)
-    S[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # DSTRBCD 70 (unknown) is not matched
+    S[('D', 80)] = (['harvest', 'dev'], (-1, 1), 2)          # no row for DSTRBCD 70 (unknown)
     return S
 def spec_kind(t_, cd):
     """the record kind (the name the table's evidence table uses) of an FIA code: TRTCD 10-50 -> T10-T50; DSTRBCD insects / disease 10-22, ground fire
@@ -219,15 +220,38 @@ def _assign_lines(tree, name):
         for t in tg:
             if any(isinstance(m, ast.Name) and m.id == name for m in ast.walk(t)): out.add(n.lineno)
     return out
+def _bound_names(tree):
+    """every name a parsed fragment binds (assignment / augmented / annotated / walrus / for / with targets, def / class, import alias)"""
+    out = set()
+    for n in ast.walk(tree):
+        tg = []
+        if isinstance(n, ast.Assign): tg = n.targets
+        elif isinstance(n, (ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.NamedExpr)): tg = [n.target]
+        elif isinstance(n, (ast.With, ast.AsyncWith)): tg = [i.optional_vars for i in n.items if i.optional_vars is not None]
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)): out.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)): out |= {(a_.asname or a_.name).split('.')[0] for a_ in n.names}
+        for t in tg: out |= {m.id for m in ast.walk(t) if isinstance(m, ast.Name)}
+    return out
+T12_HALVES = '((hA, hB), (hB, hA))'     # (G52.1) the only allowed cross-fit: each half judged with the factors fitted on the other
 def t12_check(G4s, ns_, V, P, FSOK, VS12):
     """T12 (r13 E-F3, r14 G47.5) on g04's source G4s and the exec'd g03b namespace ns_: (ok, detail). FSOK: the independent MIN_FSHARE vetting per visit;
     VS12: VAL_SPLIT. Module level so a test harness can call it on a planted g04."""
     import textwrap as _tw12, torch
     ns12 = dict(ns_); _why12 = []; T4G = ast.parse(G4s); _L12 = G4s.splitlines()
     _v12, _vp12 = np.arange(len(V)), ns_['vpid']; ns12['XL'] = {p_: None for p_ in ns_['cand_of']}; ns12['vv'] = np.array([v for v in _v12 if _vp12[v] in ns12['XL']]); ns12['vi'] = {v: i for i, v in enumerate(ns12['vv'])}
+    _i0, _i1 = G4s.index('# calibration plots:'), G4s.index("print(f'MDN fit visits"); _sl0, _sl1 = G4s[:_i0].count('\n') + 1, G4s[:_i1].count('\n')   # (the slice's lines)
     try:
-        exec(compile(G4s[G4s.index('# calibration plots:'):G4s.index("print(f'MDN fit visits")], 'g04', 'exec'), ns12)
+        exec(compile(G4s[_i0:_i1], 'g04', 'exec'), ns12)
     except Exception as e_: _why12.append(f'set construction not executable ({type(e_).__name__}: {e_})')
+    # (G52.1, E15-1) every name the exec'd set construction binds (cal_pid, trA, ...) is bound nowhere else in g04: a later re-binding (validation visits
+    # added to the MDN fit, calibration plots shrunk) would go unseen by the checks below
+    for nm_ in sorted(_bound_names(ast.parse(G4s[_i0:_i1])) - {'_'}):
+        out_ = sorted(l_ for l_ in _assign_lines(T4G, nm_) if not _sl0 <= l_ <= _sl1)
+        if out_: _why12.append(f'{nm_!r} (bound by the set construction, g04 lines {_sl0}-{_sl1}) re-bound on g04 lines {out_} (G52.1)')
+    # (G52.1) HALVES: bound once, as the literal ((hA, hB), (hB, hA)) (a self-calibrated ((hB, hB), (hA, hA)) or any computed form FAILs)
+    _hl = sorted(_assign_lines(T4G, 'HALVES')); _hn = [n for n in ast.walk(T4G) if isinstance(n, ast.Assign) and n.lineno in _hl]
+    if len(_hl) != 1 or len(_hn) != 1 or ast.dump(_hn[0].value) != ast.dump(ast.parse(T12_HALVES, mode='eval').body):
+        _why12.append(f"HALVES bound on g04 lines {_hl}{' as ' + ast.get_source_segment(G4s, _hn[0].value) if len(_hn) == 1 else ''}, not once as {T12_HALVES} (G52.1)")
     ANCH12 = {'lastv = V[fs_ok]': ('lastv',), 'trp_ = set(': ('trp_',), 'te_l = [': ('te_l', 'tr_l'), 'trs_v = [': ('trs_v',), 'p_trl = np.array(': ('p_trl',),
               'rec = lambda': ('rec',), 'cal_m = rec(': ('cal_m', 'te_m'), '_cp = sorted(': ('_cp', '_hp'), 'hA = [': ('hA', 'hB')}
     for pre, names in ANCH12.items():
@@ -386,7 +410,7 @@ def t11i_check(be, dump, null_ref=None, tol=1e-6):
     sc = d[(d.kind == 'score') & (d.set == 'validation') & np.isclose(d.y0, y0u)]; reps = {}; badcf = 0
     for (rep_, half), g_ in sc.groupby(['rep', 'half']):
         other = {'A': 'B', 'B': 'A'}[half]; f_ = fit(cf[(cf.half == other) & (cf.rep == rep_) & np.isclose(cf.y0, y0u)])
-        badcf += int(sum((~np.isclose(g_[f'cf_{k}'].values, f_[i], rtol=tol, atol=tol)) for i, k in enumerate(('TPH', 'BA', 'QMD'))).astype(bool).sum())   # (rows)
+        badcf += int(sum((~np.isclose(g_[f'cf_{k}'].values, f_[i], rtol=tol, atol=tol)) for i, k in enumerate(('TPH', 'BA', 'QMD'))).astype(bool).sum())   # (counted per row)
         s_ = g_[g_.stocked]; P = {k: s_[f'pred_{k}'].values * np.exp(f_[i]) for i, k in enumerate(('TPH', 'BA', 'QMD'))}   # (the factors re-fitted here, not the dumped ones)
         P['QMD'] = np.where(P['TPH'] > 0, 100 * np.sqrt(P['BA'] / np.maximum(P['TPH'] * math.pi / 4, 1e-9)), 0.0)
         e_ = {k: tmed_(np.abs(np.log((P[k] + 1e-3) / (s_[f'obs_{k}'].values + 1e-3)))) for k in ('TPH', 'BA', 'QMD')}
@@ -574,20 +598,24 @@ def main(argv=None, force_pairs=(), stop_after=None):
             c.CONDID cond, c.COND_STATUS_CD cs, c.SUBPPROP_UNADJ sp, c.MICRPROP_UNADJ mp, c.STDORGCD org from PLOT p join COND c on c.PLT_CN = p.CN
             where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()
     # (G40) a bare visit has no live TALLIED tree on a forested condition (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4, COND_STATUS_CD 1): a correlated subquery here
-    _nl = _fx.execute(f"""select t.PLT_CN pcn, count(*) nl from TREE t where t.STATECD in {ST_SQL} and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4
+    _nl = _fx.execute(f"""select t.PLT_CN pcn, count(*) nl, sum(t.TPA_UNADJ) tl from TREE t where t.STATECD in {ST_SQL} and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4
                           and exists (select 1 from COND c where c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID and c.COND_STATUS_CD = 1) group by 1""").df()
     _f = _cc.assign(sp1=np.where(_cc.cs == 1, _cc.sp, 0), sp5=np.where(_cc.cs == 5, _cc.sp, 0), mp1=np.where(_cc.cs == 1, _cc.mp, 0), mp5=np.where(_cc.cs == 5, _cc.mp, 0),
                     org1=np.where(_cc.cs == 1, _cc.org, np.nan)).groupby(['pcn'] + key + ['ds']).agg(sp1=('sp1', 'sum'), sp5=('sp5', 'sum'), mp1=('mp1', 'sum'), mp5=('mp5', 'sum'), org=('org1', 'max')).reset_index()
-    _f = _f.merge(_nl, on='pcn', how='left').fillna({'nl': 0}); _f = _f[_f.sp1 > 0]
+    _f = _f.merge(_nl, on='pcn', how='left').fillna({'nl': 0, 'tl': 0.0}); _f = _f[_f.sp1 > 0]
     _f['fs'] = np.minimum(_f.sp1 / (1 - _f.sp5), 1.0); _f['fm'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1 / (1 - _f.mp5), 1.0), _f.fs)      # shares of the SAMPLED area (visit filter)
     _f['fsw'] = np.minimum(_f.sp1, 1.0); _f['fmw'] = np.where(_f.mp1 > 0, np.minimum(_f.mp1, 1.0), _f.fsw)          # shares of the WHOLE plot: TPA_UNADJ expands to it (densities)
     T['ds'] = T.md.dt.strftime('%Y-%m-%d'); T = T.merge(_cc[key + ['ds', 'cond', 'cs']], on=key + ['ds', 'cond'], how='left'); nT = len(T); T = T[T.cs == 1]
     _tv = T[key + ['ds']].drop_duplicates()
-    # (G46.1) INCOMPLETE curated visits: FIADB has >= 3 live tallied trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on forested conditions and the curated
-    # table fewer than half as many such trees (on the forested conditions) -> not a table visit (no tokens, no pair endpoint, no bare visit)
-    NCUR = T[(T.status == 1) & (T.tpa > 0) & (T.subp <= 4)].groupby(key + ['ds']).size().rename('n_cur').reset_index()
-    _iv = _tv.merge(NCUR, on=key + ['ds'], how='left').merge(_f[key + ['ds', 'nl', 'fs']], on=key + ['ds'], how='inner'); _iv['n_cur'] = _iv.n_cur.fillna(0)
-    INC = _iv[(_iv.nl >= 3) & (_iv.n_cur < 0.5 * _iv.nl)][key + ['ds', 'n_cur', 'nl', 'fs']]
+    # (G46.1, widened by G51.1) INCOMPLETE curated visits, on the live tallied trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) of the forested conditions:
+    # (a) FIADB has >= 3 and the curated table fewer than half as many; (b) the curated live TPA (sum of TPA_UNADJ) is below half of FIADB's; (c) the
+    # curated visit has none while FIADB has >= 1 (a curated visit is bare only when FIADB is bare too, as G40) -> not a table visit (no tokens, no
+    # pair endpoint, no bare visit)
+    NCUR = T[(T.status == 1) & (T.tpa > 0) & (T.subp <= 4)].groupby(key + ['ds']).agg(n_cur=('tpa', 'size'), t_cur=('tpa', 'sum')).reset_index()
+    _iv = _tv.merge(NCUR, on=key + ['ds'], how='left').merge(_f[key + ['ds', 'nl', 'tl', 'fs']], on=key + ['ds'], how='inner'); _iv = _iv.fillna({'n_cur': 0, 't_cur': 0.0})
+    _iv['r_n'], _iv['r_t'], _iv['r_0'] = (_iv.nl >= 3) & (_iv.n_cur < 0.5 * _iv.nl), _iv.t_cur < 0.5 * _iv.tl, (_iv.n_cur == 0) & (_iv.nl >= 1)
+    INC = _iv[_iv.r_n | _iv.r_t | _iv.r_0][key + ['ds', 'n_cur', 'nl', 't_cur', 'tl', 'fs', 'r_n', 'r_t', 'r_0']]
+    INC_RULES = {'count': int(INC.r_n.sum()), 'tpa': int(INC.r_t.sum()), 'no_live': int(INC.r_0.sum())}       # (a visit can meet several rules)
     _tvk = _tv.merge(INC[key + ['ds']].assign(_x=1), on=key + ['ds'], how='left'); _tvk = _tvk[_tvk._x.isna()][key + ['ds']]
     # (G40) + FIADB plots bare at EVERY forested visit whose EPA L3 ecoregion (FIADB data_plot_eco) is in the curated table's L3 scope (the L3s of its plots)
     _eco = _fx.execute(f"select statecd st, unitcd u, countycd c, plot p, epa_l3 l3 from data_plot_eco where statecd in {ST_SQL}").df()
@@ -650,22 +678,28 @@ def main(argv=None, force_pairs=(), stop_after=None):
     check('T1f visits without qualifying live trees have no tokens (and are kept)', not (emp & tkv) and emp <= set(V.vid), f'empty in sample {len(emp)}')
     # T1k (audit r7 M2: T1f is circular): every table visit WITHOUT cohort tokens has no live FIADB tree (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on a forested
     # condition — else the curated table lost live trees and the "bare" visit is a false clear-cut target
-    _lv = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, count(*) n
+    _lv = _fx.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR * 10000 + p.MEASMON * 100 + p.MEASDAY vk, count(*) n, sum(t.TPA_UNADJ) tpa
                           from TREE t join PLOT p on p.CN = t.PLT_CN join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID
                           where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and t.STATUSCD = 1 and t.TPA_UNADJ > 0 and t.SUBP <= 4 and c.COND_STATUS_CD = 1 group by all""").df()
     LIVE = {(int(a), int(b), int(c_), int(d), int(k)): int(n) for a, b, c_, d, k, n in zip(_lv.st, _lv.u, _lv.c, _lv.p, _lv.vk, _lv.n) if pd.notna(k)}
+    LIVET = {(int(a), int(b), int(c_), int(d), int(k)): float(x) for a, b, c_, d, k, x in zip(_lv.st, _lv.u, _lv.c, _lv.p, _lv.vk, _lv.tpa) if pd.notna(k)}
     _bare = V[~V.vid.isin(set(TK[TK.N > 0].vid.astype(int)))]; _md = pd.to_datetime(_bare.md)
     _nl = np.array([LIVE.get((int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)), 0) for a, b, c_, d, m in zip(_bare.st, _bare.u, _bare.c, _bare.p, _md)])
     check('T1k bare table visits (no cohort tokens) have no live FIADB trees on their forested conditions (<= 1 %)', len(_nl) == 0 or (_nl > 0).mean() <= 0.01,
           f'{len(_nl)} bare visits, with FIADB live trees {int((_nl > 0).sum())} ({(_nl > 0).mean() if len(_nl) else 0:.3f}), median live trees there {int(np.median(_nl[_nl > 0])) if (_nl > 0).any() else 0}')
-    # T1r (G46.1, A14-1) no TABLE visit is incomplete: FIADB live tallied trees on forested conditions (LIVE, T1k) >= 3 and the curated table's (NCUR)
-    # fewer than half of them; meta.json incomplete_visits shown for information
-    _nc1 = {(int(a), int(b), int(c_), int(d), int(str(ds_).replace('-', ''))): int(n) for a, b, c_, d, ds_, n in zip(NCUR.st, NCUR.u, NCUR.c, NCUR.p, NCUR.ds, NCUR.n_cur)}
+    # T1r (G46.1 / G51.1, A14-1 / A15-1) no TABLE visit is incomplete: on the live tallied trees of the forested conditions (FIADB: LIVE / LIVET, T1k;
+    # curated: NCUR) FIADB has >= 3 and the curated table fewer than half of them, or the curated live TPA < half of FIADB's, or the curated table has
+    # none while FIADB has >= 1 (a table visit without curated live trees is a bare FIADB visit: FIADB has none); meta.json's counts shown for information
+    _nc1 = {(int(a), int(b), int(c_), int(d), int(str(ds_).replace('-', ''))): (int(n), float(t_)) for a, b, c_, d, ds_, n, t_ in zip(NCUR.st, NCUR.u, NCUR.c, NCUR.p, NCUR.ds, NCUR.n_cur, NCUR.t_cur)}
     _vk1 = [(int(a), int(b), int(c_), int(d), int(m.year * 10000 + m.month * 100 + m.day)) for a, b, c_, d, m in zip(V.st, V.u, V.c, V.p, pd.to_datetime(V.md))]
-    _bad1 = [k for k in _vk1 if LIVE.get(k, 0) >= 3 and _nc1.get(k, 0) < 0.5 * LIVE.get(k, 0)]
-    check('T1r no table visit is incomplete (FIADB live tallied trees >= 3, curated ones < half of them; G46.1)', not _bad1,
-          f'{len(V)} table visits, incomplete {len(_bad1)} (curated without a live tree {sum(1 for k in _bad1 if _nc1.get(k, 0) == 0)}) e.g. {_bad1[:3]}; independent incomplete '
-          f'curated visits (share >= 0.1) {int((INC.fs >= 0.1).sum())}, meta.json incomplete_visits {M.get("incomplete_visits", "absent")}')
+    def _inc1(k):
+        n_, t_ = _nc1.get(k, (0, 0.0)); nf_, tf_ = LIVE.get(k, 0), LIVET.get(k, 0.0)
+        return (nf_ >= 3 and n_ < 0.5 * nf_) or t_ < 0.5 * tf_ or (n_ == 0 and nf_ >= 1)
+    _bad1 = [k for k in _vk1 if _inc1(k)]
+    check('T1r no table visit is incomplete (live tallied trees: FIADB >= 3 and curated < half, or curated TPA < half of FIADB\'s, or curated none while FIADB >= 1; G46.1 / G51.1)', not _bad1,
+          f'{len(V)} table visits, incomplete {len(_bad1)} (curated without a live tree {sum(1 for k in _bad1 if _nc1.get(k, (0, 0.0))[0] == 0)}) e.g. {_bad1[:3]}; independent incomplete '
+          f'curated visits (share >= 0.1) {int((INC.fs >= 0.1).sum())}, by rule (all shares) {INC_RULES}; meta.json incomplete_visits {M.get("incomplete_visits", "absent")}, '
+          f'by rule {M.get("incomplete_by_rule", "absent")}')
     # T1l (audit r9 I-1: the T1 / T4 token checks recompute from curated_trees, i.e. the table against its own source): STOCKED visits' token TPH and BA
     # = FIADB live trees (STATUSCD 1, TPA_UNADJ > 0, SUBP <= 4) on forested conditions per forested area (shares from FIADB COND: SUBPPROP_UNADJ for trees
     # >= 5 in, MICRPROP_UNADJ for saplings, of COND_STATUS_CD 1) — catches live trees lost by the curation on visits that still have some
@@ -696,10 +730,13 @@ def main(argv=None, force_pairs=(), stop_after=None):
     fv = duckdb.connect(fiadb(), read_only=True).execute(f"""select distinct p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
           from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
     ours = V[key].assign(my=V.year.astype(int)).drop_duplicates(); inplots = fv.merge(V[key].drop_duplicates(), on=key)
+    # (G52.3) the incomplete curated visits (G46.1 / G51.1: INC, all shares) are left out by decision before the rebuild: neither missing nor counted
+    _inc_j = INC[key].assign(my=INC.ds.str[:4].astype(int)).drop_duplicates(); _ni = len(inplots)
+    inplots = inplots.merge(_inc_j.assign(_i=1), on=key + ['my'], how='left'); inplots = inplots[inplots._i.isna()].drop(columns='_i')
     miss = inplots.merge(ours, on=key + ['my'], how='left', indicator=True); nm = (miss._merge == 'left_only').sum()
     nplots_f = len(fv[key].drop_duplicates()); nplots_o = len(V[key].drop_duplicates())
-    check('T1j FIADB forested visits of our plots that are absent from the table (bare visits with no tree record?) < 2 %', nm / len(inplots) < 0.02,
-          f'missing {nm} of {len(inplots)}; forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
+    check('T1j FIADB forested visits of our plots that are absent from the table (bare visits with no tree record?) < 2 %; incomplete curated visits (G46.1 / G51.1) excluded', len(inplots) > 0 and nm / len(inplots) < 0.02,
+          f'missing {nm} of {len(inplots)} ({_ni - len(inplots)} incomplete curated visits excluded); forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
     # ======================= T2 plot coordinates
     fc = duckdb.connect(fiadb(), read_only=True)
     pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, MEASYEAR my, LAT lat, LON lon from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000").df()
@@ -757,14 +794,20 @@ def main(argv=None, force_pairs=(), stop_after=None):
         # T3c2z (r13 E-F9) every UTM zone of Region 4 (15-18; the GA+FL mosaic above covers 16-17 only): the 90 m footprint against an independent route from
         # the SOURCE AlphaEarth COGs (20 m level-0 overview, remote): each 30 m pixel = mean of 3x3 sub-points at 10 m spacing looked up in the source tile
         # (bottom-up rows), unit-normalised and int8-requantised as 02_aef, then the block mean. A 1-block shift drops the cosine to 0.94-0.99 (measured), so
-        # every footprint must have cosine > 0.999 (correct: >= 0.9998; shifted: 0.77-0.996) and the median max|Δ| < 0.02; >= 4 footprints per zone, footprints covered by exactly one source tile
-        IDX3 = pd.read_parquet(f'{ROOT}/data/aef/aef_index.parquet', columns=['crs', 'path', 'year', 'utm_west', 'utm_south', 'wgs84_west', 'wgs84_south', 'wgs84_east', 'wgs84_north'])
+        # every footprint must have cosine > 0.999 (correct: >= 0.9998; shifted: 0.77-0.996) and the median max|Δ| < 0.02; >= 4 footprints per zone.
+        # (G51.24 / G52.4) the source tile of a 90 m cell = the tile of the UTM zone of its centre's LONGITUDE (zone floor((lon + 180) / 6) + 1, EPSG:326zz)
+        # whose UTM box holds the centre (exactly one such tile, else the footprint is not used); every sub-point of the cell is read from that tile
+        IDX3 = pd.read_parquet(f'{ROOT}/data/aef/aef_index.parquet', columns=['crs', 'path', 'year', 'utm_west', 'utm_south', 'utm_east', 'utm_north'])
         IDX3 = IDX3[IDX3.year == 2025]; tl4 = land.transform; _ll3 = Transformer.from_crs(5070, 4326, always_xy=True)
         ENV3 = dict(GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', CPL_VSIL_CURL_ALLOWED_EXTENSIONS='.tiff', GDAL_HTTP_MAX_RETRY=5, GDAL_HTTP_RETRY_DELAY=3)
         cz = C.sample(min(20000, len(C)), random_state=35); xz, yz = tl4 * (cz.col.values + 0.5, cz.row.values + 0.5); loz, laz = _ll3.transform(xz, yz)
         cz = cz.assign(lon=loz, lat=laz, zone=np.floor((np.asarray(loz) + 180) / 6).astype(int) + 1); res3z = {}
+        _tz3 = {}
         def _tile3(lo, la):
-            h_ = IDX3[(IDX3.wgs84_west <= lo) & (IDX3.wgs84_east >= lo) & (IDX3.wgs84_south <= la) & (IDX3.wgs84_north >= la)]; return h_.iloc[0] if len(h_) == 1 else None
+            z_ = int(np.floor((lo + 180.0) / 6.0)) + 1; crs_ = f'EPSG:326{z_:02d}'
+            if crs_ not in _tz3: _tz3[crs_] = Transformer.from_crs(4326, crs_, always_xy=True)
+            u_, w_ = _tz3[crs_].transform(lo, la)
+            h_ = IDX3[(IDX3.crs == crs_) & (IDX3.utm_west <= u_) & (IDX3.utm_east > u_) & (IDX3.utm_south <= w_) & (IDX3.utm_north > w_)]; return h_.iloc[0] if len(h_) == 1 else None
         for z3 in (15, 16, 17, 18):
             g3 = cz[cz.zone == z3]; cs3, md3 = [], []
             if not len(g3): res3z[z3] = (0, None, None); continue
@@ -790,7 +833,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
             except Exception as e_:
                 res3z[z3] = (0, None, f'{type(e_).__name__}: {str(e_)[:80]}')
         _zin = sorted(z for z in res3z if (cz.zone == z).any())
-        check('T3c2z AEF90 footprints in EVERY UTM zone of the region = an independent route from the source AlphaEarth COGs (remote, 2025)',
+        check('T3c2z AEF90 footprints in EVERY UTM zone of the region = an independent route from the source AlphaEarth COGs (remote, 2025; tile of the longitude\'s zone, G51.24)',
               len(_zin) > 0 and all(res3z[z][0] >= 4 and res3z[z][1] > 0.999 and res3z[z][2] < 0.02 for z in _zin),
               f'{{zone: (footprints, min cosine, median max|Δ|)}} {res3z}; zones with candidates {_zin}')
     SOILS = M['soils']; FILL = json.load(open(f'{ROOT}/data/r4/soils90/fill.json')) if AEF90 else {'clay030': 7.58, 'sand030': 83.2, 'soc030': 0.964, 'awc030': 0.052, 'ph030': 5.18, 'restrdepth': 200.0}
@@ -855,13 +898,13 @@ def main(argv=None, force_pairs=(), stop_after=None):
     for k4, g4 in _fs.groupby(['st', 'u', 'c', 'p']):
         f_, v_ = g4.f1.values, g4.vk.values
         for j in range(1, len(f_)):
-            if abs(f_[j - 1] - f_[j]) >= 0.25: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
+            if abs(f_[j - 1] - f_[j]) >= DSHARE: CONV.add(tuple(int(x) for x in k4) + (int(v_[j]),))
     _f1v = {tuple(int(x) for x in r_[:5]): float(r_[5]) for r_ in _fs[['st', 'u', 'c', 'p', 'vk', 'f1']].values}; nconv2 = 0
     for a, b, c_, d, k, qps, qf1, qn in zip(_pm.st, _pm.u, _pm.c, _pm.p, _pm.vk, _pm.qps, _pm.qf1, _pm.qn):
         if pd.isna(k) or (int(a), int(b), int(c_), int(d), int(k)) not in _f1v: continue
         q_ = 0.0 if pd.notna(qps) and int(qps) == 2 else (float(qf1) if pd.notna(qps) and int(qps) == 1 and pd.notna(qn) and qn > 0 else None)
         k5 = (int(a), int(b), int(c_), int(d), int(k))
-        if q_ is not None and abs(q_ - _f1v[k5]) >= 0.25 and k5 not in CONV: CONV.add(k5); nconv2 += 1
+        if q_ is not None and abs(q_ - _f1v[k5]) >= DSHARE and k5 not in CONV: CONV.add(k5); nconv2 += 1
     print(f'   (forest-share blocks: {len(CONV)} visits, {nconv2} of them only against the previous FIA measurement, G46.2)')
     ratios, nneg, ncl = [], 0, 0; REC = {}
     for pid, g in Cs.groupby('pid'):
@@ -911,6 +954,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
         _bj = [pid for pid, (_, pe_) in REC.items() if sorted((a, b) for a, b in pe_ if b >= a) != _ng.get(pid, [])]
         check('T3j negative-evidence periods (g02e fia_negs) = the spec (FIA protocol, lookback yr0-4..yr0-1, non-sampled predecessor -> lookback, <= 2024, NONBLOCK)', not _bj,
               f'{len(REC)} plots, {sum(len(v) for v in _ng.values())} periods in the file; mismatching plots {len(_bj)} {_bj[:5]}')
+    else: check('T3j negative-evidence periods (g02e fia_negs) = the spec', False, f'input missing: {D}/fia_negs.parquet (g02e; G52.5)')
     # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose evidence falls in 2023-2025
     # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). (r14 G47.2 / G48.1, set after seeing data) per state, every
     # DETECTABLE row of the region's table (lr >= 4) is judged on the POOLED cells of its compatible classes (a footprint counts in year y when any of the
@@ -985,9 +1029,23 @@ def main(argv=None, force_pairs=(), stop_after=None):
         _d_va = _KDv(_xy.loc[sorted(va_p)].values).query(_xy.loc[sorted(tr_p)].values)[0].min() if va_p else np.inf
     else: _d_te = _d_va = np.nan
     _VS4 = os.environ.get('VAL_SPLIT', '0') == '1'
-    check('T4d train / test / validation plots disjoint and every training plot >= 3.2 km from every test and validation plot (no overlapping 1.6 km disks); VAL_SPLIT=1 -> a non-empty validation set',
-          not (tr_p & te_p) and not (tr_p & va_p) and not (va_p & te_p) and _d_te >= 3200 and _d_va >= 3200 and (len(va_p) > 0 or not _VS4),
-          f'train {len(tr_p)} test {len(te_p)} val {len(va_p)} plots; min train-test distance {_d_te:.0f} m, train-val {_d_va:.0f} m')
+    # (G51.22 / G52.8) the split itself, re-derived from the spec: 10 km blocks (x // 10 km · 1000 + y // 10 km) SORTED, 20 % of them drawn as the test
+    # blocks (seed 1); with VAL_SPLIT 10 % of the remaining blocks (sorted, seed 3) as validation blocks, minus the plots within 3.2 km of a test plot
+    _bk4 = ((P.x // 10000).astype(int) * 1000 + (P.y // 10000).astype(int)).values; _ub4 = sorted(set(int(b_) for b_ in _bk4))
+    _tb4 = set(int(b_) for b_ in np.random.default_rng(1).choice(_ub4, max(1, int(0.2 * len(_ub4))), replace=False)); _tp4 = set(P.pid.values[np.isin(_bk4, list(_tb4))])
+    _txy = P.set_index('pid').loc[sorted(_tp4), ['x', 'y']].values; _dm4 = np.full(len(P), np.inf)
+    for i_ in range(0, len(_txy), 500): _dm4 = np.minimum(_dm4, np.sqrt(((P[['x', 'y']].values[:, None, :] - _txy[None, i_:i_ + 500, :]) ** 2).sum(-1)).min(1))
+    _bf4 = set(P.pid.values[(_dm4 < 3200)]) - _tp4; _vp4 = set()
+    if _VS4:
+        _rb4 = sorted(set(_ub4) - _tb4); _vb4 = set(int(b_) for b_ in np.random.default_rng(3).choice(_rb4, max(1, int(0.1 * len(_rb4))), replace=False))
+        _vp4 = set(P.pid.values[np.isin(_bk4, list(_vb4))]) - _bf4
+    _spl4 = _tp4 == set(int(x) for x in ns_['test_pid']) and _vp4 == set(int(x) for x in ns_.get('val_pid', set()))
+    check('T4d train / test / validation plots disjoint and every training plot >= 3.2 km from every test and validation plot (no overlapping 1.6 km disks); VAL_SPLIT=1 -> a non-empty validation set; '
+          'the test / validation plots = the seeded draws over SORTED blocks (G51.22)',
+          not (tr_p & te_p) and not (tr_p & va_p) and not (va_p & te_p) and _d_te >= 3200 and _d_va >= 3200 and (len(va_p) > 0 or not _VS4) and _spl4,
+          f'train {len(tr_p)} test {len(te_p)} val {len(va_p)} plots; min train-test distance {_d_te:.0f} m, train-val {_d_va:.0f} m; split re-derived: test plots {len(_tp4)} '
+          f'(g03b {len(ns_["test_pid"])}, differing {len(_tp4 ^ set(int(x) for x in ns_["test_pid"]))}), validation {len(_vp4)} (g03b {len(ns_.get("val_pid", ()))}, differing '
+          f'{len(_vp4 ^ set(int(x) for x in ns_.get("val_pid", set())))})')
     # T4v the forest-share vetting (MIN_FSHARE, r13 coverage): every train / test / validation visit and both visits of every model pair have a forested share of
     # the WHOLE plot (independent, FIADB COND 1 SUBPPROP: T1a's fsw = g02b fsub) >= MIN_FSHARE, and every table visit passing it whose plot has candidates is in exactly one set or a buffer
     MINF = float(os.environ.get('MIN_FSHARE', 0.25)); _fsi = V.fsub.values.astype(float).copy() if 'fsub' in V.columns else np.ones(len(V)); _fsi[EX.vid.values.astype(int)] = EX.fsw.values; _fok = _fsi >= MINF   # (FIADB COND 1 share of the WHOLE plot, as visits.fsub; unmatched visits: the table's)
@@ -1095,30 +1153,44 @@ def main(argv=None, force_pairs=(), stop_after=None):
     nso = ns_['SOIL'].shape[1]
     if 'JUMP_RESET' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
         try:
-            for age_ in (False, True):          # T4n JUMP_RESET (G30, bounded by G46.10): the jump is r ⊙ (zt − z) with target zt = z_post + sc ⊙ tanh(shift) clamped to ±3, z_post the P network's 3·tanh output
-                                                # (AGE_CH: clock z_post = −AGE_C / AGE_S, its shift scale 0.25 (G30), its target never below age 0); a convex step stays in [−3, 3]
-                sw(True, age_, True, False); torch.manual_seed(5); fj = type(ns_['flow'])()
+            for age_ in (False, True):          # T4n JUMP_RESET (G30, bounded by G46.10, clock target G51.10): the jump is r ⊙ (zt − z), r = sigmoid(reset logits);
+                # non-clock target zt = clamp(z_post + 0.5 tanh(shift), ±3), z_post the P network's 3·tanh output; (AGE_CH) the clock target is the convex blend
+                # zt0 = z_age0 + sigmoid(shift0) (z0 + 0.25 − z_age0), z_age0 = −AGE_C / AGE_S, shift0 the raw clock shift output (G51.10): a reset rejuvenates,
+                # keeps or slightly raises the age. Bounds: non-clock states stay in [−3, 3]; the new clock lies between z0, z_age0 and z0 + 0.25, so a stand at
+                # or above age 0 never lands below it (G52.5: sampled near age 0, with shifts of both signs, E15-5)
+                sw(True, age_, True, False); torch.manual_seed(5); fj = type(ns_['flow'])(); za0 = -ns_['AGE_C'] / ns_['AGE_S']
+                def spec_jump(z0_, bias_, ev0_, so0_):
+                    W1, b1, W2, b2 = fj.P[0].weight, fj.P[0].bias, fj.P[2].weight, fj.P[2].bias; zp_ = 3 * torch.tanh(torch.tanh(torch.cat([ev0_, so0_], 1) @ W1.T + b1) @ W2.T + b2)
+                    zt_ = (zp_ + 0.5 * torch.tanh(bias_[:Dz])).clamp(-3, 3).expand(len(z0_), Dz).clone()
+                    if age_: zt_[:, 0] = za0 + torch.sigmoid(bias_[0]) * (z0_[:, 0] + 0.25 - za0)
+                    return torch.sigmoid(bias_[Dz:]) * (zt_ - z0_)
                 with torch.no_grad():
                     for p_ in fj.J.parameters(): p_.fill_(0.0)
-                    bj = torch.randn(2 * Dz); fj.J[-1].bias.copy_(bj); z_ = torch.randn(4, Dz) * 1.5; ev_ = torch.rand(4, NC + 2); so_ = torch.randn(4, nso)
-                    W1, b1, W2, b2 = fj.P[0].weight, fj.P[0].bias, fj.P[2].weight, fj.P[2].bias; zp_ = 3 * torch.tanh(torch.tanh(torch.cat([ev_, so_], 1) @ W1.T + b1) @ W2.T + b2)
-                    if age_: zp_[:, 0] = -ns_['AGE_C'] / ns_['AGE_S']
-                    sc_ = torch.full((Dz,), 0.5); sc_[0] = 0.25 if age_ else 0.5
-                    zt_ = (zp_ + sc_ * torch.tanh(bj[:Dz])).clamp(-3, 3)
-                    if age_: zt_[:, 0] = zt_[:, 0].clamp(min=-ns_['AGE_C'] / ns_['AGE_S'])
-                    ej = (fj.jump(z_, ev_, so_) - torch.sigmoid(bj[Dz:]) * (zt_ - z_)).abs().max().item()
-                    zb_ = (torch.rand(256, Dz) * 6 - 3); eb_, sb_ = torch.rand(256, NC + 2), torch.randn(256, nso)
-                    fj.J[-1].bias.copy_(torch.randn(2 * Dz) * 3); nb_ = zb_ + fj.jump(zb_, eb_, sb_); fj.J[-1].bias.copy_(bj)
-                    eb = max(0.0, (nb_.abs().max().item() - 3.0))                  # (G46.10: bounded)
-                    ec = max(0.0, (-ns_['AGE_C'] / ns_['AGE_S'] - nb_[:, 0]).max().item()) if age_ and (zb_[:, 0] >= -ns_['AGE_C'] / ns_['AGE_S']).all() else 0.0
-                    fj.J[-1].bias[:Dz].fill_(0.0); fj.J[-1].bias[Dz:].fill_(40.0)          # r -> 1, no shift: a stand at +2.9 lands AT z_post
+                    ej = 0.0
+                    for k_ in range(16):                                           # 16 bias draws (shift signs both ways), 8 states each, half of them near age 0
+                        bj = torch.randn(2 * Dz) * (1 + k_ % 3); fj.J[-1].bias.copy_(bj); z_ = torch.randn(8, Dz) * 1.5; ev_ = torch.rand(8, NC + 2); so_ = torch.randn(8, nso)
+                        if age_: z_[:4, 0] = za0 + torch.rand(4) * 0.3
+                        ej = max(ej, (fj.jump(z_, ev_, so_) - spec_jump(z_, bj, ev_, so_)).abs().max().item())
+                    zb_ = (torch.rand(512, Dz) * 6 - 3); eb_, sb_ = torch.rand(512, NC + 2), torch.randn(512, nso)
+                    if age_: zb_[:256, 0] = za0 + torch.rand(256) * 0.3                       # (clocks near age 0)
+                    bb_ = torch.randn(2 * Dz) * 3
+                    if age_: bb_[0] = -abs(bb_[0]) - 1.0                                 # (a rejuvenating clock shift: the floor is exercised)
+                    fj.J[-1].bias.copy_(bb_); nb_ = zb_ + fj.jump(zb_, eb_, sb_)
+                    eb = max(0.0, (nb_[:, 1 if age_ else 0:].abs().max().item() - 3.0))  # (G46.10: bounded)
+                    if age_:
+                        lo_, hi_ = torch.minimum(torch.minimum(zb_[:, 0], zb_[:, 0] + 0.25), torch.full_like(zb_[:, 0], za0)), torch.maximum(zb_[:, 0] + 0.25, torch.full_like(zb_[:, 0], za0))
+                        ec = max(0.0, (za0 - nb_[:256, 0]).max().item(), (lo_ - nb_[:, 0]).max().item(), (nb_[:, 0] - hi_).max().item())
+                    else: ec = 0.0
+                    fj.J[-1].bias[:Dz].fill_(0.0); fj.J[-1].bias[Dz:].fill_(40.0)          # r -> 1, no shift (clock: shift -40, sigmoid -> 0): a stand at +2.9 lands AT z_post
+                    if age_: fj.J[-1].bias[0] = -40.0                                      # (and the clock at age 0: a clear-cut)
                     dj = torch.zeros(1, NY, NC + 2); dj[0, 2010 - 2000, 0] = 1; sj = torch.randn(1, nso)
                     land_ = fj(torch.full((1, Dz), 2.9), torch.tensor([2009.2]), [2010], dj, sj)[2010]
                     zq = 3 * torch.tanh(fj.P(torch.cat([dj[:, 2010 - 2000], sj], 1)))
-                    if age_: zq[:, 0] = -ns_['AGE_C'] / ns_['AGE_S']
+                    if age_: zq[:, 0] = za0
                     el = (land_ - zq).abs().max().item()
-                check(f'T4n JUMP_RESET{" + AGE_CH" if age_ else ""}: jump = sigmoid(r) (clamp(z_post + sc tanh(shift)) − z) exactly; with r -> 1 a stand at +2.9 lands at z_post; jumped states stay in [−3, 3] (G46.10)',
-                      ej < 1e-5 and el < 1e-5 and eb < 1e-6 and ec < 1e-6, f'max |jump − spec| {ej:.1e}; |landed − z_post| {el:.1e}; beyond ±3 by {eb:.1e}' + (f'; clock below age 0 by {ec:.1e}' if age_ else ''))
+                check(f'T4n JUMP_RESET{" + AGE_CH" if age_ else ""}: jump = sigmoid(r) (target − z) exactly (non-clock target clamp(z_post + 0.5 tanh(shift)){"; clock target z_age0 + sigmoid(shift0)(z0 + 0.25 − z_age0), G51.10" if age_ else ""}); '
+                      f'with r -> 1 a stand at +2.9 lands at z_post; jumped states stay in [−3, 3] (G46.10){"; the clock between z0, age 0 and z0 + 0.25, never below age 0 from near age 0" if age_ else ""}',
+                      ej < 1e-5 and el < 1e-5 and eb < 1e-6 and ec < 1e-6, f'max |jump − spec| {ej:.1e}; |landed − z_post| {el:.1e}; beyond ±3 by {eb:.1e}' + (f'; clock outside its bounds / below age 0 by {ec:.1e}' if age_ else ''))
         finally: ns_.update(_sw0)
     else: print('SKIP  T4n g03b has no JUMP_RESET switch')
     if 'STATE_ATTR' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
@@ -1153,21 +1225,59 @@ def main(argv=None, force_pairs=(), stop_after=None):
         check('T4p SIGREG_MEAN: sigreg(N(0, I) + 3) >> sigreg(N(0, I)) with SIGREG_MEAN = 1; about equal with 0', on3 > 20 * max(on0, 1e-6) and abs(of3 - of0) <= 0.25 * max(of0, of3) + 1e-4,
               f'SIGREG_MEAN 1: {on0:.5f} vs shifted {on3:.5f}; 0: {of0:.5f} vs {of3:.5f}')
     else: print('SKIP  T4p g03b has no SIGREG_MEAN switch')
-    if 'latent_stats' in ns_:                   # T4q latent_stats (G46.8, superseding G29's rank rule): its verdict = the rule re-derived here on each test cloud
-        _enc0 = ns_['enc']; _ac = 1 if ns_.get('AGE_CH') else 0; _nq = min(4096, len(V)); torch.manual_seed(8)
-        def _lat(Zn):
-            Zf = torch.cat([torch.randn(len(Zn), _ac), Zn], 1) if _ac else Zn; ns_['enc'] = lambda v, yr: Zf[v]
-            try: return ns_['latent_stats'](np.arange(len(Zf)))
-            finally: ns_['enc'] = _enc0
-        def _rule(Zn): return bool(Zn.mean(0).abs().max() <= 2.0 and Zn.std(0).min() >= 0.3 and (Zn.abs() > 2.9).float().mean() <= 0.01)   # (non-clock dims)
-        sat_ = torch.randn(_nq, 8); sat_[:int(0.03 * _nq), :] = 2.95 * torch.sign(torch.randn(int(0.03 * _nq), 8))
-        clouds = {'N(0, I) 8': torch.randn(_nq, 8), 'N(0, I) 16': torch.randn(_nq, 16), '3 dims at mean 2.9': torch.randn(_nq, 8) + torch.tensor([2.9, 2.9, 2.9, 0, 0, 0, 0, 0]),
-                  'one dim at mean 2.1': torch.randn(_nq, 8) + torch.tensor([2.1, 0, 0, 0, 0, 0, 0, 0]), 'one dim sd 0.1': torch.randn(_nq, 8) * torch.tensor([0.1] + [1.0] * 7),
-                  '3 % of the values at ±2.95': sat_, 'rank 2, sd >= 0.5 (rank is report-only)': torch.randn(_nq, 2) @ (torch.ones(2, 16) * 0.6)}
-        res_q = {k: (bool(_lat(z)['ok']), _rule(z)) for k, z in clouds.items()}
-        exp_q = {'N(0, I) 8': True, 'N(0, I) 16': True, '3 dims at mean 2.9': False, 'one dim at mean 2.1': False, 'one dim sd 0.1': False, '3 % of the values at ±2.95': False}
-        check('T4q latent_stats (G46.8): verdict = max |mean| <= 2, min sd >= 0.3, share |z| > 2.9 <= 1 % re-derived on every test cloud; healthy clouds pass, shifted / shrunk / saturated fail',
-              all(g_ == r_ for g_, r_ in res_q.values()) and all(res_q[k][0] == v for k, v in exp_q.items()), f'{{cloud: (latent_stats ok, rule)}} {res_q}')
+    if 'latent_stats' in ns_:                   # T4q latent_stats (G46.8 + G51.11): its verdict = the rule re-derived here on each test cloud
+        import copy as _cp4
+        _enc0, _flow0 = ns_['enc'], ns_['flow']; _ac = 1 if ns_.get('AGE_CH') else 0; _nq = min(4096, len(V)); _dq = Dz - _ac; torch.manual_seed(8)
+        _ba4 = TK[TK.N > 0].assign(b=lambda x: x.N * math.pi / 4 * (x.QMD / 100) ** 2).groupby('vid').b.sum()          # (BA per visit from the tokens)
+        def _sv4(vs):        # (G51.11 b) the stocked visits of vs: observed BA > 5 m2/ha, plot with candidates; each one's highest-prior candidate (first maximum)
+            sv_ = [int(v) for v in vs if float(_ba4.get(int(v), 0.0)) > 5.0 and int(ns_['vpid'][int(v)]) in ns_['cand_of']]
+            return sv_, [int(ns_['cand_of'][int(ns_['vpid'][v])][0][int(np.argmax(ns_['cand_of'][int(ns_['vpid'][v])][1]))]) for v in sv_]
+        def lat_crit(zc):    # the latent statistics of non-clock states (numpy, independent of g03b's): max |mean|, min sd, |z| shares, effective rank
+            zc = np.asarray(zc, dtype=np.float64); ev_ = np.clip(np.linalg.eigvalsh(np.cov(zc.T)), 0, None)
+            return dict(n=len(zc), max_abs_mean=float(np.abs(zc.mean(0)).max()), min_sd=float(zc.std(0, ddof=1).min()), share_abs_gt_2p9=float((np.abs(zc) > 2.9).mean()),
+                        share_abs_gt_2p5=float((np.abs(zc) > 2.5).mean()), effective_rank=float(ev_.sum() ** 2 / max((ev_ ** 2).sum(), 1e-12)))
+        def g468(c): return c['max_abs_mean'] <= 2.0 and c['min_sd'] >= 0.3 and c['share_abs_gt_2p9'] <= 0.01
+        def lat_rule(ze, zf):   # (G46.8 + G51.11) on the encodings ze and their 25-yr no-event flow zf (both incl. the clock column, dropped here)
+            ce = lat_crit(ze[:, _ac:]); ok_e = g468(ce) and ce['effective_rank'] >= 3.0 and ce['share_abs_gt_2p5'] <= 0.05
+            cf = lat_crit(zf[:, _ac:]) if len(zf) > 1 else None; return ok_e, bool(cf is not None and g468(cf)), ce, cf
+        def flow25(fl_, z_, c0_):   # the 25-yr no-event flow (G51.11 b): from 2000.5 to the end of 2025, no event, on each visit's highest-prior candidate's soil
+            t_ = torch.full((len(z_),), 2000.5)
+            with torch.no_grad(): return fl_(z_, t_, [YEARS[-1]], torch.zeros(len(z_), NY, NC + 2), ns_['SOIL'][torch.tensor(c0_, dtype=torch.long)])[YEARS[-1]]
+        def _lat(Zn, fl_):      # (G52.5) the clock column (AGE_CH) is pathological (constant 2.95: mean, sd and saturation all fail): a verdict equals the
+                                # non-clock rule only if latent_stats leaves the clock out
+            Zf = torch.cat([torch.full((len(Zn), _ac), 2.95), Zn], 1) if _ac else Zn; ns_['enc'] = lambda v, yr: Zf[torch.as_tensor(v, dtype=torch.long)]; ns_['flow'] = fl_
+            try: return ns_['latent_stats'](np.arange(len(Zf))), Zf
+            finally: ns_['enc'], ns_['flow'] = _enc0, _flow0
+        _ff = _cp4.deepcopy(_flow0)                    # a FROZEN flow (g = 0, tau = e^10): the flowed cloud = the cloud, so the flowed criterion follows the cloud
+        with torch.no_grad():
+            for p_ in _ff.g.parameters(): p_.fill_(0.0)
+            _ff.g[-1].bias.fill_(-30.0); _ff.ltau.fill_(10.0); _ff.A.fill_(0.0)
+        sat_ = torch.randn(_nq, _dq); sat_[:int(0.03 * _nq), :] = 2.95 * torch.sign(torch.randn(int(0.03 * _nq), _dq))
+        sat5_ = torch.randn(_nq, _dq) * 0.5; sat5_[:int(0.06 * _nq), :] = 2.6 * torch.sign(torch.randn(int(0.06 * _nq), _dq))
+        sh_ = torch.zeros(_dq); sh_[:3] = 2.9; sh1_ = torch.zeros(_dq); sh1_[0] = 2.1; sd1_ = torch.ones(_dq); sd1_[0] = 0.1
+        clouds = {'N(0, I)': torch.randn(_nq, _dq), '3 dims at mean 2.9': torch.randn(_nq, _dq) + sh_, 'one dim at mean 2.1': torch.randn(_nq, _dq) + sh1_,
+                  'one dim sd 0.1': torch.randn(_nq, _dq) * sd1_, '3 % of the values at ±2.95': sat_, '6 % at ±2.6 (G51.11)': sat5_,
+                  'rank 2, sd >= 0.5 (G51.11)': torch.randn(_nq, 2) @ (torch.ones(2, _dq) * 0.6)}
+        exp_q = {'N(0, I)': True, '3 dims at mean 2.9': False, 'one dim at mean 2.1': False, 'one dim sd 0.1': False, '3 % of the values at ±2.95': False,
+                 '6 % at ±2.6 (G51.11)': False, 'rank 2, sd >= 0.5 (G51.11)': False}
+        res_q = {}
+        for k_, z_ in clouds.items():
+            r_, Zf_ = _lat(z_, _ff); sv_, c0_ = _sv4(np.arange(len(Zf_))); zf_ = flow25(_ff, Zf_[torch.tensor(sv_, dtype=torch.long)], c0_) if sv_ else torch.zeros(0, Dz)
+            oe_, of_, _, _ = lat_rule(Zf_.numpy(), zf_.numpy()); res_q[k_] = (bool(r_['ok']), oe_ and of_)
+        # the flowed criterion's CONSTRUCTION (start 2000.5, end of 2025, no event, the highest-prior candidate's soil, the stocked visits): with a drifting
+        # flow the statistics of latent_stats' flowed states = this recomputation
+        _fd = _cp4.deepcopy(_flow0)                    # a slowly DRIFTING flow (tau ~ 150 yr, g ~ 0.007, a random attractor): its 25-yr state depends on the start year, the soil too
+        with torch.no_grad():
+            _fd.g[-1].weight.mul_(0.1); _fd.g[-1].bias.fill_(-5.0); _fd.ltau.fill_(5.0); _fd.A.copy_(torch.randn(Dz))
+        r_, Zf_ = _lat(clouds['N(0, I)'], _fd); sv_, c0_ = _sv4(np.arange(len(Zf_))); _cf = lat_crit(flow25(_fd, Zf_[torch.tensor(sv_, dtype=torch.long)], c0_).numpy()[:, _ac:]) if sv_ else None
+        _rf = r_.get('flowed_25yr') if isinstance(r_, dict) else None
+        _okc = _cf is not None and isinstance(_rf, dict) and int(_rf.get('n', -1)) == _cf['n'] and all(abs(float(_rf.get(k_, np.nan)) - _cf[k_]) <= 1e-4 * max(1.0, abs(_cf[k_]))
+                                                                                                    for k_ in ('max_abs_mean', 'min_sd', 'share_abs_gt_2p9'))
+        check('T4q latent_stats (G46.8 + G51.11): verdict = (encodings: max |mean| <= 2, min sd >= 0.3, share |z| > 2.9 <= 1 %, effective rank >= 3, share |z| > 2.5 <= 5 %) and '
+              '(their 25-yr no-event flow: the G46.8 criteria), clock excluded, re-derived on every test cloud; healthy clouds pass, shifted / shrunk / saturated / rank-2 fail; '
+              'the flowed states = an independent recomputation',
+              all(g_ == r_ for g_, r_ in res_q.values()) and all(res_q[k][0] == v for k, v in exp_q.items()) and _okc,
+              f'{{cloud: (latent_stats ok, rule)}} {res_q}; flowed (drifting flow) recomputed {_cf}, latent_stats {_rf if not isinstance(_rf, dict) else {k_: _rf.get(k_) for k_ in ("n", "max_abs_mean", "min_sd", "share_abs_gt_2p9")}}')
     else: print('SKIP  T4q g03b has no latent_stats')
     TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; _vs4 = np.random.default_rng(41).choice(TKp.vid.unique(), 300, replace=False); _e4 = 0.0
     for vv in _vs4:
@@ -1179,9 +1289,11 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # ======================= T5 landscape descriptors: inclusion-weighted subsample vs the full disk
     exec(compile(G4[G4.index('from sklearn.cluster import'):G4.index('XL = {}')], 'g04', 'exec'), ns_)
     AEF, DIST, SOIL = ns_['AEF'], ns_['DIST'], ns_['SOIL']; smu, ssd = ns_['smu'], ns_['ssd']; land_ = ns_['landscape']; dW, dU = [], []
-    _iw5 = C.groupby('pid').incl_w.agg(['min', 'max']); _sub5 = _iw5.index.values[(_iw5['max'].values > 1) & (_iw5['max'].values > _iw5['min'].values * (1 + 1e-6))]   # disks subsampled
-    # with a NON-CONSTANT inclusion weight (r14 G47.7 / E14-8: with a constant one the weighted and unweighted estimates coincide, which dilutes T5s' power)
-    for pid in np.random.default_rng(51).choice(_sub5, min(60, len(_sub5)), replace=False) if len(_sub5) else []:   # (random subsampled plots: r13 E-F5)
+    _iw5 = C.groupby('pid').incl_w.agg(['min', 'max']); _sub5a = _iw5.index.values[_iw5['max'].values > 1]                 # every subsampled disk (T5: r13 coverage, G52.5)
+    _sub5 = _iw5.index.values[(_iw5['max'].values > 1) & (_iw5['max'].values > _iw5['min'].values * (1 + 1e-6))]   # disks with a NON-CONSTANT inclusion weight (T5s
+    # only: r14 G47.7 / E14-8, with a constant one the weighted and unweighted estimates coincide, which dilutes T5s' power)
+    def _desc5(pid):
+        """(weighted − full disk, unweighted − full disk) landscape descriptor errors of one plot"""
         g = C[C.pid == pid]; cid = g.cid.values
         xs = land_(AEF[cid], DIST[cid], SOIL[cid], g.incl_w.values); xu = land_(AEF[cid], DIST[cid], SOIL[cid])
         r0, c0 = land.index(Pi.loc[pid].x, Pi.loc[pid].y); RP = int(1600 // 30) + 2
@@ -1189,13 +1301,21 @@ def main(argv=None, force_pairs=(), stop_after=None):
         else: wr0, wc0, hw = r0 - RP, c0 - RP, 2 * RP + 1
         rr, cc, F = G2.feats(wr0, wc0, hw, hw); F = F[np.hypot(rr + wr0 - r0, cc + wc0 - c0) * 30 <= 1600]; F[:, -len(SOILS):] = (F[:, -len(SOILS):] - smu) / ssd
         F = torch.tensor(F); xf = land_(F[:, :128], F[:, 128:128 + NY * (NC + 2)].reshape(-1, NY, NC + 2), F[:, -len(SOILS):])
-        dW.append(xs - xf); dU.append(xu - xf)
-    dW, dU = np.array(dW), np.array(dU)
+        return xs - xf, xu - xf
+    _d5 = {}
+    for pid in np.random.default_rng(51).choice(_sub5a, min(60, len(_sub5a)), replace=False) if len(_sub5a) else []:   # (random subsampled plots: r13 E-F5)
+        _d5[pid] = _desc5(pid)
+    dW = np.array([_d5[p_][0] for p_ in _d5]); dU = np.array([_d5[p_][1] for p_ in _d5]); _nc5 = len(set(_d5) & set(_sub5))
+    for pid in np.random.default_rng(52).choice(_sub5, min(60, len(_sub5)), replace=False) if len(_sub5) else []:     # T5s: 60 random non-constant plots
+        if pid not in _d5: _d5[pid] = _desc5(pid)
+    _p5s = [p_ for p_ in _d5 if p_ in set(_sub5)]; dWs = np.array([_d5[p_][0] for p_ in _p5s]); dUs = np.array([_d5[p_][1] for p_ in _p5s])
     def frac_sig(dd_):                                         # share of descriptor dims whose mean signed error across plots is significant (|t| > 3.5)
         sd_ = dd_.std(0, ddof=1); ok_ = sd_ > 1e-9; t_ = np.abs(dd_.mean(0)[ok_]) / (sd_[ok_] / np.sqrt(len(dd_))); return float((t_ > 3.5).mean())
     fw, fu = frac_sig(dW), frac_sig(dU)
-    check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk landscape (signed errors across subsampled plots; unweighted shown for power)',
-          len(dW) >= 10 and fw < 0.05, f'{len(dW)} subsampled plots: dims with significant bias — weighted {fw:.3f}, unweighted {fu:.3f}; mean |Δ| weighted {np.abs(dW).mean():.4f}, unweighted {np.abs(dU).mean():.4f}')
+    check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk landscape (signed errors across every kind of subsampled plot, G52.5; unweighted shown for power)',
+          len(dW) >= 10 and fw < 0.05, f'{len(dW)} random subsampled plots ({_nc5} with a non-constant incl_w): dims with significant bias — weighted {fw:.3f}, unweighted {fu:.3f}; '
+          f'mean |Δ| weighted {np.abs(dW).mean():.4f}, unweighted {np.abs(dU).mean():.4f}')
+    dW, dU = dWs, dUs                                          # (T5s below: the non-constant-weight plots)
     # T5s self-test of T5's power (r13 E-F5): the same statistic with the inclusion weights DROPPED. Where the unweighted estimate deviates materially from the
     # full disk, the weighted one must be closer. The aggregate rule decides (r14 G47.7); the per-dim rule (|mean signed error| <= 0.5 x the unweighted one on
     # dims with unweighted |t| > 3.5) is reported only (its false-alarm rate is uncalibrated: the weighted estimate has a larger sd). With no material
@@ -1302,7 +1422,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
         seq_ = [v1] + list(span)                       # a visit whose FIA previous measurement is not the previous table visit: its codes do not cover the pair
         for u_prev, u in zip(seq_[:-1], seq_[1:]):
             if PREVK.get(k_ + (_vkey(u),)) != _vkey(u_prev) or k_ + (_vkey(u),) in CONV: hid = True
-        if abs(FS1.get(k_ + (vk1,), 0.0) - FS1.get(k_ + (vk2,), 0.0)) >= 0.25: hid = True        # (G38) end-to-end forest-share change
+        if abs(FS1.get(k_ + (vk1,), 0.0) - FS1.get(k_ + (vk2,), 0.0)) >= DSHARE: hid = True        # (G38) end-to-end forest-share change
         for r in e.itertuples():
             for t_, a_, b_ in (('T', 'TRTCD1', 'TRTYR1'), ('T', 'TRTCD2', 'TRTYR2'), ('T', 'TRTCD3', 'TRTYR3'), ('D', 'DSTRBCD1', 'DSTRBYR1'), ('D', 'DSTRBCD2', 'DSTRBYR2'), ('D', 'DSTRBCD3', 'DSTRBYR3')):
                 cd, yr = getattr(r, a_), getattr(r, b_)
@@ -1382,7 +1502,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # of plots with candidates that are NOT converted (independent T1n rule: the pair code has no FIA-only path, so converted plots' pairs are dropped)
     _vp8 = set(ns_['vpair'].items()); _pe8 = {(int(a), int(b_)) for a, b_ in zip(PR.v1.values, PR.v2.values) if FSOK[a] and FSOK[b_]}
     _cv8 = {pid for pid in COF_G2 if tuple(int(x) for x in Pi.loc[pid][key]) in CONVP}; _pc8e = {a for a, _ in _pe8 if int(V.pid.values[a]) in COF_G2 and int(V.pid.values[a]) not in _cv8}
-    _pc8c = {a for a in PC if int(V.pid.values[a]) in _cv8} | {k_[0] for k_ in PC2 if int(V.pid.values[k_[0]]) in _cv8}   # (consecutive or multi-horizon)
+    _pc8c = {a for a in PC if int(V.pid.values[a]) in _cv8} | {k_[0] for k_ in PC2 if int(V.pid.values[k_[0]]) in _cv8}   # (pairs of both kinds: consecutive, multi-horizon)
     check('T8p model pairs (g03b.vpair) = consecutive table pairs with both visits passing MIN_FSHARE (independent FIADB share, T4v); anchored pairs = those of non-converted plots with candidates (G46.7)',
           _vp8 == _pe8 and set(PC) == _pc8e and not _pc8c,
           f'{len(_vp8)} pairs, expected {len(_pe8)}, differing {len(_vp8 ^ _pe8)}; anchored {len(PC)}, expected {len(_pc8e)}, of converted plots {len(_pc8c)} '
@@ -1509,21 +1629,23 @@ def main(argv=None, force_pairs=(), stop_after=None):
     else:
         _kc = list(PCs); _kc = [x for x in FORCE if x in PCs] + [x for x in (_kc[i] for i in np.random.default_rng(89).permutation(len(_kc))[:300]) if x not in FORCE]
         _km = [k for k in PC2s if ns_['vpair'].get(k[0]) != k[1]]; _km = [_km[i] for i in np.random.default_rng(90).permutation(len(_km))[:200]]
-        bh = {'c_set': 0, 'c_w': 0, 'm_set': 0, 'm_w': 0}; wmax = 0.0; nsev = 0; ndet = 0; ex8h = []; sv8, bo8 = SEV8 == '1', ANC8 == 'both'
+        bh = {'c_set': 0, 'c_w': 0, 'm_set': 0, 'm_w': 0}; wmax = 0.0; nsev = 0; nlo = 0; ndet = 0; ex8h = []; sv8, bo8 = SEV8 == '1', ANC8 == 'both'
         for v1 in _kc:
             v2 = ns_['vpair'][v1]; es, det, r_ = spec_set(v1, v2, [v2], sev=sv8, both=bo8, prior=_lp8); ok_, we_ = same(es, PCs[v1]); nsev += sv8 and det and r_ is not None and (r_ < 0.3 or r_ > 0.6); ndet += det
+            nlo += sv8 and det and r_ is not None and r_ < 0.3
             bh['c_set'] += not ok_; bh['c_w'] += ok_ and we_ > 1e-5; wmax = max(wmax, we_)
             if not ok_ or we_ > 1e-5: _mis8('T8h', v1, v2, es, PCs[v1], f', sets equal {ok_}, max rel weight diff {we_:.1e}')
             elif v1 in FORCE: print(f'   T8h forced pair {int(v1)} -> {int(v2)}: agrees ({len(es)} candidates)', flush=True)
         for v1, v2 in _km:
             es, det, r_ = spec_set(v1, v2, _span(v1, v2), sev=sv8, both=bo8, prior=_lp8); ok_, we_ = same(es, PC2s[(v1, v2)]); nsev += sv8 and det and r_ is not None and (r_ < 0.3 or r_ > 0.6); ndet += det
+            nlo += sv8 and det and r_ is not None and r_ < 0.3
             bh['m_set'] += not ok_; bh['m_w'] += ok_ and we_ > 1e-5; wmax = max(wmax, we_)
             if not ok_ or we_ > 1e-5: _mis8('T8h', v1, v2, es, PC2s[(v1, v2)], f', multi-horizon, sets equal {ok_}, max rel weight diff {we_:.1e}')
         _min8 = {'consecutive >= 300': len(_kc) >= 300, 'multi-horizon >= 200 (PAIR_ALL=1)': len(_km) >= 200 or not PAIR_ALL8, 'detectable >= 20': ndet >= 20,
-                 'severity rule >= 20': nsev >= 20 or not sv8}
+                 'severity rule >= 20': nsev >= 20 or not sv8, 'stand-replacing (< 0.3) branch >= 20 (G52.8)': nlo >= 20 or not sv8}
         check(f'T8h PRODUCTION pair sets and weights (PAIR_ANCHOR {ANC8}, SEVERITY_ANCHOR {SEV8}, training; g03b pair_cand / pair_cand2) = the independent spec',
               OK8 and all(_min8.values()) and not any(bh.values()),
-              f'{len(_kc)} consecutive + {len(_km)} multi-horizon pairs ({ndet} with a detectable cluster, {nsev} with a severity rule applied); minima unmet {[k for k, v in _min8.items() if not v]}; '
+              f'{len(_kc)} consecutive + {len(_km)} multi-horizon pairs ({ndet} with a detectable cluster, {nsev} with a severity rule applied, {nlo} of them < 0.3); minima unmet {[k for k, v in _min8.items() if not v]}; '
               f'mismatches {bh}; max rel weight diff {wmax:.1e}; mismatching pairs {_ex8.get("T8h", [])}' + (f'; {MSG8}' if MSG8 else ''))
     if done('T8'): return RES
     # ======================= T9 plot-level location posterior (g02f) recomputed from the specification with the fitted parameters
