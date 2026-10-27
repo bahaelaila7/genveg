@@ -242,7 +242,8 @@ def t12_check(G4s, ns_, V, P, FSOK, VS12):
         try:
             fdef = next(n for n in ast.walk(T4G) if isinstance(n, ast.FunctionDef) and n.name == 'null_pred')
             ns12['o_tr'] = ns_['obs_summ'](torch.tensor(np.asarray(ns12['tr_l'], int))); ns12['y_tr'] = ns_['vyear'][np.asarray(ns12['tr_l'], int)]
-            ns12['FALLBACK'] = {'knn_queries_with_lt5_in_window': {}, 'null_queries_without_pool': {}}; ns12['FB_SET'] = 'gv_verify'
+            ns12['FB_SET'] = 'gv_verify'                                   # (g04's own FALLBACK counters: its assignment statement executed here)
+            exec(compile(ast.Module(body=[next(n for n in ast.walk(T4G) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'FALLBACK' for t in n.targets))], type_ignores=[]), 'g04', 'exec'), ns12)
             exec(compile(_tw12.dedent(ast.get_source_segment(G4s, fdef)), 'g04', 'exec'), ns12)
             calls = [n for n in ast.walk(T4G) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'null_pred' and any(isinstance(m, ast.Name) and m.id == 'cb' for a_ in n.args for m in ast.walk(a_))]
             hb_ = list(ns12['hB']); jud = set(int(x) for x in _vp12[hb_]); yq = ns_['vyear'][hb_]
@@ -394,7 +395,7 @@ def provenance_label(scripts, rec, cur):
 PRODUCERS = {**{k: ('g02b',) for k in ('T1a', 'T1b', 'T1c', 'T1d', 'T1e', 'T1f', 'T1g', 'T1h', 'T1i', 'T1j', 'T1k', 'T1l', 'T1m', 'T1o', 'T1q', 'T1r',
                                        'T2a0', 'T2a', 'T2b', 'T2c', 'T3a', 'T3b', 'T3c', 'T3c0', 'T3c2', 'T3c2z', 'T3d', 'T3e', 'T3f', 'T3g', 'T3h', 'T3i', 'T3k',
                                        'T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T5', 'T5s', 'T7a')},
-             'T1n': ('g02b', 'g02e'), 'T3j': ('g02b', 'g02e'), 'T4x': ('g02b', 'g02e'), 'T6a': ('g02b', 'g02j'), 'T6b': ('g02b', 'g02j'), 'T6c': ('g02b', 'g02j'),
+             'T1n': ('g02b', 'g02e'), 'T3j': ('g02b', 'g02e'), 'T6a': ('g02b', 'g02j'), 'T6b': ('g02b', 'g02j'), 'T6c': ('g02b', 'g02j'),
              'T6d': ('g02b', 'g02j'), 'T7b': ('g02b', 'g02e', 'g02g'), 'T7e': ('g02b', 'g02e', 'g02g'), 'T10': ('g02b', 'g02e', 'g02g'),
              **{k: ('g02b', 'g02e') for k in ('T8p', 'T8', 'T8e', 'T8f', 'T8g', 'T8c', 'T8b', 'T8d')}, 'T8h': ('g02b', 'g02e', 'g02g')}
 VERIFY_INPUTS = _verify_inputs()
