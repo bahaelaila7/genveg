@@ -325,3 +325,51 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   `code_hash: {"g02b": …}`. g02e / g02g / g02j: the parquet schema metadata key `genveg_provenance` of each of their parquet outputs
   (`{"code_hash": {"<script>": …, "g02b": …}, "evk_hash": …}`; g02j without evk_hash). They do not touch meta.json, so stands_fp stays
   independent of the table stages.
+### Q.2 Model and evaluation fixes (g03b / g04 / g05 / g06; G46.7–21)
+* **Converted plots out of every AlphaEarth term (G46.7).** MIL, Q and Q-decode are weighted by `~VCONV`; g04's B fine-tune (`trB`) leaves them
+  out. The pair code has no FIA-only path (every pair flows along candidate histories), so `pair_set` returns None for a converted plot and counts
+  it (`converted_dropped`; the current gafl_v4, with the r13 flag: 369 consecutive / 531 multi-horizon pairs). g03b refuses a table without
+  `plot_converted`.
+* **Evidence table from the table (G46.4).** g03b reads `EVK = g02b.evk_from_meta(meta)` and uses `clusters(evs) = g02b.clusters(evs, EVK)`;
+  g06 uses the same `clusters`. `EVID_END` is the table's `evid_end`.
+* **G36 as a clip (G46.5).** `pair_set` no longer blocks a span that passes EVID_END: the negative and event-free constraints act on the
+  span's years up to EVID_END, and the years after it are unconstrained. The outcome-only windows were clipped already.
+* **Latent acceptance (G46.8).** `latent_stats` is ok iff, over the non-clock dims, max |mean| ≤ 2, min per-dim sd ≥ 0.3 and the share of
+  |z| > 2.9 is ≤ 1 %. It writes `max_abs_mean`, `min_sd`, `share_abs_gt_2p9` and `ok`, with `effective_rank` reported only. Checked against the
+  existing evidence:
+  - all 22 v3 checkpoints of gafl / gafl_pipe FAIL on the test encodings: max |mean| 2.87–2.99, share > 2.9 0.47–0.76, min sd 0.02–0.53;
+  - the r14 B harness OFF run FAILS at step 1200 (2.89 / 0.21 / 28.7 %);
+  - the ON run PASSES at step 1200 (0.57 / 0.77 / 0.03 %; it fails only at step 300, min sd 0.24).
+* **SIGREG_FLOW / AGE_FLOW (G46.9).** Two training-only switches, default 0:
+  - SIGREG_FLOW: SIGReg (a weighted empirical characteristic function) on the flowed states at the pair end, weighted by the pair posterior;
+  - AGE_FLOW: W_AGE · the squared error, over AGE_S, of the decoded BA-weighted mean age (`dec_age`, the age g06 measures) of the flowed state
+    against v2's observed age in the decoder's form (`OBS_AGED`, class midpoints), stocked v2 only.
+
+  The A/B against the r14 B ON harness is under "SIGREG_FLOW / AGE_FLOW evidence" below.
+* **Bounded resets and cls init (G46.10).** JUMP_RESET: z ← z + r ⊙ (zt − z) with zt = clamp(z_post + sc·tanh(shift), −3, 3), and the clock
+  target ≥ age 0. EncV4.cls ~ N(0, 0.02): the step-1 pre-clip gradient norm on the harness is 41 (it was 1422).
+  - With the switches off, outputs are bit-identical to r13 HEAD and to pre-r13 (B's bitid harness: v3 gafl_pipe/model.pt, and v4 at random
+    init with SITE_ATTR + AGE_CH; max |Δ| = 0 for z, flow states 2010 / 2025, decoder, head and sigreg).
+* **Evaluation (G46.11–19).**
+  - One estimator (G46.13). The shared region of g04 (exec'd by g05 / g06) holds `MS = 32`, `tmed` (the true median),
+    `calibrated_median(s, cf) = e^cf · lmed(s)` and `medoid_draw`. g05 draws MS iid prior samples (USE_B = 1: 64 reweighted and resampled to MS)
+    and takes its medoid on the uncalibrated draws, as g04 does.
+  - Replicates (G46.11). The start-year gate statistics and CALF are means of R_REP = 8 replicates, with per-replicate values and the sd recorded.
+    Each replicate uses a fresh derangement of the landscapes.
+  - NaN (G46.18). A NaN gate statistic fails the gate with `fail_reasons`. The fallback counters are kept per query set.
+  - Map acceptance (G46.12). The validation cross-fit (the R_REP replicates × 2 halves) is recorded with the null and kNN on the same visits.
+    `map_accept` requires the TPH error, the BA error and the medoid Bray each to be below the null's; g05 refuses otherwise.
+  - Report only:
+    - the visit-date vs end-2025 shift (G46.14);
+    - the medoid age-class Wasserstein-1 (by TPH and by BA) and the bare-visit predicted BA (G46.19).
+  - True medians (G46.15) in CF / err / bias / predA / CAL / AxB / the null / g03b metrics / g06 reconstruction.
+  - g06 (G46.16 / G46.17):
+    - the undisturbed set is `UNDIST` from `pair_set`: no hiding code (incl. G38), no detectable record, a constrained span part (G36 clip),
+      no measured collapse;
+    - the pre-registered horizon bins are (0, 8), (8, 15), (15, 99) yr, each requiring ≥ 20 validation pairs. They are fixed from the table
+      counts, not from model results. Validation counts: gafl_v4 1192 / 636 / 252; r4_v4 4202 / 2362 / 902 (r4_v4 is stale and has no
+      `plot_converted`, so its counts are approximate);
+    - g06 writes `dynamics_pairs_<TAG>.parquet` (one row per evaluated pair: set, pid, v1, v2, horizon, predicted / observed BA log change and age
+      per yr) and records `pair_dump`, `bins_required`, `n_min` and `fail_reasons`.
+* **Documented residuals (G46.20).** The X_L standardisation, k-means and soil statistics use all plots (no labels). USE_B = 1 is mismatched
+  and not validated (g05 docstring). The 2026-visit clamp is negligible.

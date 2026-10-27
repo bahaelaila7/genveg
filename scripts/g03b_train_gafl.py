@@ -3,7 +3,8 @@ metrics). Derived from g03_train_proto.py, step 2: temporal JEPA model (liquid f
   E_v      masked set encoder over cohort tokens (species, age class, log N, log QMD, H, CR) → z (D_Z), SIGReg-regularised (LeJEPA: Epps-Pulley test of
            random 1-D projections against N(0,1))
   flow     liquid time-constant cell, yearly steps: dz = −(1/τ + g)⊙z + g⊙A, g = σ(W [z, s] + b) (s = static site covariates), from the visit year on
-  jump     at a candidate's disturbance years: z ← z + J([z, class one-hot, severity, Hansen loss])
+  jump     at a candidate's disturbance years: z ← z + J([z, class one-hot, severity, Hansen loss]); with JUMP_RESET (G30 / G46.10) a partial reset
+           z ← z + r ⊙ (z_t − z) toward a bounded target z_t (a convex combination)
   heads    z(2022) → AlphaEarth 2022, z(2025) → AlphaEarth 2025 (64-d)
   MIL      the plot location is latent: K candidates sampled ∝ the disturbance prior; loss = −logsumexp_c(−d_c / T) (+ log K)
   pairs    FIA remeasurement: flow(z(v1)) along candidate histories CONSISTENT WITH THE PLOT'S FIA RECORDS (TRT / DSTRB between the visits) to v2's
@@ -101,8 +102,9 @@ if VAL_SPLIT:
     _va = P[P.pid.isin(val_pid)]; _dv, _ = _KD(_va[['x', 'y']].values).query(P[['x', 'y']].values)
     vbuf_pid = set(P.pid[(_dv < 3200) & ~P.pid.isin(val_pid) & ~P.pid.isin(test_pid)])
 MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9% of
-VCONV = torch.tensor(V.plot_converted.values if 'plot_converted' in V.columns else np.zeros(nv, bool), dtype=torch.bool)   # (g02e; r13 G41)
 fs_ok = (V.fsub.values >= MIN_FS) if 'fsub' in V.columns else np.ones(nv, bool)   # visits with forest share 0.10-0.25 have BA > 60 m2/ha vs 0.5 % when fully forested)
+if 'plot_converted' not in V.columns: raise SystemExit(f'{D}/visits.parquet has no plot_converted column: rebuild the table (g02e; G41 / G46.3)')
+VCONV = torch.tensor(V.plot_converted.values.astype(bool), dtype=torch.bool)   # plots converted to non-forest before the 2022 mask: no AlphaEarth term (G41 / G46.7)
 tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and vpid[v] not in val_pid and vpid[v] not in vbuf_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
 va_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in val_pid and fs_ok[v]], dtype=int)
 print(f'visits train {len(tr_v)} test {len(te_v)} val {len(va_v)} | plots test {len(test_pid & have)} val {len(val_pid & have)} | buffer plots excluded {len((buffer_pid | vbuf_pid) & have)} | tokens/visit max {maxT}', flush=True)
@@ -130,6 +132,10 @@ PAIR_HMAX = float(os.environ.get('PAIR_HMAX', 25.0))
 #   bounded jump could not represent a stand-replacing change, median max |Δz| 4.5); STATE_ATTR = 1: the attractor depends on the state too, `A + Am([soil, z])`
 #   (the LTC equilibria were confined to the box between 0 and `A(soil)`)
 SIGREG_MEAN = os.environ.get('SIGREG_MEAN', '0') == '1'; JUMP_RESET = os.environ.get('JUMP_RESET', '0') == '1'; STATE_ATTR = os.environ.get('STATE_ATTR', '0') == '1'
+# r14 loss switches (G46.9; training only, so a checkpoint's outputs do not depend on them): undisturbed no-event flows contracted the latent variance 8x
+# over 25 yr and the decoded age advanced at 0.4-0.6x the observed rate (B14-4). SIGREG_FLOW = 1: SIGReg is also applied to the flowed states at the pair
+# end (posterior-weighted over the K histories); AGE_FLOW = 1: the age loss is also applied to the DECODED age of the flowed state at v2
+SIGREG_FLOW = os.environ.get('SIGREG_FLOW', '0') == '1'; AGE_FLOW = os.environ.get('AGE_FLOW', '0') == '1'
 NJ = 2 * D_Z if JUMP_RESET else D_Z + (1 if AGE_CH else 0)                  # jump-network outputs (shift + reset logits; AGE_CH alone: + the clock-reset logit)
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
     sparse_j = False
@@ -145,11 +151,13 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         """bounded disturbance jump of the state; with AGE_CH, dimension 0 (the age clock) is RESET toward age 0 by a learned fraction r (a clear-cut of a
         100-yr stand needs −2.5 on the clock, beyond any bounded additive jump: audit r5 I1) plus a small bounded shift (thinning from below raises the age)"""
         o = s.J(torch.cat([z, ev], -1)); jd = torch.tanh(o[:, :D_Z])
-        if JUMP_RESET:                                                  # (G30) convex partial reset toward z_post + a small bounded shift; the clock resets to age 0
+        if JUMP_RESET:                                                  # (G30 / G46.10) partial reset toward the target zt: z ← (1 − r) z + r zt, a convex combination
             r = torch.sigmoid(o[:, D_Z:2 * D_Z]); zp = 3 * torch.tanh(s.P(torch.cat([ev, so], -1)))
             if AGE_CH: zp = torch.cat([torch.full_like(zp[:, :1], -AGE_C / AGE_S), zp[:, 1:]], 1)
             sc = torch.full((D_Z,), 0.5); sc[0] = 0.25 if AGE_CH else 0.5
-            return r * (zp - z) + sc * jd
+            zt = (zp + sc * jd).clamp(-3, 3)                            # target = z_post + a small bounded shift, inside the encoder range
+            if AGE_CH: zt = torch.cat([zt[:, :1].clamp(min=-AGE_C / AGE_S), zt[:, 1:]], 1)   # the clock target is never below age 0 (B14-6)
+            return r * (zt - z)
         if not AGE_CH: return jd
         r = torch.sigmoid(o[:, D_Z:D_Z + 1]); return torch.cat([r * (-AGE_C / AGE_S - z[:, :1]) + 0.25 * jd[:, :1], jd[:, 1:]], 1)
     def forward(s, z, start, stop, dist, soil, end=None, rs=None, re=None, ra=None):
@@ -207,7 +215,8 @@ class SAB(nn.Module):         # pre-LN self-attention block over the cohort toke
 class EncV4(nn.Module):       # Set Transformer: token embedding -> 4 SAB -> PMA (1 learned seed) + year -> MLP -> z
     def __init__(s, d=128, L=4):
         super().__init__(); s.ek = nn.Embedding(NK, 16); s.ea = nn.Embedding(NA, 8); s.inp = nn.Linear(16 + 8 + 5, d)
-        s.cls = nn.Parameter(torch.zeros(1, 1, d))               # always-valid token: visits without trees (fresh clear-cuts) get a defined encoding
+        s.cls = nn.Parameter(torch.randn(1, 1, d) * 0.02)        # always-valid token: visits without trees (fresh clear-cuts) get a defined encoding;
+        # small random init, not zeros: an all-zero token through LayerNorm gave a step-1 gradient spike (r14 B14-5 / G46.10)
         s.blocks = nn.ModuleList([SAB(d) for _ in range(L)]); s.seed = nn.Parameter(torch.randn(1, 1, d) * 0.02)
         s.pma = nn.MultiheadAttention(d, 4, batch_first=True); s.lo = nn.LayerNorm(d)
         s.out = nn.Sequential(nn.Linear(d + 1, d), nn.GELU(), ResBlock(d), nn.Linear(d, D_Z))
@@ -243,21 +252,29 @@ print(f'ARCH {ARCH}: D_Z {D_Z}; parameters enc {sum(p.numel() for p in enc.param
       f'dec {sum(p.numel() for p in dec.parameters()):,} heads {sum(p.numel() for p in [*h22.parameters(), *h25.parameters()]):,}', flush=True)
 params = [*enc.parameters(), *flow.parameters(), *dec.parameters(), *qn.parameters(), *h22.parameters(), *h25.parameters()]
 opt = torch.optim.AdamW(params, lr=float(os.environ.get('LR', 1e-3)), weight_decay=1e-4)
-def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):
-    """LeJEPA SIGReg: Epps-Pulley distance between the empirical characteristic function of random 1-D projections of z and that of N(0, 1)."""
-    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z if SIGREG_MEAN else z - z.mean(0)) @ u   # [n, nproj] (SIGREG_MEAN: location tested too, G29)
+def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17), w=None):
+    """LeJEPA SIGReg: Epps-Pulley distance between the empirical characteristic function of random 1-D projections of z and that of N(0, 1).
+    w [n] (optional, sums to 1): weighted empirical characteristic function (SIGREG_FLOW: the flowed states, posterior-weighted)."""
+    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0)
+    if w is None: p = (z if SIGREG_MEAN else z - z.mean(0)) @ u                                       # [n, nproj] (SIGREG_MEAN: location tested too, G29)
+    else: p = (z if SIGREG_MEAN else z - (w.unsqueeze(-1) * z).sum(0)) @ u
     arg = p.unsqueeze(-1) * t                                                                            # shape (n, nproj, T)
-    ecf_re, ecf_im = torch.cos(arg).mean(0), torch.sin(arg).mean(0); tgt = torch.exp(-t ** 2 / 2)
+    if w is None: ecf_re, ecf_im = torch.cos(arg).mean(0), torch.sin(arg).mean(0)
+    else: ecf_re, ecf_im = (w.view(-1, 1, 1) * torch.cos(arg)).sum(0), (w.view(-1, 1, 1) * torch.sin(arg)).sum(0)
+    tgt = torch.exp(-t ** 2 / 2)
     w = torch.exp(-t ** 2 / 2); return (((ecf_re - tgt) ** 2 + ecf_im ** 2) * w).mean()
 def latent_stats(vs, bs=2048):
-    """latent health on encoded visits (G29, pre-registered): per non-clock dimension |mean| ≤ 2.0 (no collapse onto the ±3 encoder bound) and the effective
-    rank (participation ratio of the covariance eigenvalues) ≥ (non-clock dims) / 4"""
+    """latent health on encoded visits, over the non-clock dimensions (pre-registered, G46.8; supersedes G29's rank rule): ok iff max |mean| ≤ 2.0 (no
+    collapse onto the ±3 encoder bound), min per-dimension sd ≥ 0.3 (no shrunk dimension) and share of values with |z| > 2.9 ≤ 1 % (no saturation,
+    one- or two-sided). The effective rank (participation ratio of the covariance eigenvalues) is reported only: it did not tell a collapsed latent
+    from a healthy one (r14 B14-1)."""
     with torch.no_grad():
         z = torch.cat([enc(torch.tensor(vs[i:i + bs]), vyear[vs[i:i + bs]]) for i in range(0, len(vs), bs)])
-    zc = z[:, 1:] if AGE_CH else z; mu = zc.mean(0); ev_ = torch.linalg.eigvalsh(torch.cov(zc.T)).clamp(min=0)
-    pr_ = float(ev_.sum() ** 2 / (ev_ ** 2).sum().clamp(min=1e-12)); d_ = zc.shape[1]
-    return dict(n=len(vs), dims=d_, max_abs_mean=float(mu.abs().max()), n_dims_abs_mean_gt2=int((mu.abs() > 2.0).sum()), effective_rank=pr_,
-                ok=bool(float(mu.abs().max()) <= 2.0 and pr_ >= d_ / 4))
+    zc = z[:, 1:] if AGE_CH else z; mu = zc.mean(0); sd = zc.std(0); ev_ = torch.linalg.eigvalsh(torch.cov(zc.T)).clamp(min=0)
+    pr_ = float(ev_.sum() ** 2 / (ev_ ** 2).sum().clamp(min=1e-12)); d_ = zc.shape[1]; sat = float((zc.abs() > 2.9).float().mean())
+    mx = float(mu.abs().max()); sdm = float(sd.min())
+    return dict(n=len(vs), dims=d_, max_abs_mean=mx, n_dims_abs_mean_gt2=int((mu.abs() > 2.0).sum()), min_sd=sdm, share_abs_gt_2p9=sat, effective_rank=pr_,
+                ok=bool(mx <= 2.0 and sdm >= 0.3 and sat <= 0.01))
 def sample_cands(pids, K):
     idx = []
     for p in pids:
@@ -268,6 +285,12 @@ def sample_cands(pids, K):
 _N = torch.exp(slot_v[..., 0]) * slot_p; _D = torch.exp(slot_v[..., 1])
 OBS_T = _N.sum(1); OBS_B = (_N * math.pi / 4 * (_D / 100) ** 2).sum(1); OBS_Q = torch.sqrt((_N * _D ** 2).sum(1) / OBS_T.clamp(min=1e-6))
 _bko = (_N * _D ** 2).view(-1, NK, NA).sum(-1); OBS_S = _bko / _bko.sum(-1, keepdim=True).clamp(min=1e-9)      # observed BA shares by species key
+AMID = (torch.arange(NK * NA) % NA).float() * 10 + 5                                                     # age-class midpoint of every slot (yr)
+OBS_AGED = (_N * _D ** 2 * AMID).sum(1) / (_N * _D ** 2).sum(1).clamp(min=1e-9)   # observed BA-weighted mean age in the decoder's form (AGE_FLOW target)
+def dec_age(lp, val):
+    """decoded BA-weighted mean age of the expected slots (calibrated presence, age-class midpoints), differentiable; g06 measures the same"""
+    w_ = torch.exp(val[..., 0].clamp(max=12)) * torch.sigmoid(calibrated(lp)) * torch.exp(val[..., 1].clamp(max=LQ_MAX)) ** 2
+    return (w_ * AMID).sum(-1) / w_.sum(-1).clamp(min=1e-9)
 T_PAIR = float(os.environ.get('T_PAIR', 0.1))      # temperature of the mixture over a pair's candidate histories (per-dimension squared latent distance)
 SMOKE_B = int(os.environ.get('SMOKE_BATCHES', 0)) if int(os.environ.get('EPOCHS', 30)) > 0 and os.environ.get('LOAD') != '1' else 0   # training only
 QD_WIN = float(os.environ.get('QD_WIN', 1.5))     # Q-decode loss: visits within this many years of 2025 (the state Q predicts)
@@ -301,10 +324,13 @@ else:
 tr_good = np.array([v for v in tr_v if vpid[v] in good]); print(f'curriculum: {E1} epochs on {len(tr_good)} visits of the best-anchored plots (criterion {cq:.3f})', flush=True)
 vpair = {a: b for a, b in zip(PR.v1.values, PR.v2.values) if fs_ok[a] and fs_ok[b]}       # both visits must pass the forest-share filter
 # ---- FIA-anchored remeasurement pairs: the plot's own COND.TRT* / COND.DSTRB* records (true location, g02e) select the candidate histories the flow may
-# take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, g02b.EVK / clusters) must be matched by compatible
+# take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, the table's EVK / clusters) must be matched by compatible
 # LANDFIRE / Hansen evidence in its window; if v2 carries no code that could hide a stand-replacing event, the history must have none in between
 # (harvest class or Hansen loss on >= half the footprint). Candidates are then drawn from the location prior restricted to that set.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_build_gafl as G2
+EVK = G2.evk_from_meta(M)       # (G46.4) the evidence table the TABLE was built with (meta.json evk, hash-checked; refused if absent), not g02b's module's
+def clusters(evs): return G2.clusters(evs, EVK)     # FIA records of one physical event -> event clusters, on the table's EVK
+EVID_END = int(M.get('evid_end', G2.EVID_END))      # (G36 / G46.5) the table's evidence end, as g02g clips with
 FEV = pd.read_parquet(f'{D}/fia_events.parquet')
 if 'rmd' not in FEV.columns: sys.exit('fia_events.parquet has no recording visit (rmd): rerun g02e_fia_records.py (audit r5 I3)')
 _rmd = pd.to_datetime(FEV.rmd); FEV['ry'] = _rmd.dt.year + (_rmd.dt.dayofyear - 0.5) / np.where(_rmd.dt.is_leap_year, 366.0, 365.0)   # = visits.year of that date
@@ -337,12 +363,13 @@ def pair_clusters(p_, y1, y2, a, b):
     year before the previous visit) is clamped to the nearest applied year — FIA says it happened in the interval"""
     out = []
     if b < a: return out
-    for c in G2.clusters(recs_in(p_, y1, y2)):
+    for c in clusters(recs_in(p_, y1, y2)):
         lo, hi = max(c['lo'], a), min(c['hi'], b)
         if hi < lo: lo = hi = (a if c['hi'] < a else b)
         out.append(dict(c, lo=lo, hi=hi))
     return out
 pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0}
+UNDIST = {}      # (v1, v2) -> the pair is FIA-undisturbed (g06's undisturbed set, G46.16): set by pair_set for every pair it is asked about
 SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
 PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' or 'period'
@@ -351,33 +378,38 @@ def _narrow(m, new, tag):
     if (m & new).any(): return m & new
     nanch[tag + '_skipped'] = nanch.get(tag + '_skipped', 0) + 1; return m
 def pair_set(v1, v2, blk=None, span=None):
-    """(candidates, weights) of the history between visits v1 < v2 of a plot (None: plot without candidates). blk: a visit in (v1, v2] carries an FIA
-    code that could hide a stand-replacing event (default: v2's own, the consecutive case); span: the visits in (v1, v2] (default [v2]) — the severity
-    rule reads the MINIMUM BA ratio over them (over 15-25 yr a clear-cut regrows above 0.6 of v1: audit r4 I2). Records are those RECORDED in (v1, v2],
-    windows clipped to the years the flow applies (audit r5 I3 / M2)."""
+    """(candidates, weights) of the history between visits v1 < v2 of a plot (None: plot without candidates, or converted: G46.7). blk: a visit in (v1, v2]
+    carries an FIA code that could hide a stand-replacing event (default: v2's own, the consecutive case); span: the visits in (v1, v2] (default [v2]) —
+    the severity rule reads the MINIMUM BA ratio over them (over 15-25 yr a clear-cut regrows above 0.6 of v1: audit r4 I2). Records are those RECORDED in
+    (v1, v2], windows clipped to the years the flow applies (audit r5 I3 / M2). Every negative / event-free / outcome-only window is clipped to EVID_END:
+    the span's part after it carries no constraint (G36 as a clip, G46.5). Also records UNDIST[(v1, v2)]."""
     blk = vblk[v2] if blk is None else blk; span = [v2] if span is None else span
     span = [u for u in span if fs_ok[u]] or [v2]                       # (G35) severity / collapse ratios only over visits passing MIN_FSHARE
     if 'fsub' in V.columns and abs(float(V.fsub.values[v2]) - float(V.fsub.values[v1])) >= 0.25: blk = True   # (G38) end-to-end forest-share change
-    p_ = vpid[v1]
-    if p_ not in cand_of: return None
-    if PAIR == 'plot': return cand_of[p_]
-    cid, pr = cand_of[p_]; y1, y2 = float(vyr[v1]), float(vyr[v2]); per = DIST[cid].numpy(); m = np.ones(len(cid), bool)
+    p_ = vpid[v1]; y1, y2 = float(vyr[v1]), float(vyr[v2])
     ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2]), pair_ra(v1, v2)); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
-    if yb > G2.EVID_END: blk = True                                    # (G36) no stand-replacing evidence after EVID_END: the period cannot be 'undisturbed'
-    be_ = min(b, G2.EVID_END - YEARS[0])                               # outcome-only windows end at the evidence window
-    pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if c['lr'] >= 4]; sk0 = nanch.get('event_skipped', 0)
+    be_ = min(b, EVID_END - YEARS[0])                               # (G36 / G46.5) the constrained part of the span ends at the evidence window
+    pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if c['lr'] >= 4]
+    r_ = min(BAv.get(u, 0.0) for u in span) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
+    # FIA-undisturbed (outcome-independent of the switches): no hiding code, no detectable record, a constrained part of the span, no measured collapse
+    UNDIST[(v1, v2)] = bool(not blk and not cl_ and be_ >= a and not (r_ is not None and r_ < 0.3))
+    if p_ not in cand_of: return None
+    if VCONV[v1]:                                       # (G46.7) converted plot: its candidates are mislocated and the pair code has no FIA-only path
+        nanch['converted_dropped'] = nanch.get('converted_dropped', 0) + 1; return None
+    if PAIR == 'plot': return cand_of[p_]
+    cid, pr = cand_of[p_]; per = DIST[cid].numpy(); m = np.ones(len(cid), bool); sk0 = nanch.get('event_skipped', 0)
     for c in cl_:                                       # each detectable FIA event cluster of the period: compatible evidence in its window
         lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
         if hi > lo:
             ok_ = (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1)
             m = _narrow(m, ok_, 'event')
     nanch['with_event'] += bool(cl_); nanch['event_matched'] += bool(cl_) and nanch.get('event_skipped', 0) == sk0
-    r_ = min(BAv.get(u, 0.0) for u in span) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None; loss_applied = False
+    loss_applied = False
     if cl_ and SEVER and r_ is not None:   # training only: FIA's measured outcome says how severe the recorded event was
         srw = np.zeros(len(cid), bool)
         for c in cl_:
             lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
-            hi = min(hi, G2.EVID_END - YEARS[0] + 1)                     # (G36: no stand-replacing evidence after EVID_END)
+            hi = min(hi, EVID_END - YEARS[0] + 1)                     # (G36: no stand-replacing evidence after EVID_END)
             if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
         if r_ < 0.3: m = _narrow(m, srw, 'replacing'); loss_applied = True; nanch['replacing'] = nanch.get('replacing', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'partial'); nanch['partial'] = nanch.get('partial', 0) + 1
@@ -386,8 +418,8 @@ def pair_set(v1, v2, blk=None, span=None):
         if r_ < 0.3: m = _narrow(m, srw, 'outcome_loss'); loss_applied = True; nanch['outcome_loss'] = nanch.get('outcome_loss', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'outcome_kept'); nanch['outcome_kept'] = nanch.get('outcome_kept', 0) + 1
     collapse = SEVER and r_ is not None and r_ < 0.3     # training only: a measured major loss (min BA ratio < 0.3) is no 'undisturbed' period (r8 M3)
-    if not blk and not loss_applied and not collapse and b >= a:   # FIA-undisturbed period (a measured major loss overrides the 'no code' reading)
-        m = _narrow(m, ~(np.maximum(per[:, a:b + 1, G2.IX['harvest']], per[:, a:b + 1, G2.H_]) >= 0.5).any(1), 'neg'); nanch['neg_constrained'] += 1
+    if not blk and not loss_applied and not collapse and be_ >= a:   # FIA-undisturbed period up to EVID_END (a measured major loss overrides the 'no code' reading)
+        m = _narrow(m, ~(np.maximum(per[:, a:be_ + 1, G2.IX['harvest']], per[:, a:be_ + 1, G2.H_]) >= 0.5).any(1), 'neg'); nanch['neg_constrained'] += 1
         if not cl_:     # FIA-undisturbed AND no detectable record: the histories must be event-free where any are (audit r4 I3: else the mixture credits
                         # spurious LANDFIRE / Hansen jumps of mislocated footprints, not the undisturbed drift) — EXCEPT the evidence of the period's
                         # recorded weak events (ground fire, insects, ...) inside their windows, which FIA confirms (audit r5 I2)
@@ -395,7 +427,7 @@ def pair_set(v1, v2, blk=None, span=None):
             for c in pcl:
                 lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
                 if hi > lo: ex[lo:hi, sorted(c['cols'])] = True
-            pe = np.where(ex[None], 0.0, per[:, :, :])[:, a:b + 1]
+            pe = np.where(ex[None], 0.0, per[:, :, :])[:, a:be_ + 1]
             m = _narrow(m, ~((pe[:, :, :NC].sum(-1) + pe[:, :, NC + 1]) > 0).any(1), 'eventfree')
     pr0 = pr
     if PAIR == 'both' and p_ in cand_hist:
@@ -420,7 +452,8 @@ if PAIR_ALL:
                 if not (fs_ok[a_] and fs_ok[b_]) or vyr[b_] - vyr[a_] > PAIR_HMAX: continue
                 r_ = pair_set(a_, b_, bool(vblk[vs_[i_ + 1:j_ + 1]].any()), list(vs_[i_ + 1:j_ + 1]))   # undisturbed only if no visit in between has a hiding code
                 if r_ is not None: pairs_of.setdefault(a_, []).append(b_); pair_cand2[(a_, b_)] = r_
-print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {_n_consec} | multi-horizon pairs {len(pair_cand2)} (PAIR_ALL {PAIR_ALL})', flush=True)
+print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {_n_consec} | multi-horizon pairs {len(pair_cand2)} (PAIR_ALL {PAIR_ALL}) | '
+      f"pairs of converted plots dropped {nanch.get('converted_dropped', 0)} (G46.7)", flush=True)
 if os.environ.get('LOAD') == '1':
     sd = torch.load(f"{D}/{os.environ.get('MODEL', 'model.pt')}"); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
     h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', f"{D}/{os.environ.get('MODEL', 'model.pt')}", flush=True)
@@ -436,12 +469,12 @@ for ep in range(EP):
         for yr, head, sl in ((2022, h22, A22), (2025, h25, A25)):
             ok = (cst <= yr + 1).float(); pred = head(st[yr]); d = d + ok * ((pred - AEF[cidx][:, sl]) ** 2).sum(-1); n_t = n_t + ok
         d = (d / n_t.clamp(min=1)).view(-1, K)
-        wmil = (~VCONV[v]).float()                                         # (G41) plots converted to non-forest before the 2022 mask: no AlphaEarth MIL
+        wmil = (~VCONV[v]).float()                                         # (G41 / G46.7) plots converted to non-forest before the 2022 mask: no AlphaEarth term (MIL, Q, Q-decode)
         mil = (-(torch.logsumexp(-d / TEMP, 1) - math.log(K)) * wmil).sum() / wmil.sum().clamp(min=1) * TEMP
         post = torch.softmax(-d.detach() / TEMP, 1)                                                        # posterior over the sampled candidates
         # remeasurement pairs: flow z(v1) along each candidate's history to v2's year
         has2 = [i for i, vv in enumerate(v.tolist()) if vv in pairs_of]; tgt2 = [pairs_of[v[i].item()][np.random.randint(len(pairs_of[v[i].item()]))] for i in has2]
-        lpair = torch.tensor(0.0); ldecf = torch.tensor(0.0)
+        lpair = torch.tensor(0.0); ldecf = torch.tensor(0.0); lsigf = torch.tensor(0.0); lagef = torch.tensor(0.0)
         if has2:
             v2 = torch.tensor(tgt2); y2 = vyear[v2]; z2 = enc(v2, y2).detach()
             sel = torch.tensor(has2); zz = z[sel].repeat_interleave(K, 0)
@@ -461,12 +494,17 @@ for ep in range(EP):
             lp2, val2 = dec(fz.reshape(-1, D_Z)); tp = slot_p[v2].repeat_interleave(K, 0); tv = slot_v[v2].repeat_interleave(K, 0); tm = slot_vm[v2].repeat_interleave(K, 0) * tp.unsqueeze(-1)
             bce2 = bce(lp2, tp, reduction='none').mean(-1); mse2 = (((val2 - tv) ** 2 * tm).sum((-1, -2)) / tm.sum((-1, -2)).clamp(min=1))
             v2r = v2.repeat_interleave(K); ldecf = ((bce2 + mse2 + W_SUM * summ_err(lp2, val2, v2r) + 0.1 * absent_reg(val2, v2r)).view(len(has2), K) * wph).sum(1).mean()
+            if SIGREG_FLOW:   # (G46.9) the flowed population at the pair end tested against N(0, 1) like the encodings (non-clock dims), weighted by the posterior
+                fzr = fz.reshape(-1, D_Z); lsigf = sigreg(fzr[:, 1:] if AGE_CH else fzr, w=wph.reshape(-1) / len(has2)) * len(has2) ** 0.5
+            if AGE_FLOW:      # (G46.9) decoded age of the flowed state vs v2's observed (decoder form), stocked v2 only, posterior-weighted
+                sk2 = (OBS_B[v2] > 0).float(); ea_ = (((dec_age(lp2, val2) - OBS_AGED[v2r]) / AGE_S) ** 2).view(len(has2), K)
+                lagef = ((ea_ * wph).sum(1) * sk2).sum() / sk2.sum().clamp(min=1)
         else:
             ldecf = torch.tensor(0.0)
         # inverse encoder Q: candidate features → z(2025) (posterior-weighted, stop-gradient)
         tgt = st[2025].detach().view(-1, K, D_Z); qx = torch.cat([AEF[cidx], DIST[cidx].flatten(1), SOIL[cidx]], -1)
         qm, qls = qn(qx); nll = (0.5 * ((tgt.reshape(-1, D_Z) - qm) ** 2 / torch.exp(2 * qls)) + qls).sum(-1).view(-1, K)
-        lq = (nll * post).sum(1).mean() / D_Z
+        lq = ((nll * post).sum(1) * wmil).sum() / wmil.sum().clamp(min=1) / D_Z          # (G46.7: no converted plots)
         # Q's decode: the decoder is FROZEN here (only Q learns from this term) and only visits within QD_WIN yr of 2025 count — Q predicts z(2025), so an
         # older visit's cohorts are out of date and would teach the decoder 'flowed-2025 latent -> younger stand' (audit 2026-10-26 M2)
         lpq, valq = torch.func.functional_call(dec, {k_: p_.detach() for k_, p_ in dec.named_parameters()}, (qm,)); tpq = slot_p[v].repeat_interleave(K, 0); tvq = slot_v[v].repeat_interleave(K, 0); tmq = slot_vm[v].repeat_interleave(K, 0) * tpq.unsqueeze(-1)
@@ -477,12 +515,15 @@ for ep in range(EP):
         fcs_ = torch.floor(cst).unsqueeze(-1) == yrs_
         after = (evy & ((((cst.unsqueeze(-1) <= yrs_ + 0.5) & ~(crs.unsqueeze(-1) & fcs_))) | ((cra & ~crs).unsqueeze(-1) & fcs_))).any(1).view(-1, K)   # = the flow's rule
         pq = post * (~after).float(); okv = pq.sum(1) > 0; pq = pq / pq.sum(1, keepdim=True).clamp(min=1e-12)   # the visit's cohorts describe 2025 only without a later event
-        wy = wy * okv.float(); lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)
+        wy = wy * okv.float() * wmil; lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)   # (G46.7: no converted plots)
         ldec = dec_loss(z, v); zr = z[:, 1:] if AGE_CH else z                          # (the age clock is supervised, not regularised toward N(0, 1))
         lage = ((z[:, 0] - AGE_Z[v]) ** 2).mean() if AGE_CH else torch.tensor(0.0)
         loss = mil + 0.5 * lpair + ldec + 0.5 * ldecf + 1.0 * sigreg(zr) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd + W_AGE * lage
+        if SIGREG_FLOW: loss = loss + 1.0 * lsigf
+        if AGE_FLOW: loss = loss + W_AGE * lagef
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
-        for k_, val in (('mil', mil), ('pair', lpair), ('dec', ldec), ('decflow', ldecf), ('q', lq), ('qdec', lqd)) + ((('age', lage),) if AGE_CH else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
+        for k_, val in (('mil', mil), ('pair', lpair), ('dec', ldec), ('decflow', ldecf), ('q', lq), ('qdec', lqd)) + ((('age', lage),) if AGE_CH else ()) \
+                + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/max(nseen, 1):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
 if SMOKE_B: print('SMOKE_BATCHES: training step ran; no checkpoint, no evaluation', flush=True); sys.exit(0)
 os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
@@ -515,17 +556,18 @@ with torch.no_grad():
     for g_ in gs: sc[g_] = Xtr[:, g_].var(0).sum().sqrt() + 1e-9
     dd = torch.cdist((Xte - mu) / sc, (Xtr - mu) / sc); nn5 = dd.topk(5, largest=False).indices
     o_tr = obs_summ(torch.tensor(tr_last)); k_t = [o_tr[i][nn5].float().median(1).values for i in range(3)] + [None, o_tr[4][nn5].mean(1)]; k_t[3] = k_t[4].argmax(1)
+    def tmed_(x): return torch.quantile(x.float(), 0.5)                  # TRUE median (torch.median returns the lower middle value; G46.15)
     def metrics(mk):
         bare = o_t[0] <= 0; ev = {'n_test_plots': int(mk.sum()), 'n_bare': int((mk & bare).sum()),
-                                  'bare_pred_BA_median_model': float(m_t[1][mk & bare].median()) if (mk & bare).any() else None}
+                                  'bare_pred_BA_median_model': float(tmed_(m_t[1][mk & bare])) if (mk & bare).any() else None}
         mk = mk & ~bare                                                         # log errors and composition on stocked visits (bare visits: no dominant species)
         m_ = [x[mk] for x in m_t]; o_ = [x[mk] for x in o_t]; k_ = [x[mk] for x in k_t]
-        def err(p, o): return float(torch.median(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
+        def err(p, o): return float(tmed_(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
         ev['n_stocked'] = int(mk.sum())
         for i, nm in enumerate(['TPH', 'BA', 'QMD']):
-            nul_ = torch.full_like(o_[i], float(o_tr[i][o_tr[0] > 0].float().median()))       # NULL: median of the stocked training visits
+            nul_ = torch.full_like(o_[i], float(tmed_(o_tr[i][o_tr[0] > 0])))       # NULL: median of the stocked training visits
             ev[nm] = {'model_median_abs_log_err': err(m_[i], o_[i]), 'knn_median_abs_log_err': err(k_[i], o_[i]), 'null_median_abs_log_err': err(nul_, o_[i]),
-                      'model_bias_log': float(torch.median(torch.log((m_[i] + 1e-3) / (o_[i] + 1e-3)))), 'knn_bias_log': float(torch.median(torch.log((k_[i] + 1e-3) / (o_[i] + 1e-3))))}
+                      'model_bias_log': float(tmed_(torch.log((m_[i] + 1e-3) / (o_[i] + 1e-3)))), 'knn_bias_log': float(tmed_(torch.log((k_[i] + 1e-3) / (o_[i] + 1e-3))))}
         def bal_acc(p, o): return float(np.mean([float((p[o == k] == k).float().mean()) for k in torch.unique(o)]))
         def bray(p, o): return float((torch.abs(p - o).sum(1) / 2).mean())
         ev['composition'] = {'bray_curtis_BA_by_species_model': bray(m_[4], o_[4]), 'bray_curtis_knn': bray(k_[4], o_[4]),
