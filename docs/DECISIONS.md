@@ -163,3 +163,48 @@ recommendations, but document the decision point and the different options"). Th
   - the EVK / SPEC evidence classes, windows and likelihood ratios: derived from GA+FL by g09; fire and harvest regimes differ;
   - the dynamics acceptance thresholds;
   - forested shares per size class: PNW / CA need the macroplot tier (16.6 % of live trees at TPA 0.999).
+
+## G29 — Latent collapse onto the encoder bound (r13 B-1, agent)
+- **Evidence:** SIGReg centres z, so the mean is unpenalised. On 4 trained v3 checkpoints, 11–12 of 16 dimensions sit at ±2.99 with sd 0.03–0.3, where tanh's gradient is about 0. The effective rank is 5. Undisturbed flows drift those dimensions off-manifold, and the decoded BA ratio falls to 0.60 at 25 yr. This plausibly explains r3 I1 and r4 B1.
+- **Options:**
+  - (a) **uncentred SIGReg** (test the projections against N(0, 1) including location);
+  - (b) a softer bound;
+  - (c) a VICReg-style variance term;
+  - (d) leave it.
+- **Chosen:** (a), plus pre-registered latent diagnostics reported by g03b and enforced in the g06 acceptance on validation encodings:
+  - no non-clock dimension with |mean| > 2.0;
+  - effective rank (participation ratio) ≥ D_Z / 4.
+- **Switch:** SIGREG_MEAN=1. The new configs set it; older checkpoints stay loadable.
+
+## G30 — Stand-replacing jumps (r13 B-2, agent)
+- **Evidence:** jumps are tanh-bounded at ±1 per dimension per event-year, but stand-replacing pairs need a median max |Δz| of 4.48.
+- **Options:**
+  - (a) **reset-type jumps for every dimension**: z ← z + r ⊙ (z_post − z) + 0.5·tanh(shift), with r = sigmoid(·) per dimension and z_post = 3·tanh(W[ev, soil]), a learned post-disturbance state. This generalises the age-clock reset;
+  - (b) an unbounded jump scale;
+  - (c) leave it.
+- **Chosen:** (a). It is a convex combination, so it stays bounded and can reach any post-disturbance state from anywhere. The r logits are initialised at −2.
+- **Switch:** JUMP_RESET=1.
+
+## G31 — LTC equilibria confined to a box (r13 B-3, agent)
+- **Evidence:** zs = g·a / (1/τ + g) lies between 0 and a(soil). No stationary state is possible outside that box, so every state outside it drifts.
+- **Options:** (a) **a state-dependent attractor**, Aa = A + Am([soil, z]) (bounded by 3·tanh); (b) leave the LTC form.
+- **Chosen:** (a). The equilibria can then sit anywhere, and the exact per-year exponential step still holds with g and A frozen within the year.
+- **Switch:** STATE_ATTR=1.
+- **Also:** ltau is clamped to [−5, 10] (B-5).
+
+## G32 — Mapped composition must be validated (r13 C-1, agent)
+- **Context:** g04 validated the mean-share composition, while g05 maps one medoid draw with Bernoulli presence.
+- **Options:** (a) **move the medoid selection into a shared function and validate it in g04** (Bray-Curtis and dominant-key accuracy, in the cross-fit and the test report); (b) map the mean composition instead.
+- **Chosen:** (a). The cohort tables need one plausible stand.
+
+## G33 — Start-year gate when the 2021 path has no landscape dependence (r13 C-3 / F-7, agent)
+- **Options:** (a) **require dep0 > 0 as well; otherwise the requested year cannot demonstrate dependence and the gate falls back to 2021**; (b) an absolute floor.
+- **Chosen:** (a).
+
+## G34 — LANDFIRE "unknown" as cut evidence in Region 4 (r13 E-F11, agent)
+- **Evidence:** the EVK / SPEC tables (where 'unknown' is accepted for T10–T40) were derived from GA+FL by g09. In KY / TN the 2023 'unknown' class is mostly Low severity and barely moves AlphaEarth (cos 0.965 vs 0.69–0.80 elsewhere).
+- **Options:**
+  - (a) **re-derive the evidence table for Region 4 (g09 per region) before the R4 table build; until it exists, g02b refuses AEF90 / R4 runs that use the GA+FL table**;
+  - (b) drop 'unknown' everywhere;
+  - (c) keep the GA+FL table.
+- **Chosen:** (a). Recorded in the restart run order.
