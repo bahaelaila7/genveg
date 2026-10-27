@@ -16,7 +16,10 @@ gvv_v4_head_1 at 10-27 06:05 had failed on 'fire', committed 06:12; superseded b
 first run, G48.3) and U10r 0.995 (its first run showed lossyear (a) 0.9970: whether 0.995 predates that run cannot be told). The r15 thresholds were
 written before their first runs (2026-10-27 scratch runs), each first-run value noted where it was close.
   T0    0 hits; list unavailable = FAIL {10-26; r14 no fallback 10-27}   a swallowed statement silently changes a stage (5 historical instances); list = the driver's pipeline_scripts()
-  T0h   exact {r15 10-27}              G51.5: the verifier's independent copy of the token-based code hash = common.code_hash on every stage script
+  T0h   exact {r15 10-27}              G51.5: the verifier's independent copies of the token-based code hash / the input fingerprint = common.code_hash on
+                                       every stage script / common.file_fingerprint (size, sha256) on the curated DB and FIADB (a table built from other
+                                       databases than the run reads is labelled stale)
+  T4    g03b accepts the table {r15 10-27}   the exec'd g03b refuses a table built before G51.7 / G51.5: one FAIL line, the model / map checks do not run
   T1a/c exact equality {10-20}         the visit set / order is a deterministic function of FIADB + the curated table (G40 bare / all-bare rules [r13]; G46.1
                                        incomplete visits out [r14]; G51.1 rule widened, G51.2 canonical keys [r15])
   T1r   0 table visits {r14 10-27}     G46.1 / G51.1 [r15]: no table visit with FIADB live tallied trees >= 3 and curated < half, or curated TPA < half of
@@ -68,7 +71,10 @@ written before their first runs (2026-10-27 scratch runs), each first-run value 
   T4g   SIGReg(N) < 0.2 SIGReg(3N) {10-20}   the test statistic must separate a scaled cloud
   T4i   max |freq − prior| < 0.02 {10-20}   19 200 draws: binomial sd <= 0.0036
   T5    < 5 % of dims |t| > 3.5 {10-20}   an unbiased estimator; 3.5 sd keeps the family-wise false alarm low over ~200 dims; every subsampled plot (G52.5 [r15]:
-                                       the r14 restriction to non-constant incl_w, applied to T5 by mistake and not recorded, is T5s's only)
+                                       the r14 restriction to non-constant incl_w, applied to T5 by mistake and not recorded, is T5s's only);
+        mean z^2 < 2 over the constant-weight plots {r15 10-27, set from sampling theory before its first run (sub2: 0.948)}: z = a plot's AlphaEarth-mean
+        error / the sd of a uniform draw of n of its N footprints (sqrt(var / n (1 − n / N))); E z^2 = 1 for a uniform subsample (<= 1 stratified), a
+        spatially clustered one (first-N in key order: 39.9 on sub2) is far above; the signed-mean rule above cannot see it (no common sign across plots)
   T5s   {r13 10-27} aggregate: weighted sum t^2 < unweighted when the latter > df + 3 sqrt(2 df) (decides); per dim report-only {r14 G47.7}; plots with a
         NON-CONSTANT incl_w only {r14 10-27} (constant weights: weighted = unweighted)   E-F5 / E14-8; INFO when none
   T6a-d exact / 2e-3 / err < 1 {10-20; T6c / T6d r13 10-27}   as T3c-e (float16 storage); the stand offset is exact (500 stands)
@@ -379,6 +385,26 @@ def t12_check(G4s, ns_, V, P, FSOK, VS12, conv_pids=frozenset(), sets_out=None):
     return all(res12.values()), (
           f"failing {[k for k, v in res12.items() if not v]}; calibration plots {len(calE)}, MDN fit visits {len(fitG)} (expected {len(fitE)}), gate visits {len(gateG)} (plot halves {nA} / {nB}, "
           f"runs z {zr:.2f}, even-pid share of half A {par:.2f}), pool plots {len(poolP)}; null: {_nul12[1] if _nul12 else 'not run'}")
+def t5_plot(g, pxy, land, land_, AEF, DIST, SOIL, smu, ssd, G2, nsoil, NY, NC, aef90):
+    """T5 / T5s for one plot (its candidate rows g; pxy its plot row with x / y): (inclusion-weighted − full disk, unweighted − full disk) landscape
+    descriptor errors; the full disk = every forest footprint of the 1.6 km disk (g02b.feats, independent of the candidate table). Module level for the
+    planted-defect harness"""
+    import torch
+    cid = g.cid.values; xs = land_(AEF[cid], DIST[cid], SOIL[cid], g.incl_w.values); xu = land_(AEF[cid], DIST[cid], SOIL[cid])
+    r0, c0 = land.index(pxy.x, pxy.y); RP = int(1600 // 30) + 2
+    if aef90: wr0, wc0, hw = 3 * ((r0 - RP) // 3), 3 * ((c0 - RP) // 3), 2 * RP + 7
+    else: wr0, wc0, hw = r0 - RP, c0 - RP, 2 * RP + 1
+    rr, cc, F = G2.feats(wr0, wc0, hw, hw); F = F[np.hypot(rr + wr0 - r0, cc + wc0 - c0) * 30 <= 1600]; F[:, -nsoil:] = (F[:, -nsoil:] - smu) / ssd
+    F = torch.tensor(F); xf = land_(F[:, :128], F[:, 128:128 + NY * (NC + 2)].reshape(-1, NY, NC + 2), F[:, -nsoil:])
+    zq = None             # (G52.5) a CONSTANT-weight (uniform) subsample: its AlphaEarth-mean errors against the sampling sd of a uniform draw of n of the N footprints
+    iw_ = g.incl_w.values.astype(float)
+    if len(cid) > 1 and np.ptp(iw_) <= 1e-6 * iw_.max() and len(F) > len(cid):
+        n_, N_ = len(cid), len(F); v_ = F[:, :128].double().var(0, unbiased=True).numpy() / n_ * (1 - n_ / N_); ok_ = v_ > 1e-12
+        zq = float(np.mean((xs[:128] - xf[:128]).astype(float)[ok_] ** 2 / v_[ok_])) if ok_.any() else None
+    return xs - xf, xu - xf, zq
+def t5_frac(dd_):
+    """share of descriptor dims whose mean signed error across plots is significant (|t| > 3.5; T5's statistic)"""
+    sd_ = dd_.std(0, ddof=1); ok_ = sd_ > 1e-9; t_ = np.abs(dd_.mean(0)[ok_]) / (sd_[ok_] / np.sqrt(len(dd_))); return float((t_ > 3.5).mean())
 def t11h_check(G4h, G5h, ns_):
     """T11h (G46.13) on g04 / g05 sources and the exec'd g03b namespace: (ok, detail); module level for the planted-defect harness"""
     import torch
@@ -427,7 +453,7 @@ def t4x_check(ns_, SRC4, G4x, V, BAtk):
     ok4x = len(b4) >= 8 and all(res4['flagged'][k] == 0.0 for k in ('mil', 'q', 'qdec')) and all(abs(res4['unflagged'][k]) > 0 for k in ('mil', 'q', 'qdec')) and okB4
     return ok4x, (f'{len(b4)} training visits 2024.5+ with BA > 5: terms unflagged {res4.get("unflagged")}, flagged {res4.get("flagged")}; g04 trB: {len(trB4)} visits, planted converted inside {len(trB4 & set(int(x) for x in plB))}')
 # ---------------------------------------------------------------- T4y / T11i (G48.5 interfaces: checkpoint `switches`, g04_plots.parquet)
-T4Y_COMPARED = ('AGE_CH', 'AGE_DELTA', 'AGE_FLOW', 'ARCH', 'BATCH', 'CF16', 'CURRIC', 'DZ', 'EPOCHS', 'JUMP_RESET', 'KC', 'LOC', 'LR', 'MIN_FSHARE', 'PAIR_ALL',
+T4Y_COMPARED = ('AGE_CH', 'AGE_DELTA', 'AGE_FLOW', 'ARCH', 'BATCH', 'CF16', 'CURRIC', 'DEC_AGE', 'DZ', 'EPOCHS', 'JUMP_RESET', 'KC', 'LOC', 'LR', 'MIN_FSHARE', 'PAIR_ALL',
                 'PAIR_ANCHOR', 'PAIR_HMAX', 'QD_WIN', 'SEVERITY_ANCHOR', 'SIGREG_FLOW', 'SIGREG_MEAN', 'SITE_ATTR', 'STATE_ATTR', 'T_PAIR', 'VAL_SPLIT',
                 'W_AGE', 'W_COMP', 'W_SUM')   # training switches: recorded value = configured value (unset = None); a new g03b switch (as G49 AGE_DELTA was) is
 #   an unknown recorded name until it is added here (and to the driver's STAGE_SWITCHES), so T4y FAILs rather than ignore it
@@ -700,11 +726,19 @@ def code_hash(path):
         for k, x in _hash_tokens(open(f_, encoding='utf-8').read()): h_.update(k.encode() + b'\x1f' + x.encode('utf-8') + b'\x1e')
         h_.update(b'\x1d')
     return h_.hexdigest()
+def input_fingerprint(path):
+    """(G51.5) an input file's identity, an independent copy of the stages' definition: size and sha256 of the whole file up to 2 x 64 MiB, else of its
+    first and last 64 MiB (T0h compares it with common.file_fingerprint)"""
+    st_ = os.stat(path); h_ = hashlib.sha256(); ch = 64 * 2 ** 20
+    with open(path, 'rb') as f_:
+        if st_.st_size <= 2 * ch: h_.update(f_.read())
+        else: h_.update(f_.read(ch)); f_.seek(st_.st_size - ch); h_.update(f_.read(ch))
+    return {'size': int(st_.st_size), 'sha256': h_.hexdigest()}
 def recorded_provenance(d_, model=None, dyn_json=None):
     """{stage: {'code_hash', 'g02b_hash', 'build_id'}} recorded with the table and the run outputs: meta.json (g02b), the parquet provenance records of
     g02e / g02g / g02j, the checkpoint (g03b, the MODEL file), bayes_eval.json (g04), the g06 record (dyn_json); None = nothing recorded / no file"""
     out = {}
-    try: m_ = json.load(open(f'{d_}/meta.json')); out['g02b'] = {'code_hash': (m_.get('code_hash') or {}).get('g02b'), 'g02b_hash': None, 'build_id': m_.get('build_id')}
+    try: m_ = json.load(open(f'{d_}/meta.json')); out['g02b'] = {'code_hash': (m_.get('code_hash') or {}).get('g02b'), 'g02b_hash': None, 'build_id': m_.get('build_id'), 'inputs': m_.get('inputs')}
     except Exception: out['g02b'] = None
     import pyarrow.parquet as pq_
     for s_, f_ in PROV_FILE.items():
@@ -723,7 +757,7 @@ def recorded_provenance(d_, model=None, dyn_json=None):
         try: out[s_] = run_rec(json.load(open(f_)), s_) if f_ and os.path.exists(f_) else None
         except Exception: out[s_] = None
     return out
-def provenance_label(sources, rec, cur, outcome=False):
+def provenance_label(sources, rec, cur, outcome=False, inputs=None):
     """the label of a failing check whose inputs the given stages produced (rec: recorded_provenance, cur: current code hashes): `stale` (a stage's code
     changed since it ran, nothing recorded, or it ran on another table instance than meta.json's build_id: rebuild before triage), else `outcome` (checks
     whose failure is a model / data result, G52.6), else `divergent` (current code on this table disagrees with the spec)"""
@@ -734,6 +768,9 @@ def provenance_label(sources, rec, cur, outcome=False):
         if r_ == 'unrecorded': unrec.append(s_); continue
         if r_ is None: why.append(f'{s_}: no output / provenance record'); continue
         if s_ in TABLE_STAGES:
+            if s_ == 'g02b' and isinstance(r_.get('inputs'), dict) and inputs:        # (G51.5) the table was built from the databases the verifier reads
+                why += [f'g02b built the table from another {k_} (fingerprint)' for k_, f_ in inputs.items() if isinstance(r_['inputs'].get(k_), dict)
+                        and (int(r_['inputs'][k_].get('size', -1)) != f_['size'] or r_['inputs'][k_].get('sha256') != f_['sha256'])]
             if r_['code_hash'] is None: why.append(f'{s_}: no code hash recorded (predates G46.6)')
             elif r_['code_hash'] != cur.get(s_): why.append(f'{s_} changed since it ran (G51.5 code hash)')
             if s_ != 'g02b':
@@ -754,7 +791,7 @@ _TB, _TBG = ('g02b', 'g02e'), ('g02b', 'g02e', 'g02g')
 PRODUCERS = {**{k: _TB for k in ('T1a', 'T1b', 'T1c', 'T1d', 'T1e', 'T1f', 'T1g', 'T1h', 'T1i', 'T1j', 'T1k', 'T1l', 'T1m', 'T1n', 'T1o', 'T1q', 'T1r',
                                   'T2a0', 'T2a', 'T2b', 'T2c', 'T3a', 'T3b', 'T3c', 'T3c0', 'T3c2', 'T3c2z', 'T3d', 'T3e', 'T3f', 'T3g', 'T3h', 'T3i', 'T3j', 'T3k',
                                   'T5', 'T5s', 'T7a', 'T7c', 'T8p', 'T8', 'T8e', 'T8f', 'T8g', 'T8c')},
-             **{k: _TBG for k in ('T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T4x', 'T7b', 'T7e', 'T8b', 'T8d', 'T8h', 'T10', 'T11h', 'T12')},
+             **{k: _TBG for k in ('T4', 'T4a', 'T4b', 'T4c', 'T4d', 'T4i', 'T4l', 'T4r', 'T4v', 'T4x', 'T7b', 'T7e', 'T8b', 'T8d', 'T8h', 'T10', 'T11h', 'T12')},
              **{k: _TB + ('g02j',) for k in ('T6a', 'T6b', 'T6c', 'T6d')}, 'T9': _TB + ('g02f',), 'T13': _TB + ('g02c',), 'T14': _TBG + ('g08',),
              'T4y': _TBG + ('g03b',), 'T15': _TBG + ('g03b', 'g06'), 'T11i': _TBG + ('g03b', 'g04'), 'T11d': _TBG + ('g03b', 'g04'),
              'T11c': _TBG + ('g03b', 'g04', 'g05'), **{k: _TBG + ('g03b', 'g04', 'g05') for k in ('T11b', 'T11e', 'T11f')},
@@ -767,13 +804,14 @@ def main(argv=None, force_pairs=(), stop_after=None):
     rng = np.random.default_rng(42); RES = []; ENV0 = env_snapshot()
     _rec0 = recorded_provenance(D, os.environ.get('MODEL') if os.environ.get('GV_REQUIRE_MAP') != '0' else None, os.environ.get('GV_DYN_JSON') if os.environ.get('GV_REQUIRE_MAP') != '0' else None)
     _cur0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}') if os.path.exists(f'{ROOT}/scripts/{f_}') else None) for s_, f_ in SCRIPT_OF.items()}      # (at the start, G51.5)
+    _inp0 = {'curated_db': input_fingerprint(curated_db()), 'fiadb': input_fingerprint(fiadb())}       # (G51.5: the databases this run reads)
     CODE = {f_: open(f'{ROOT}/scripts/{f_}').read() for f_ in ('g03b_train_gafl.py', 'g04_bayes_downscale.py', 'g05_map_stands.py')}    # every exec / scan reads
     # the source as it was at the start (an edit during the run must not mix two versions)
     def check(name, ok, detail='', outcome=None):
         """one result line; a FAIL carries the provenance label (G47.9 / G52.6): outcome=None -> an OUTCOME check's failure is labelled `outcome` when
         current, outcome=False -> it is a code problem (`divergent`)"""
         cid_ = name.split()[0]; oc_ = cid_ in OUTCOME and (outcome is None or bool(outcome))
-        RES.append((name, bool(ok))); lab = '' if ok else f'  [{provenance_label(PRODUCERS.get(cid_, ()), _rec0, _cur0, outcome=oc_)}]'
+        RES.append((name, bool(ok))); lab = '' if ok else f'  [{provenance_label(PRODUCERS.get(cid_, ()), _rec0, _cur0, outcome=oc_, inputs=_inp0)}]'
         print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}{lab}", flush=True)
     def done(tag):                                                        # (test harness: stop after the named block)
         if stop_after == tag:
@@ -789,8 +827,11 @@ def main(argv=None, force_pairs=(), stop_after=None):
     try:
         import common as _cm0; _hd0 = {s_: (code_hash(f'{ROOT}/scripts/{f_}'), _cm0.code_hash(f'{ROOT}/scripts/{f_}')) for s_, f_ in SCRIPT_OF.items()}; _he0 = ''
     except Exception as e_: _hd0, _he0 = {}, f'input missing: common.code_hash ({type(e_).__name__}: {e_}; G51.5)'
-    check('T0h code hash (G51.5): the verifier\'s independent copy = common.code_hash on every stage script', bool(_hd0) and all(a_ == b_ for a_, b_ in _hd0.values()),
-          _he0 or f'{len(_hd0)} scripts; differing {[s_ for s_, (a_, b_) in _hd0.items() if a_ != b_]}')
+    try: _fd0 = {k_: (_inp0[k_], {x_: _cm0.file_fingerprint(p_)[x_] for x_ in ('size', 'sha256')}) for k_, p_ in (('curated_db', curated_db()), ('fiadb', fiadb()))}
+    except Exception as e_: _fd0 = {}; _he0 = _he0 or f'input missing: common.file_fingerprint ({type(e_).__name__}: {e_}; G51.5)'
+    check('T0h code hash and input fingerprint (G51.5): the verifier\'s independent copies = common.code_hash on every stage script / common.file_fingerprint on the databases',
+          bool(_hd0) and all(a_ == b_ for a_, b_ in _hd0.values()) and bool(_fd0) and all(a_ == b_ for a_, b_ in _fd0.values()),
+          _he0 or f'{len(_hd0)} scripts; differing {[s_ for s_, (a_, b_) in _hd0.items() if a_ != b_]}; database fingerprints differing {[k_ for k_, (a_, b_) in _fd0.items() if a_ != b_]}')
     M = json.load(open(f'{D}/meta.json')); from region import region_check; region_check(M); KEYS = M['keys']; YEARS = M['years']; NC = len(M['classes']); NY = len(YEARS)
     # T1q (r13 E-F8): the table's recorded build switches = the configured ones (the driver passes the table config keys TOPK / NCAND / RADIAL_P; absent -> skipped)
     _m8 = {'TOPK': len(KEYS) - 2, 'NCAND': M.get('ncand'), 'RADIAL_P': M.get('radial_p')}; _e8 = {k: os.environ[k] for k in _m8 if os.environ.get(k) not in (None, '')}
@@ -1289,7 +1330,11 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # ======================= T4 model inputs (g03b data tensors) and unit tests of the model pieces
     os.environ.update(DATA=os.environ.get('DATA', 'gafl'), EPOCHS='0', LOAD='0', NT=os.environ.get('NT', '4')); _a = sys.argv; sys.argv = ['g03b']
     SRC = CODE['g03b_train_gafl.py']; SRC = SRC[:SRC.index('TEMP = 0.05')]; ns_ = {'__file__': f'{ROOT}/scripts/g03b_train_gafl.py'}
-    exec(compile(SRC, 'g03b', 'exec'), ns_); sys.argv = _a; import torch
+    try: exec(compile(SRC, 'g03b', 'exec'), ns_)
+    except SystemExit as e_:          # (g03b refuses the table: e.g. built before G51.7 / G51.5; every model check below needs it)
+        sys.argv = _a; check('T4 setup g03b (exec\'d) accepts this table', False, f'refused: {e_}'); nf = sum(1 for _, ok in RES if not ok)
+        print(f'\n{len(RES) - nf} / {len(RES)} checks PASS (the model / map checks did not run)'); sys.exit(1)
+    sys.argv = _a; import torch
     tv = samp.vid.values[:200]
     G4 = CODE['g04_bayes_downscale.py']; exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'), ns_)
     o = ns_['obs_summ'](torch.tensor(tv)); ba_t = pd.Series(o[1].numpy(), index=tv)
@@ -1567,29 +1612,20 @@ def main(argv=None, force_pairs=(), stop_after=None):
     _iw5 = C.groupby('pid').incl_w.agg(['min', 'max']); _sub5a = _iw5.index.values[_iw5['max'].values > 1]                 # every subsampled disk (T5: r13 coverage, G52.5)
     _sub5 = _iw5.index.values[(_iw5['max'].values > 1) & (_iw5['max'].values > _iw5['min'].values * (1 + 1e-6))]   # disks with a NON-CONSTANT inclusion weight (T5s
     # only: r14 G47.7 / E14-8, with a constant one the weighted and unweighted estimates coincide, which dilutes T5s' power)
-    def _desc5(pid):
-        """(weighted − full disk, unweighted − full disk) landscape descriptor errors of one plot"""
-        g = C[C.pid == pid]; cid = g.cid.values
-        xs = land_(AEF[cid], DIST[cid], SOIL[cid], g.incl_w.values); xu = land_(AEF[cid], DIST[cid], SOIL[cid])
-        r0, c0 = land.index(Pi.loc[pid].x, Pi.loc[pid].y); RP = int(1600 // 30) + 2
-        if AEF90: wr0, wc0, hw = 3 * ((r0 - RP) // 3), 3 * ((c0 - RP) // 3), 2 * RP + 7
-        else: wr0, wc0, hw = r0 - RP, c0 - RP, 2 * RP + 1
-        rr, cc, F = G2.feats(wr0, wc0, hw, hw); F = F[np.hypot(rr + wr0 - r0, cc + wc0 - c0) * 30 <= 1600]; F[:, -len(SOILS):] = (F[:, -len(SOILS):] - smu) / ssd
-        F = torch.tensor(F); xf = land_(F[:, :128], F[:, 128:128 + NY * (NC + 2)].reshape(-1, NY, NC + 2), F[:, -len(SOILS):])
-        return xs - xf, xu - xf
+    def _desc5(pid): return t5_plot(C[C.pid == pid], Pi.loc[pid], land, land_, AEF, DIST, SOIL, smu, ssd, G2, len(SOILS), NY, NC, AEF90)
     _d5 = {}
     for pid in np.random.default_rng(51).choice(_sub5a, min(60, len(_sub5a)), replace=False) if len(_sub5a) else []:   # (random subsampled plots: r13 E-F5)
         _d5[pid] = _desc5(pid)
     dW = np.array([_d5[p_][0] for p_ in _d5]); dU = np.array([_d5[p_][1] for p_ in _d5]); _nc5 = len(set(_d5) & set(_sub5))
+    _zq5 = [_d5[p_][2] for p_ in _d5 if _d5[p_][2] is not None]; Q5 = float(np.mean(_zq5)) if _zq5 else float('nan')     # (uniform-subsample dispersion, G52.5)
     for pid in np.random.default_rng(52).choice(_sub5, min(60, len(_sub5)), replace=False) if len(_sub5) else []:     # T5s: 60 random non-constant plots
         if pid not in _d5: _d5[pid] = _desc5(pid)
     _p5s = [p_ for p_ in _d5 if p_ in set(_sub5)]; dWs = np.array([_d5[p_][0] for p_ in _p5s]); dUs = np.array([_d5[p_][1] for p_ in _p5s])
-    def frac_sig(dd_):                                         # share of descriptor dims whose mean signed error across plots is significant (|t| > 3.5)
-        sd_ = dd_.std(0, ddof=1); ok_ = sd_ > 1e-9; t_ = np.abs(dd_.mean(0)[ok_]) / (sd_[ok_] / np.sqrt(len(dd_))); return float((t_ > 3.5).mean())
-    fw, fu = frac_sig(dW), frac_sig(dU)
-    check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk landscape (signed errors across every kind of subsampled plot, G52.5; unweighted shown for power)',
-          len(dW) >= 10 and fw < 0.05, f'{len(dW)} random subsampled plots ({_nc5} with a non-constant incl_w): dims with significant bias — weighted {fw:.3f}, unweighted {fu:.3f}; '
-          f'mean |Δ| weighted {np.abs(dW).mean():.4f}, unweighted {np.abs(dU).mean():.4f}')
+    fw, fu = (t5_frac(dW), t5_frac(dU)) if len(dW) >= 2 else (float('nan'), float('nan'))
+    check('T5 inclusion-weighted landscape is an UNBIASED estimate of the full-disk landscape (signed errors across every kind of subsampled plot, G52.5; unweighted shown for power); '
+          'constant-weight subsamples disperse as uniform draws (mean z^2 of the AlphaEarth means < 2)',
+          len(dW) >= 10 and fw < 0.05 and (not _zq5 or Q5 < 2.0), f'{len(dW)} random subsampled plots ({_nc5} with a non-constant incl_w): dims with significant bias — weighted {fw:.3f}, '
+          f'unweighted {fu:.3f}; mean |Δ| weighted {np.abs(dW).mean():.4f}, unweighted {np.abs(dU).mean():.4f}; {len(_zq5)} constant-weight plots: mean z^2 {Q5:.3f}')
     dW, dU = dWs, dUs                                          # (T5s below: the non-constant-weight plots)
     # T5s self-test of T5's power (r13 E-F5): the same statistic with the inclusion weights DROPPED. Where the unweighted estimate deviates materially from the
     # full disk, the weighted one must be closer. The aggregate rule decides (r14 G47.7); the per-dim rule (|mean signed error| <= 0.5 x the unweighted one on
