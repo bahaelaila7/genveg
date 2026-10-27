@@ -5,23 +5,23 @@ inputs:                         # FIA databases (read-only; relative to WORKSPAC
   curated_db: landis_region4/data_r4/slim_r4_v2.duckdb   # the curation-fix rebuild (FIA_DATA_PREP branch curation-fix); missing until it is built
   fiadb: FIA/FIASQLITE2PGSQL/FIADB.duckdb
 stands_run: gafl_pilot          # stand-delineation run: the MAPPED stands (Baker County); the candidates' forest mask is data/r4/land.tif (AEF90)
-env:                            # region switches, passed to every stage
+env:                            # region switches (only here), passed to every stage
   REGION: '1,12,13,21,28,37,45,47'
   AEF90: 1                      # Region 4 rasters: AlphaEarth footprint means + soils at 90 m (r4_aef90.py, r4_rasters.py), 90 m-aligned footprints
-  CF16: 1                       # g03b: candidate features kept float16 in memory (~4 M candidates)
 table:                          # g02b_build_gafl: visits, cohort tokens, footprint candidates + location prior (the long stage)
   NCAND: 128                    # candidate footprints kept per plot (stratified, inclusion-weighted; 256 for GA+FL — halved for ~3.5x the plots)
   TOPK: 24                      # species keys (top-K, else _S / _H; 16 for GA+FL — Region 4 is more diverse)
   NPROC: 6
   RADIAL_P: 0.9                 # location prior: share of the mass within 0.5 mile (FIA perturbation; audit F7)
-  EVK_REGION_OK: 0              # 1 only once the Region 4 FIA-record evidence table has been re-derived (g09 per region; docs/DECISIONS.md G34) — g02b refuses until then
+  # (no EVK_REGION_OK: g02b refuses Region 4 until g02b.EVK_TABLES has its entry, re-derived by g09 per region; docs/DECISIONS.md G34 / G46.4)
 train:                          # g03b_train_gafl (the same env is passed to g04 / g05 / g06, which load the model through g03b); NT 1: on the shared 8-core box (campaign + AEF90) 1 torch thread beat 2 and 4 (spin-wait contention)
   seeds: [0, 1]
   model_prefix: m_r4            # writes <data>/<model_prefix>_s<seed>.pt
   env: {ARCH: v4, EPOCHS: 14, CURRIC: 4, NT: 1, BATCH: 64, DZ: 32, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
         W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5,
         SITE_ATTR: 1, PAIR_ALL: 1, PAIR_HMAX: 25, AGE_CH: 1, W_AGE: 1.0, VAL_SPLIT: 1,   # dynamics (audit r3 I1, r4 I4): site attractor, multi-horizon pairs, age clock
-        SIGREG_MEAN: 1, JUMP_RESET: 1, STATE_ATTR: 1}   # latent / dynamics fixes (r13; docs/DECISIONS.md G29 uncentred SIGReg, G30 reset-type jumps, G31 state-dependent attractor)
+        SIGREG_MEAN: 1, SIGREG_FLOW: 1, AGE_FLOW: 1, JUMP_RESET: 1, STATE_ATTR: 1,   # latent / dynamics fixes (r13; docs/DECISIONS.md G29 uncentred SIGReg, G30 reset-type jumps, G31 state-dependent attractor, G46.9 SIGREG_FLOW / AGE_FLOW)
+        CF16: 1}                # g03b: candidate features kept float16 in memory (~4 M candidates; G45.9: a train switch, not a region switch)
 model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
 dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
   eval_loc: [history]
@@ -33,7 +33,7 @@ map:                            # g05_map_stands: stand vegetation; one output p
   env: {NT: 1}
 fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
   area: data/derived/baker_county.gpkg
-  geojson: standmap/data/proto/r4_v4/baker_fl.geojson       # relative to WORKSPACE (NOT the live FE layer until reviewed)
+  geojson: data/proto/r4_v4/baker_fl.geojson       # relative to the checkout (NOT the live FE layer until reviewed)
   tag: r4 v4 90m (pipeline)
 verify:
   n: 300                        # gv_verify sample size

@@ -16,7 +16,7 @@ train:                          # g03b_train_gafl (the same env is passed to g04
   env: {ARCH: v3, EPOCHS: 14, CURRIC: 4, NT: 1, BATCH: 64, DZ: 16, KC: 48, LR: 0.001, LOC: history, PAIR_ANCHOR: both, SEVERITY_ANCHOR: 1,
         W_COMP: 1.0, W_SUM: 1.0, MIN_FSHARE: 0.25, T_PAIR: 0.1, QD_WIN: 1.5,
         SITE_ATTR: 1, PAIR_ALL: 1, PAIR_HMAX: 25, AGE_CH: 1, W_AGE: 1.0, VAL_SPLIT: 1,   # dynamics (audit r3 I1, r4 I4): site attractor, multi-horizon pairs, age clock
-        SIGREG_MEAN: 1, JUMP_RESET: 1, STATE_ATTR: 1}   # latent / dynamics fixes (r13; docs/DECISIONS.md G29 uncentred SIGReg, G30 reset-type jumps, G31 state-dependent attractor)
+        SIGREG_MEAN: 1, SIGREG_FLOW: 1, AGE_FLOW: 1, JUMP_RESET: 1, STATE_ATTR: 1}   # latent / dynamics fixes (r13; docs/DECISIONS.md G29 uncentred SIGReg, G30 reset-type jumps, G31 state-dependent attractor, G46.9 SIGREG_FLOW / AGE_FLOW)
 model_seed: 0                   # the trained model used downstream (copied to <data>/model.pt for the tools that read the default)
 dynamics:                       # g06_dynamics_check: held-out disturbance-response test of every trained seed
   eval_loc: [history]
@@ -28,7 +28,7 @@ map:                            # g05_map_stands: stand vegetation; one output p
   env: {NT: 1}
 fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
   area: data/derived/baker_county.gpkg
-  geojson: standmap/data/proto/gafl_v3b/baker_fl.geojson     # relative to WORKSPACE (NOT the live FE layer until v4 is reviewed)
+  geojson: data/proto/gafl_v3b/baker_fl.geojson     # relative to the checkout (NOT the live FE layer until v4 is reviewed)
   tag: v3b (pipeline)
 verify:
   n: 300                        # gv_verify sample size

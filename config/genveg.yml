@@ -23,7 +23,7 @@ map:                            # g05_map_stands: stand vegetation; one output p
   env: {NT: 7}
 fe:                             # 24_export_fe (stands of stands_run clipped to the area) + g07_fe_attach (GEN_* properties) — writes a file the host FE serves
   area: data/derived/baker_county.gpkg
-  geojson: fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson     # relative to WORKSPACE
+  geojson: ../fe_pan/apps/forest-explorer/public/stands/baker_fl.geojson  # relative to the checkout (the live FE layer)
   tag: v3 (pipeline)
 verify:
   n: 300                        # gv_verify sample size
