@@ -169,6 +169,22 @@ with torch.no_grad():
     err = lambda p, o: float(tmed(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
     bias = lambda p, o: float(tmed(torch.log((p + 1e-3) / (o + 1e-3))))
     bray = lambda p, o: float((torch.abs(p - o).sum(1) / 2).mean())
+    # per-plot dumps (G48.5 / gv_verify T11i): one row per (kind, start year, replicate, half, visit), enough to recompute CAL / CALF, the validation and
+    # test errors, the null / kNN baselines and map_accept independently. g04_plots.parquet columns: kind ('A_cal' | 'cf_fit' | 'score' | 'baseline'),
+    # set, y0, rep, half, pid, vid, stocked; obs_{TPH,BA,QMD} and obs_log_* = log(obs + 1e-3); pred_* = the UNCALIBRATED true median of the draws (lmed)
+    # and pred_log_* = log(pred); cf_* = the log factors applied (score rows); bray_medoid / dom_hit_medoid (score rows); null_* / knn_* and bray_null /
+    # bray_knn / dom_hit_knn (baseline rows)
+    PLOT_ROWS = []
+    def dump_rows(kind, set_, y0, rep_, half, vs, obs, pred=None, cf=None, extra=None):
+        for j_, v in enumerate(vs):
+            r_ = dict(kind=kind, set=set_, y0=float(y0), rep=int(rep_), half=half, pid=int(vpid[v]), vid=int(v), stocked=bool(obs[0][j_] > 0))
+            for i, k in enumerate(('TPH', 'BA', 'QMD')):
+                r_[f'obs_{k}'] = float(obs[i][j_]); r_[f'obs_log_{k}'] = math.log(float(obs[i][j_]) + 1e-3)
+                if pred is not None: r_[f'pred_{k}'] = float(pred[i][j_]); r_[f'pred_log_{k}'] = math.log(float(pred[i][j_]))
+                if cf is not None: r_[f'cf_{k}'] = float(cf[i])
+            for k, x in (extra or {}).items(): r_[k] = float(x[j_])
+            PLOT_ROWS.append(r_)
+    dump_rows('A_cal', 'validation' if VAL_SPLIT else 'calibration', float('nan'), -1, '', trs_v, o_ts, [lmed(St[i].view(len(trs_v), MS)) for i in range(3)])
     ev['calibration_log_factors_TPH_BA_QMD'] = CAL
     sk = o_te[0] > 0                                                                 # stocked visits (bare visits: no composition; reported separately)
     p_trl = np.array([vpid[v] for v in tr_l])
@@ -247,11 +263,13 @@ with torch.no_grad():
     cal_m = rec(trs_v); te_m = rec(te_l)
     if cal_m and te_m:
         ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0; FB_SET = 'test_2022_2025'; nm_ = null_pred(vyear[te_m])
-        def fit_cf(y0, cal):
-            """the mapping-path calibration log-factors (TPH, BA, QMD) fitted on the visits cal: true median of log(observed / median draw), stocked visits"""
+        def fit_cf(y0, cal, tag=None):
+            """the mapping-path calibration log-factors (TPH, BA, QMD) fitted on the visits cal: true median of log(observed / median draw), stocked visits.
+            tag (set, replicate, half): the fit's rows go to the per-plot dump"""
             occ = obs_summ(torch.tensor(cal)); skc_ = occ[0] > 0; pc = map_path(cal, y0)
+            if tag: dump_rows('cf_fit', tag[0], y0, tag[1], tag[2], cal, occ, [torch.stack([r[i] for r in pc]) for i in range(3)])
             return [float(tmed(torch.log((occ[i][skc_] + 1e-3) / torch.stack([r[i] for r in pc])[skc_]))) for i in range(3)]
-        def score(y0, CF, te):
+        def score(y0, CF, te, tag=None):
             """the mapped estimator at the visits te with factors CF: per-visit draws, calibrated predictions, and its metrics (stocked: median |log err|,
             medoid Bray / dominant key; report-only: medoid age-class Wasserstein (G46.19); bare visits: the predicted BA)"""
             ott = obs_summ(torch.tensor(te)); skt_ = ott[0] > 0; pt = map_path(te, y0)
@@ -259,20 +277,22 @@ with torch.no_grad():
             P_[2] = torch.where(P_[0] > 0, 100 * torch.sqrt(P_[1] / (P_[0] * math.pi / 4).clamp(min=1e-9)), torch.zeros_like(P_[0]))   # QMD as g05 maps it:
             # from the calibrated TPH / BA (GEN_QMD), not the samples' median QMD x its own factor (audit r8 M6)
             Cmd = torch.stack([r[4] for r in pt]); dmd = torch.tensor([r[5] for r in pt]); oaN, oaB = obs_age(torch.tensor(te))
+            if tag: dump_rows('score', tag[0], y0, tag[1], tag[2], te, ott, [torch.stack([r[i] for r in pt]) for i in range(3)], CF,
+                              {'bray_medoid': torch.abs(Cmd - ott[4]).sum(1) / 2, 'dom_hit_medoid': (dmd == ott[3]).float()})
             aN_, aB_ = torch.stack([r[6] for r in pt]), torch.stack([r[7] for r in pt])
             met = {**{nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
                    'bray_medoid': bray(Cmd[skt_], ott[4][skt_]), 'dominant_acc_medoid': float((dmd[skt_] == ott[3][skt_]).float().mean()),
                    'age_w1_tph_yr': float(tmed(w1_age(aN_[skt_], oaN[skt_]))), 'age_w1_ba_yr': float(tmed(w1_age(aB_[skt_], oaB[skt_]))),
                    'n_bare': int((~skt_).sum()), 'bare_pred_BA_median': float(tmed(P_[1][~skt_])) if (~skt_).any() else None}
             return pt, P_, met
-        def evaluate(y0, cal, te):
-            CF = fit_cf(y0, cal); pt, P_, met = score(y0, CF, te); return CF, pt, P_, met
+        def evaluate(y0, cal, te, tags=(None, None)):
+            CF = fit_cf(y0, cal, tags[0]); pt, P_, met = score(y0, CF, te, tags[1]); return CF, pt, P_, met
         _cp = sorted(set(vpid[cal_m])); _hp = set(np.random.default_rng(34).permutation(_cp)[:len(_cp) // 2])     # random plot halves (r13 C-8: not pid parity)
         hA = [v for v in cal_m if vpid[v] in _hp]; hB = [v for v in cal_m if vpid[v] not in _hp]
-        HALVES = ((hA, hB), (hB, hA))                                                     # each half judged with factors from the other
+        HALVES = ((hA, hB), (hB, hA))                                                     # each half judged with factors from the other (dump: half 'A' = hA, 'B' = hB)
         XF = {}                                                                           # (y0, replicate) -> the two halves' cross-fitted (CF, draws, P, metrics)
         def crossfit(y0, r_):
-            if (y0, r_) not in XF: XF[(y0, r_)] = [evaluate(y0, ca, cb) for ca, cb in HALVES]
+            if (y0, r_) not in XF: XF[(y0, r_)] = [evaluate(y0, ca, cb, (('validation', r_, 'AB'[h_]), ('validation', r_, 'BA'[h_]))) for h_, (ca, cb) in enumerate(HALVES)]
             return XF[(y0, r_)]
         def derange(n, rng_):
             """a uniformly random derangement of range(n) (no visit keeps its own landscape; rejection sampling); n < 2: the identity"""
@@ -331,9 +351,9 @@ with torch.no_grad():
                          'per_replicate': reps, 'passed': bool(ok), 'fail_reasons': why})
         y0u = MAP_Y0 if gate.get('passed') else 2021.0
         # the mapping calibration factors g05 applies (CALF): the mean of R_REP replicate fits on all calibration plots (G46.11); per path, for the report
-        CFr = {y0: [fit_cf(y0, cal_m) for _ in range(R_REP)] for y0 in sorted({2021.0, MAP_Y0})}
+        CFr = {y0: [fit_cf(y0, cal_m, ('validation', r_, 'all')) for r_ in range(R_REP)] for y0 in sorted({2021.0, MAP_Y0})}
         CFm = {y0: [float(np.mean([c[i] for c in CFr[y0]])) for i in range(3)] for y0 in CFr}
-        res = {y0: score(y0, CFm[y0], te_m) for y0 in CFr}                               # held-out (test) scores: reported, never used for a decision
+        res = {y0: score(y0, CFm[y0], te_m, ('test', -1, 'test')) for y0 in CFr}          # held-out (test) scores: reported, never used for a decision
         if MAP_Y0 != 2021.0: gate.update({'heldout_err_2021': res[2021.0][2], 'heldout_err_requested': res[MAP_Y0][2]})
         CALF = CFm[y0u]; pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
@@ -350,6 +370,9 @@ with torch.no_grad():
             for i, k in enumerate(('TPH', 'BA', 'QMD')): nv_[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2; kv_[k] += err(knv[i][sk_], ob_[i][sk_]) / 2
             nv_['bray'] += bray(NULL_COMP.expand(int(sk_.sum()), -1), ob_[4][sk_]) / 2; kv_['bray'] += bray(kcv[sk_], ob_[4][sk_]) / 2
             kv_['dominant_acc'] += float((kcv[sk_].argmax(1) == ob_[3][sk_]).float().mean()) / 2
+            dump_rows('baseline', 'validation', float('nan'), -1, 'BA'[HALVES.index((ca, cb))], cb, ob_, extra={**{f'null_{k}': nmb[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
+                      **{f'knn_{k}': knv[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ob_[4]).sum(1) / 2,
+                      'bray_knn': torch.abs(kcv - ob_[4]).sum(1) / 2, 'dom_hit_knn': (kcv.argmax(1) == ob_[3]).float()})
         ev['mapping_path_validation_crossfit'] = {'map_y0': y0u, 'n': len(cal_m), 'replicates': R_REP, 'set': 'validation plots' if VAL_SPLIT else 'calibration blocks (training)',
                                                   'median_abs_log_err': {k: xv_[k][0] for k in ('TPH', 'BA', 'QMD')}, 'composition': {k: xv_[k][0] for k in ('bray_medoid', 'dominant_acc_medoid')},
                                                   'sd': {k: xv_[k][1] for k in mk_}, 'null': nv_, 'knn': kv_,
@@ -366,6 +389,9 @@ with torch.no_grad():
         ev['visit_date_vs_end2025_validation'] = {'n': len(cal_m), 'median_years_to_end2025': float(np.median([2026.0 - float(vyear[v]) for v in cal_m])),
                                                   **{f'median_log_shift_{k}': float(tmed(torch.log(torch.stack([r[i] for r in pe_]) / torch.stack([r[i] for r in pv_])))) for i, k in ((0, 'TPH'), (1, 'BA'))}}
         FB_SET = 'test_2022_2025'; nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]
+        dump_rows('baseline', 'test', float('nan'), -1, 'test', te_m, ot, extra={**{f'null_{k}': nm_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
+                  **{f'knn_{k}': km_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ot[4]).sum(1) / 2,
+                  'bray_knn': torch.abs(o_tr[4][nnm].mean(1) - ot[4]).sum(1) / 2, 'dom_hit_knn': (o_tr[4][nnm].mean(1).argmax(1) == ot[3]).float()})
         ev['calibration_log_factors_mapping_path'] = CALF
         ev['calibration_log_factors_mapping_path_replicates'] = {'per_replicate': CFr[y0u], 'sd': [float(np.std([c[i] for c in CFr[y0u]])) for i in range(3)]}
         ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,
@@ -376,4 +402,5 @@ with torch.no_grad():
             'report_only': {k: res[y0u][2][k] for k in ('age_w1_tph_yr', 'age_w1_ba_yr', 'n_bare', 'bare_pred_BA_median')}}
     else: ev['map_accept'] = False; ev['map_accept_reasons'] = ['no calibration or held-out visits 2022-2025: the mapping path cannot be validated']
 ev['baseline_fallbacks'] = FALLBACK
+pd.DataFrame(PLOT_ROWS).to_parquet(f'{D}/g04_plots.parquet'); ev['plot_dump'] = 'g04_plots.parquet'      # (G48.5; T11i)
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/bayes_eval.json', 'w'), indent=1)

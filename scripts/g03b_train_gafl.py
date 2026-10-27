@@ -526,7 +526,21 @@ for ep in range(EP):
                 + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/max(nseen, 1):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
 if SMOKE_B: print('SMOKE_BATCHES: training step ran; no checkpoint, no evaluation', flush=True); sys.exit(0)
-os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict()), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
+# the training switches (every stage switch g03b reads, its string value; None = unset) recorded in the checkpoint: the loss-only switches leave no
+# trace in the weights (G48.5 / gv_verify T4y). Older checkpoints without the key still load (only enc / flow / dec / q / h22 / h25 are read)
+SWITCHES = {'AGE_CH': os.environ.get('AGE_CH'), 'AGE_FLOW': os.environ.get('AGE_FLOW'), 'ARCH': os.environ.get('ARCH'),
+            'BATCH': os.environ.get('BATCH'), 'CF16': os.environ.get('CF16'), 'CURRIC': os.environ.get('CURRIC'), 'DATA': os.environ.get('DATA'),
+            'DZ': os.environ.get('DZ'), 'EPOCHS': os.environ.get('EPOCHS'), 'JUMP_RESET': os.environ.get('JUMP_RESET'), 'KC': os.environ.get('KC'),
+            'LOAD': os.environ.get('LOAD'), 'LOC': os.environ.get('LOC'), 'LR': os.environ.get('LR'), 'MIN_FSHARE': os.environ.get('MIN_FSHARE'),
+            'MODEL': os.environ.get('MODEL'), 'NT': os.environ.get('NT'), 'PAIR_ALL': os.environ.get('PAIR_ALL'),
+            'PAIR_ANCHOR': os.environ.get('PAIR_ANCHOR'), 'PAIR_HMAX': os.environ.get('PAIR_HMAX'), 'QD_WIN': os.environ.get('QD_WIN'),
+            'SEED': os.environ.get('SEED'), 'SEVERITY_ANCHOR': os.environ.get('SEVERITY_ANCHOR'), 'SIGREG_FLOW': os.environ.get('SIGREG_FLOW'),
+            'SIGREG_MEAN': os.environ.get('SIGREG_MEAN'), 'SITE_ATTR': os.environ.get('SITE_ATTR'), 'SMOKE_BATCHES': os.environ.get('SMOKE_BATCHES'),
+            'STAND_DIAG': os.environ.get('STAND_DIAG'), 'STATE_ATTR': os.environ.get('STATE_ATTR'), 'T_PAIR': os.environ.get('T_PAIR'),
+            'VAL_SPLIT': os.environ.get('VAL_SPLIT'), 'W_AGE': os.environ.get('W_AGE'), 'W_COMP': os.environ.get('W_COMP'),
+            'W_SUM': os.environ.get('W_SUM')}
+os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict(),
+                                                switches=SWITCHES), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
 # ---------------- evaluation on held-out plots (last visit of each plot): vegetation summaries from satellite features
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), the dominant key, BA shares by key — EXPECTED values (slot density × calibrated presence probability)."""

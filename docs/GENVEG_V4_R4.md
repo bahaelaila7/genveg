@@ -373,3 +373,45 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
       per yr) and records `pair_dump`, `bins_required`, `n_min` and `fail_reasons`.
 * **Documented residuals (G46.20).** The X_L standardisation, k-means and soil statistics use all plots (no labels). USE_B = 1 is mismatched
   and not validated (g05 docstring). The 2026-visit clamp is negligible.
+* **Interfaces for the verifier (G48.5).**
+  - Checkpoints carry `switches`: every stage switch g03b reads → its string value (None = unset). Older checkpoints without the key still load.
+  - g04 writes `g04_plots.parquet` (`bayes_eval.json` `plot_dump`), one row per (kind, y0, rep, half, visit):
+    - kinds: `A_cal` (the CAL fit), `cf_fit` (a factor fit: half A / B = a cross-fit half, `all` = a CALF replicate), `score` (a judged half, or
+      `test`), `baseline` (null / kNN on the validation halves and on test);
+    - columns: set, y0, rep, half, pid, vid, stocked, obs_* / obs_log_* (log(obs + 1e-3)), pred_* / pred_log_* (the uncalibrated true median of the
+      draws), cf_* (the factors applied), bray_medoid, dom_hit_medoid, null_*, knn_*, bray_null, bray_knn, dom_hit_knn (* = TPH, BA, QMD);
+    - CAL, CALF, the validation errors and Bray, the null and map_accept are recomputed from it exactly (smoke subset).
+* **SIGREG_FLOW / AGE_FLOW evidence (G46.9; B's 1200-step harness on its 1600-plot subset, NT 2).** Three runs:
+  - B ON: B's r13-ON checkpoint, re-probed with the current code;
+  - ctl: the current code with the r13 switches on and the two flow switches off;
+  - flow: the same with SIGREG_FLOW = AGE_FLOW = 1.
+
+  g06 is the current g06 throughout (validation bins (0, 8) / (8, 15) / (15, 99), n 221 / 115 / 54).
+
+  | (val unless noted) | B ON | ctl | flow |
+  |---|---|---|---|
+  | latent max \|mean\| / min sd / share \|z\| > 2.9 / eff. rank | 0.57 / 0.77 / 0.03 % / 5.86 | 0.34 / 0.63 / 0.1 % / 6.27 | 0.43 / 0.78 / 0.05 % / 6.82 |
+  | stand-replacing: closest one-event-year RMS / its BA ratio | 0.35 / 0.003 | 0.44 / 0.002 | 0.39 / 0.004 |
+  | stand-replacing: trained jump BA ratio / posterior-weighted flow BA ratio | 0.083 / 0.073 | 0.034 / 0.051 | 0.014 / 0.047 |
+  | g06 synthetic clear-cut / fire (ratio to none) | 0.004 / 0.92 | 0.005 / 0.92 | 0.008 / 0.82 |
+  | undisturbed-like pairs: NN ratio flowed (z1 encoded) | 1.25 (1.32) | 1.36 (1.25) | 1.50 (1.47) |
+  | 25-yr no-event flow: NN ratio (encoded z1) | 1.15 (1.32) | 1.41 (1.25) | 1.49 (1.47) |
+  | 25-yr no-event flow: latent variance retained / eff. rank | 12 % / 2.18 | 10 % / 2.50 | 32 % / 3.21 |
+  | 25-yr no-event flow: BA log change / yr | +0.0014 | −0.0010 | +0.0059 |
+  | g06 BA log change / yr by bin (obs +0.022 / +0.014 / +0.013) | +0.001 / +0.000 / +0.003 | +0.000 / −0.002 / −0.002 | +0.009 / +0.007 / +0.007 |
+  | g06 decoded age per yr ÷ observed, by bin | 0.43 / 0.52 / 0.61 | 0.39 / 0.49 / 0.66 | 0.39 / 0.45 / 0.59 |
+  | decoded age bias at v1 / at the flowed v2 (yr) | +4.3 / +1.7 | +5.1 / +2.3 | +2.9 / +0.2 |
+  | composition, undisturbed pairs ≥ 10 yr: Bray / dominant kept (obs 0.094 / 0.82) | 0.137 / 0.76 | 0.147 / 0.82 | 0.139 / 0.79 |
+  | composition, 25-yr no-event flow: Bray / dominant kept | 0.335 / 0.59 | 0.375 / 0.56 | 0.281 / 0.66 |
+  | g06 acceptance | fail (BA ×3, age ×3) | fail (BA ×3, age ×3) | fail (BA 0–8, age ×3) |
+
+  **The pre-registered acceptance is not met, so the switches are not forced.**
+  - Improved: latent-variance retention (×2.7), BA growth (two of three bins now within ±0.01), the decoded age level, and the long-flow
+    composition.
+  - Not improved:
+    - the decoded age RATE (0.4–0.6×; the flowed age level is unbiased now, but the decoded ages remain compressed, so the age change lags);
+    - the pair-level composition Bray;
+    - the NN ratio, which rose with the retained spread to the encoded baseline (B ON's low value reflects contraction toward dense regions).
+  - Small regressions: the synthetic fire ratio 0.92 → 0.82 and clear-cut 0.004 → 0.008.
+
+  A change-based age loss (decoded Δage vs observed Δage) would target the rate; that is not in G46.9. Decision for the coordinator.
