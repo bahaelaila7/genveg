@@ -22,7 +22,7 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T1k   <= 1 % of bare visits          pre-registered r7: a bare table visit with live FIADB trees is a false clear-cut target
   T1l   median 1 ± 0.02, < 2 % < 0.9   G14 (pre-registered r9): expansion factors identical by construction, residual should be ~0
   T1m   <= 2 % absent [r13]            A-8: FIADB live-tree plots in the curated L3 scope missing from the table bias the training population
-  T1n   exact [r13; rule r14 G46.3]    plot_converted: the last FIADB visit dated <= 2022 is non-forest (non-forest land / water, no forest) after a forested one
+  T1n   exact [r13; rule r14 G46.3 / G48.2]   plot_converted: the last SAMPLED FIADB visit dated <= 2022 is non-forest (non-forest land / water, no forest) after a forested one
   T1q   exact [r13]                    E-F8: the table must be built with the configured TOPK / NCAND / RADIAL_P
   T2a0  > 99.9 % keys within 0.2 km    annual-inventory coordinates of one plot key are one location
   T2a/b allclose (1e-3 m)              deterministic transforms
@@ -38,7 +38,7 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T3j   exact [r13]                    g02e fia_negs = the FIA-protocol periods of the spec (G36 evidence end, G37 NONBLOCK, G39 lookback)
   T3h   all monotone, >= 10 plots [r13]  hi is a threshold; fewer than 10 plots with both classes is vacuous
   T3i   per state, year cells n >= 30 [r13]; post max < pre min and < clean − 0.05   time-axis alignment; pooled states hid KY / TN (G34)
-        [r14 G47.2] per evidence class of the REGION's table: the classes every detectable treatment row (lr >= 4) accepts are judged, the others INFO
+        [r14 G47.2 / G48.1, set after seeing data] per detectable row (lr >= 4) of the REGION's table on its POOLED compatible classes; every class INFO
   T3k   exact [r14]                    G47.2: the verifier has its own evidence table for the region (else FAIL) and it equals meta.json evk (classes, window, lr per kind)
   T4a-c rtol 1e-4                      float32 model tensors
   T4d   >= 3200 m; VAL_SPLIT -> val non-empty [r13]   two 1.6 km disks cannot overlap
@@ -506,15 +506,15 @@ def main(argv=None, force_pairs=(), stop_after=None):
     _ab1 = _lp1.merge(V[key].drop_duplicates().assign(_t=1), on=key, how='left'); _ab1 = _ab1[_ab1._t.isna()]
     check('T1m FIADB plots with live trees (region, curated L3 scope) absent from the table entirely <= 2 %', len(_lp1) > 0 and len(_ab1) / len(_lp1) <= 0.02,
           f'{len(_ab1)} of {len(_lp1)} plots absent ({len(_ab1) / max(len(_lp1), 1):.3f}); by state {_ab1.st.value_counts().to_dict()}')
-    # T1n (G41, refined G46.3) visits.plot_converted = the plot's LAST FIADB visit dated <= 2022 (the forest-mask year) is non-forest — no forested
+    # T1n (G41, refined G46.3 / G48.2) visits.plot_converted = the plot's LAST SAMPLED FIADB visit (a condition of status 1-4) dated <= 2022 (the mask year) is non-forest — no forested
     # condition and >= 1 condition of non-forest land or water (COND_STATUS_CD 2 / 3 / 4) — and an earlier visit was forested (independent)
     _cv = _cc.assign(f1=(_cc.cs == 1).astype(int), f2=_cc.cs.isin([2, 3, 4]).astype(int)).groupby(key + ['ds']).agg(f1=('f1', 'max'), f2=('f2', 'max')).reset_index().sort_values(key + ['ds'])
-    _cv = _cv[_cv.ds <= '2022-12-31']; _cv['seen'] = _cv.groupby(key).f1.transform(lambda x: x.cummax().shift(1).fillna(0))      # a forested visit EARLIER
+    _cv = _cv[(_cv.ds <= '2022-12-31') & ((_cv.f1 == 1) | (_cv.f2 == 1))]; _cv['seen'] = _cv.groupby(key).f1.transform(lambda x: x.cummax().shift(1).fillna(0))      # a forested visit EARLIER
     _cvl = _cv.groupby(key).tail(1); CONVP = set(map(tuple, _cvl[(_cvl.f1 == 0) & (_cvl.f2 == 1) & (_cvl.seen > 0)][key].astype(int).values))   # converted plot keys
     if 'plot_converted' in V.columns:
         _cvp = CONVP
         _cve = np.array([tuple(int(x) for x in r_) in _cvp for r_ in V[key].values]); _cvd = int((_cve != V.plot_converted.values.astype(bool)).sum())
-        check('T1n visits.plot_converted (g02e, G41 / G46.3) = independent FIADB recomputation (last visit up to 2022 non-forest after a forested one)', _cvd == 0,
+        check('T1n visits.plot_converted (g02e, G41 / G46.3) = independent FIADB recomputation (last sampled visit up to 2022 non-forest after a forested one, G48.2)', _cvd == 0,
               f'{V[V.plot_converted.astype(bool)].pid.nunique()} converted plots in the table, expected {len(set(V[_cve].pid))}; mismatching visits {_cvd}')
     else: check('T1n visits.plot_converted present (g02e, G41)', False, 'input missing: visits.parquet has no plot_converted column (G46.3: g03b refuses it); rerun g02e')
     Vs = V.sort_values('vid')
@@ -812,14 +812,15 @@ def main(argv=None, force_pairs=(), stop_after=None):
         check('T3j negative-evidence periods (g02e fia_negs) = the spec (FIA protocol, lookback yr0-4..yr0-1, non-sampled predecessor -> lookback, <= 2024, NONBLOCK)', not _bj,
               f'{len(REC)} plots, {sum(len(v) for v in _ng.values())} periods in the file; mismatching plots {len(_bj)} {_bj[:5]}')
     # --- semantic alignment of the time axes: AlphaEarth change 2022->2025 must concentrate on candidates whose evidence falls in 2023-2025
-    # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). (r14 G47.2) per evidence CLASS of every row of the region's
-    # table (SPEC): judged are the classes EVERY detectable treatment row (TRTCD, lr >= 4: cutting, site preparation, regeneration) accepts — the table's
-    # core stand-replacing evidence (GA+FL: harvest, unknown, Hansen; the classes r13 judged); every other class is reported (INFO: row-specific evidence
-    # such as thinning, herbicide or prescribed fire need not remove canopy — in GA+FL 'fire' never lowers the cosine). A year cell counts with >= 30
-    # single-event candidates whose footprint carries the class on >= half of it; a (state, class) is judged when it has >= 1 pre (2017-21) and post
-    # (2023-24) cell, else INFO. LANDFIRE classes 2017-2025, Hansen 2017-2024
-    _det3 = sorted(set.intersection(*[set(cols_) for (t_, _), (cols_, _, lr_) in SPEC.items() if t_ == 'T' and lr_ >= 4]))
-    _wk3 = sorted({c_ for cols_, _, lr_ in SPEC.values() for c_ in cols_} - set(_det3))
+    # (r13 E-F11: PER STATE — pooling hid a state whose evidence does not move AlphaEarth; G34). (r14 G47.2 / G48.1, set after seeing data) per state, every
+    # DETECTABLE row of the region's table (lr >= 4) is judged on the POOLED cells of its compatible classes (a footprint counts in year y when any of the
+    # row's classes covers >= half of it: the row claims its record kind is detectable, not that each class is); every class is also reported on its own
+    # (INFO; in GA+FL prescribed 'fire' never lowers the cosine). A year cell counts with >= 30 single-event candidates; a (state, row) is judged when it
+    # has >= 1 pre (2017-21) and post (2023-24) cell, else INFO. LANDFIRE classes 2017-2025, Hansen 2017-2024
+    _rows3 = {}
+    for (t_, cd_), (cols_, _, lr_) in SPEC.items():
+        if lr_ >= 4: _rows3[spec_kind(t_, cd_)] = tuple(sorted(cols_))
+    _cls3 = sorted({c_ for cols_, _, _ in SPEC.values() for c_ in cols_})
     _st3 = C.pid.map(P.set_index('pid').st).values; _r3 = np.random.default_rng(33); res3i = {}; _w3 = 128 + NY * (NC + 2)
     for st3 in sorted(set(int(x) for x in np.unique(_st3))):
         idx3 = np.flatnonzero(_st3 == st3); smp = np.sort(_r3.choice(idx3, min(120000, len(idx3)), replace=False)); XX = np.asarray(CF[smp, :_w3], dtype=np.float32)
@@ -827,19 +828,22 @@ def main(argv=None, force_pairs=(), stop_after=None):
         pp = XX[:, 128:_w3].reshape(-1, NY, NC + 2); anyd = (pp[:, :, :NC].sum(-1) + pp[:, :, HH]) > 0; single = anyd.sum(1) == 1      # one disturbed year only
         c_clean = float(np.median(cosv[~anyd[:, 2015 - 2000:].any(1)])) if (~anyd[:, 2015 - 2000:].any(1)).any() else np.nan
         cell = lambda m_: (int(m_.sum()), round(float(np.median(cosv[m_])), 3) if m_.sum() >= 30 else None)
-        for c3 in _det3 + _wk3:
-            m3 = pp[:, :, HH] >= 0.5 if c3 == 'H' else pp[:, :, ix[c3]] >= 0.5
-            tab = {yr: cell(m3[:, yr - 2000] & single) for yr in range(2017, 2025 if c3 == 'H' else 2026) if yr - 2000 < NY}
+        cm3 = {c3: (pp[:, :, HH] >= 0.5 if c3 == 'H' else pp[:, :, ix[c3]] >= 0.5) for c3 in _cls3}
+        def judge3(m3, yr_hi):
+            tab = {yr: cell(m3[:, yr - 2000] & single) for yr in range(2017, yr_hi) if yr - 2000 < NY}
             pre = [v[1] for y, v in tab.items() if y <= 2021 and v[1] is not None]; post = [v[1] for y, v in tab.items() if y in (2023, 2024) and v[1] is not None]
-            judged = bool(pre and post); ok3 = judged and max(post) < min(pre) and max(post) < c_clean - 0.05
-            res3i[(st3, c3)] = (judged and c3 in _det3, ok3)
-            print(f"   T3i state {st3} class {c3} ({'core stand-replacing evidence' if c3 in _det3 else 'row-specific evidence: INFO'}): "
-                  f"{'judged' if judged else 'too few qualifying samples'} {'ok' if ok3 else ('VIOLATED' if judged else '')}; no disturbance since 2015 {c_clean:.3f}; "
-                  f"{{yr: (n, cos)}} {tab}", flush=True)
+            judged = bool(pre and post); return judged, judged and max(post) < min(pre) and max(post) < c_clean - 0.05, tab
+        for k3, cols3 in sorted(_rows3.items()):
+            j_, o_, tab = judge3(np.logical_or.reduce([cm3[c_] for c_ in cols3]), 2026); res3i[(st3, k3)] = (j_, o_)
+            print(f"   T3i state {st3} row {k3} {list(cols3)} pooled: {'judged' if j_ else 'too few qualifying samples'} {'ok' if o_ else ('VIOLATED' if j_ else '')}; "
+                  f"no disturbance since 2015 {c_clean:.3f}; {{yr: (n, cos)}} {tab}", flush=True)
+        for c3 in _cls3:
+            j_, o_, tab = judge3(cm3[c3], 2025 if c3 == 'H' else 2026)
+            print(f"   T3i state {st3} class {c3} (INFO): {'would pass' if o_ else ('would be violated' if j_ else 'too few qualifying samples')}; {{yr: (n, cos)}} {tab}", flush=True)
         del XX, pp
-    check('T3i time axes PER STATE and evidence class of the region\'s table: events of 2023-24 lower the AlphaEarth 2022->2025 cosine, events <= 2021 do not',
+    check('T3i time axes PER STATE and detectable evidence row of the region\'s table (pooled compatible classes): events of 2023-24 lower the AlphaEarth 2022->2025 cosine, events <= 2021 do not',
           any(j for j, _ in res3i.values()) and all(o for j, o in res3i.values() if j),
-          f"judged classes {_det3}, reported {_wk3}; judged {[k for k, (j, _) in res3i.items() if j]}, violating {[k for k, (j, o) in res3i.items() if j and not o]}")
+          f"rows {_rows3}; judged {[k for k, (j, _) in res3i.items() if j]}, violating {[k for k, (j, o) in res3i.items() if j and not o]}, INFO {[k for k, (j, _) in res3i.items() if not j]}")
     def _ev(g):    # the evidence part of the prior: prior / (incl_w x radial location weight) — hi is a threshold of the evidence alone (audit r3 B3)
         rp_ = float(M.get('radial_p', 0.9)); rad = np.where(g.dist_m.values <= 804.672, rp_ / (np.pi * 804.672 ** 2), (1 - rp_) / (np.pi * (1600.0 ** 2 - 804.672 ** 2)))
         return pd.Series(g.prior.values / (g.incl_w.values * rad), index=g.index)
