@@ -415,3 +415,31 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   - Small regressions: the synthetic fire ratio 0.92 → 0.82 and clear-cut 0.004 → 0.008.
 
   A change-based age loss (decoded Δage vs observed Δage) would target the rate; that is not in G46.9. Decision for the coordinator.
+* **AGE_DELTA (G49; pre-registered A/B on the same harness, seed and subset: flow vs flow + AGE_DELTA).** The switch defaults to 0 and is
+  training-only. The loss is W_AGE · the posterior-weighted squared error, over AGE_S, of the decoded age change (dec_age(flowed z2) −
+  dec_age(z1)) against the observed change (`OBS_AGED`). It applies to UNDIST pairs with both visits stocked. Switches-off outputs are still
+  bit-identical.
+
+  | (val unless noted) | flow | flow + AGE_DELTA | allowed regression (\|flow − ctl\|) |
+  |---|---|---|---|
+  | **g06 decoded age ratio by bin (criterion: +0.1 or ≥ 0.8)** | 0.39 / 0.45 / 0.59 | **0.69 / 0.69 / 0.84** | — |
+  | latent max \|mean\| / min sd / eff. rank | 0.43 / 0.78 / 6.82 | 0.50 / **0.47** / 6.37 | 0.09 / 0.15 / 0.55 |
+  | stand-replacing: closest reachable RMS / BA ratio | 0.39 / 0.004 | **0.47** / 0.005 | 0.05 / 0.002 |
+  | stand-replacing: trained jump / posterior-weighted BA ratio | 0.014 / 0.047 | 0.031 / 0.026 | 0.020 / 0.004 |
+  | g06 synthetic clear-cut / fire | 0.008 / 0.82 | 0.0004 / 0.81 | 0.003 / 0.10 |
+  | undisturbed-like pairs NN ratio / 25-yr NN ratio | 1.50 / 1.49 | 1.40 / 1.53 | 0.14 / 0.08 |
+  | 25-yr variance retained / eff. rank | 32 % / 3.21 | 29 % / **2.34** | 22 pp / 0.71 |
+  | 25-yr BA log change / yr | +0.0059 | +0.0061 | 0.007 |
+  | g06 BA per yr by bin (obs +0.022 / +0.014 / +0.013) | +0.009 / +0.007 / +0.007 | +0.002 / +0.007 / +0.014 | 0.009 / 0.009 / 0.009 |
+  | decoded age bias at v1 / flowed v2 (yr) | +2.9 / +0.2 | +4.8 / **+3.1** | 2.2 / 2.1 |
+  | composition: pairs ≥ 10 yr Bray / dominant; 25-yr Bray / dominant | 0.139 / 0.79; 0.281 / 0.66 | 0.135 / 0.83; 0.272 / 0.69 | — |
+  | g06 acceptance | fail (BA 0–8, age ×3) | fail (BA 0–8, age 0–8 and 8–15) | — |
+
+  **Verdict: the age criterion passes in every bin. The "no other row regresses beyond the spread" criterion fails** on four values, shown in
+  bold:
+  - min sd 0.78 → 0.47 (it still passes G46.8);
+  - closest reachable RMS 0.39 → 0.47;
+  - 25-yr effective rank 3.21 → 2.34;
+  - the flowed-v2 age bias +0.2 → +3.1 yr.
+
+  Each allowed spread is one run pair at 1200 steps. By G49, AGE_DELTA stays off and is not in the configs or the checkpoint `switches` list.

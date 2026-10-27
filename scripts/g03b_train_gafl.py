@@ -136,6 +136,9 @@ SIGREG_MEAN = os.environ.get('SIGREG_MEAN', '0') == '1'; JUMP_RESET = os.environ
 # over 25 yr and the decoded age advanced at 0.4-0.6x the observed rate (B14-4). SIGREG_FLOW = 1: SIGReg is also applied to the flowed states at the pair
 # end (posterior-weighted over the K histories); AGE_FLOW = 1: the age loss is also applied to the DECODED age of the flowed state at v2
 SIGREG_FLOW = os.environ.get('SIGREG_FLOW', '0') == '1'; AGE_FLOW = os.environ.get('AGE_FLOW', '0') == '1'
+# AGE_DELTA = 1 (G49; training only): the decoded age CHANGE of the flowed pair, dec_age(flowed z2) − dec_age(z1), against the observed change on
+# FIA-undisturbed pairs (UNDIST) with both visits stocked, posterior-weighted — the rate, which AGE_FLOW (the level) left at 0.4-0.6x
+AGE_DELTA = os.environ.get('AGE_DELTA', '0') == '1'
 NJ = 2 * D_Z if JUMP_RESET else D_Z + (1 if AGE_CH else 0)                  # jump-network outputs (shift + reset logits; AGE_CH alone: + the clock-reset logit)
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
     sparse_j = False
@@ -474,7 +477,7 @@ for ep in range(EP):
         post = torch.softmax(-d.detach() / TEMP, 1)                                                        # posterior over the sampled candidates
         # remeasurement pairs: flow z(v1) along each candidate's history to v2's year
         has2 = [i for i, vv in enumerate(v.tolist()) if vv in pairs_of]; tgt2 = [pairs_of[v[i].item()][np.random.randint(len(pairs_of[v[i].item()]))] for i in has2]
-        lpair = torch.tensor(0.0); ldecf = torch.tensor(0.0); lsigf = torch.tensor(0.0); lagef = torch.tensor(0.0)
+        lpair = torch.tensor(0.0); ldecf = torch.tensor(0.0); lsigf = torch.tensor(0.0); lagef = torch.tensor(0.0); laged = torch.tensor(0.0)
         if has2:
             v2 = torch.tensor(tgt2); y2 = vyear[v2]; z2 = enc(v2, y2).detach()
             sel = torch.tensor(has2); zz = z[sel].repeat_interleave(K, 0)
@@ -499,6 +502,11 @@ for ep in range(EP):
             if AGE_FLOW:      # (G46.9) decoded age of the flowed state vs v2's observed (decoder form), stocked v2 only, posterior-weighted
                 sk2 = (OBS_B[v2] > 0).float(); ea_ = (((dec_age(lp2, val2) - OBS_AGED[v2r]) / AGE_S) ** 2).view(len(has2), K)
                 lagef = ((ea_ * wph).sum(1) * sk2).sum() / sk2.sum().clamp(min=1)
+            if AGE_DELTA:     # (G49) decoded vs observed age change on undisturbed pairs, both visits stocked, posterior-weighted
+                v1s = v[sel]; ud_ = torch.tensor([float(UNDIST.get((v[i].item(), t_), False)) for i, t_ in zip(has2, tgt2)]) * (OBS_B[v1s] > 0).float() * (OBS_B[v2] > 0).float()
+                ag1 = dec_age(*dec(z[sel])); ag2 = dec_age(lp2, val2).view(len(has2), K)
+                ed_ = (((ag2 - ag1.unsqueeze(1)) - (OBS_AGED[v2] - OBS_AGED[v1s]).unsqueeze(1)) / AGE_S) ** 2
+                laged = ((ed_ * wph).sum(1) * ud_).sum() / ud_.sum().clamp(min=1)
         else:
             ldecf = torch.tensor(0.0)
         # inverse encoder Q: candidate features → z(2025) (posterior-weighted, stop-gradient)
@@ -521,9 +529,10 @@ for ep in range(EP):
         loss = mil + 0.5 * lpair + ldec + 0.5 * ldecf + 1.0 * sigreg(zr) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd + W_AGE * lage
         if SIGREG_FLOW: loss = loss + 1.0 * lsigf
         if AGE_FLOW: loss = loss + W_AGE * lagef
+        if AGE_DELTA: loss = loss + W_AGE * laged
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
         for k_, val in (('mil', mil), ('pair', lpair), ('dec', ldec), ('decflow', ldecf), ('q', lq), ('qdec', lqd)) + ((('age', lage),) if AGE_CH else ()) \
-                + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
+                + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()) + ((('agedelta', laged),) if AGE_DELTA else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/max(nseen, 1):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
 if SMOKE_B: print('SMOKE_BATCHES: training step ran; no checkpoint, no evaluation', flush=True); sys.exit(0)
 # the training switches (every stage switch g03b reads, its string value; None = unset) recorded in the checkpoint: the loss-only switches leave no
