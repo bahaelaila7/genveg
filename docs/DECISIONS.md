@@ -156,3 +156,10 @@ recommendations, but document the decision point and the different options"). Th
 - **Context:** g03b read stands.parquet only for an end-of-training diagnostic stand map (stand_veg_q, the direct Q predictor). Nothing downstream reads it.
 - **Options:** (a) keep stands_fp upstream of train, so a stand-map change retrains every seed; (b) **make the diagnostic opt-in (STAND_DIAG=1) and drop the dependency**; (c) move it to its own stage.
 - **Chosen:** (b).
+
+## G28 — Generalisation beyond Region 4 (2026-10-27, agent; recorded for the expansion phase)
+- **Generic:** the FIA record semantics, LANDFIRE / Hansen handling, the visit-year rule, splits / gating / driver / verifier, and the AEF90 path.
+- **Must be re-derived per region:**
+  - the EVK / SPEC evidence classes, windows and likelihood ratios: derived from GA+FL by g09; fire and harvest regimes differ;
+  - the dynamics acceptance thresholds;
+  - forested shares per size class: PNW / CA need the macroplot tier (16.6 % of live trees at TPA 0.999).
