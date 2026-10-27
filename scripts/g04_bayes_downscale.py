@@ -8,9 +8,10 @@
 Evaluation (spatial blocks of g03b):
   A alone vs kNN on X_L (all held-out plots); A×B at the high-prior footprints of held-out localised plots vs A alone vs kNN; localisation skill of B.
 kNN baselines use training plots' last visits within ±3 years of the query visit (A is conditioned on the year too).
-Mapping path (the estimator g05 maps): start-year gate and calibration factors as means of R_REP replicates (G46.11); the map is ACCEPTED only if, on
-validation, its calibrated TPH / BA errors and medoid Bray are below the null's (G46.12, bayes_eval.json map_accept; g05 refuses otherwise).
-Writes data/proto/gafl/{bayes_eval.json, bayes_models.pt, bayes_kmeans.pkl}."""
+Mapping path (the estimator g05 maps): start-year gate and calibration factors as means of the R_REP replicates of set 1 (G46.11 / G51.19); the map is
+ACCEPTED only if, on validation (R_REP fresh replicates, set 2), the one-sided 90 % plot-bootstrap upper bound of (model − null) is below 0 for its
+calibrated TPH and BA errors and its medoid Bray (G46.12 / G51.15, bayes_eval.json map_accept; g05 refuses otherwise).
+Writes data/proto/<data>/{bayes_eval.json, bayes_models.pt, bayes_kmeans.pkl, g04_plots.parquet}."""
 import os, sys, json, math, time, numpy as np, pandas as pd, torch, torch.nn as nn, torch.nn.functional as Fn
 os.environ.setdefault('DATA', 'gafl'); os.environ['LOAD'] = '1'; os.environ['EPOCHS'] = '0'
 _argv = sys.argv; sys.argv = ['g03b']
@@ -24,6 +25,10 @@ def lmed(x):     # TRUE median in log space (torch.median returns the LOWER midd
 def tmed(x, dim=None):     # TRUE median (G46.15; dim None: over all elements)
     return torch.quantile(x.float(), 0.5) if dim is None else torch.quantile(x.float(), 0.5, dim=dim)
 MS = 32      # (G46.13) iid posterior draws per mapped stand / validated visit: g05 maps and g04 validates the same estimator
+def draw_seed(*key):
+    """a deterministic 63-bit seed from a key tuple (sha256 of its repr): the medoid presence uniforms of g04 are seeded by (visit, replicate set,
+    replicate, path, half) (G51.16) and g05's by (stand, 'presence') — a generator of their own, not the stream of the stand's other draws (C15-12)"""
+    import hashlib as _hl; return int(_hl.sha256(repr(key).encode()).hexdigest()[:15], 16)
 def calibrated_median(s_i, cf):
     """THE calibrated summary of g05 and g04's mapping-path validation (G46.13): e^CF · lmed(s) (the calibration factor applied to the true median of
     the draws, not the median of calibrated draws)"""
@@ -57,7 +62,7 @@ def obs_summ(v):
 t0 = time.time()
 # ---------------- landscape descriptors
 from sklearn.cluster import MiniBatchKMeans
-samp = np.random.choice(len(AEF), 200000, replace=False); km = MiniBatchKMeans(32, random_state=0, n_init=3).fit(AEF[samp][:, 64:].numpy())
+samp = np.random.choice(len(AEF), min(len(AEF), 200000), replace=False); km = MiniBatchKMeans(32, random_state=0, n_init=3).fit(AEF[samp][:, 64:].numpy())
 BINS = [(2000, 2009), (2010, 2016), (2017, 2021), (2022, 2025)]
 MAP_Y0 = float(os.environ.get('MAP_Y0', 2021.0))       # the REQUESTED start year of the mapping path (g04 gates it; g05 maps with bayes_eval.json map_y0)
 def landscape(F_aef, F_dist, F_soil, wt=None):
@@ -100,7 +105,7 @@ else:
     cal_pid = set(P.pid[P.blk.isin(cal_blk)]) & set(vpid[tr_v])
 _ca = P[P.pid.isin(cal_pid)]; _dc, _ = _KD(_ca[['x', 'y']].values).query(P[['x', 'y']].values)
 calbuf_pid = set(P.pid[(_dc < 3200) & ~P.pid.isin(cal_pid)])          # MDN-fit plots whose disk could overlap a calibration plot's: not fitted (r6 M7)
-trA = np.array([vi[v] for v in tr_v if v in vi and vpid[v] not in cal_pid and vpid[v] not in calbuf_pid]); teA = np.array([vi[v] for v in te_v if v in vi])
+trA = np.array([vi[v] for v in tr_v if v in vi and vpid[v] not in cal_pid and vpid[v] not in calbuf_pid and not bool(VCONV[v])]); teA = np.array([vi[v] for v in te_v if v in vi])
 print(f'MDN fit visits {len(trA)}, calibration plots {len(cal_pid)}', flush=True)
 for ep in range(int(os.environ.get('MDN_EP', 60))):
     perm = np.random.permutation(trA)
@@ -147,16 +152,16 @@ with torch.no_grad():
     # A alone vs kNN on X_L (last visit of every held-out plot)
     lastv = V[fs_ok]; lastv = lastv.loc[lastv.groupby('pid').year.idxmax()]       # last visit passing the forest-share filter
     trp_ = set(vpid[tr_v])
-    te_l = [v for v in lastv[lastv.pid.isin(test_pid)].vid.values if v in vi]; tr_l = [v for v in lastv[lastv.pid.isin(trp_)].vid.values if v in vi]   # kNN pool: training plots
+    te_l = [v for v in lastv[lastv.pid.isin(test_pid)].vid.values if v in vi and not bool(VCONV[v])]; tr_l = [v for v in lastv[lastv.pid.isin(trp_)].vid.values if v in vi]   # kNN pool: training plots
     o_te = obs_summ(torch.tensor(te_l)); o_tr = obs_summ(torch.tensor(tr_l))
     X_te = Xv[[vi[v] for v in te_l]]; X_tr = Xv[[vi[v] for v in tr_l]]
     zs = mdn.sample(X_te, vyear[te_l], MS); S_ = summ(zs.reshape(-1, D_Z)); A_ = [S_[i].view(len(te_l), MS) for i in range(3)]
     predA = [lmed(x) for x in A_]                                                     # (true median: G46.15)
     # post-hoc calibration estimated on training plots only (the decoder predicts log-medians; sums of N and N·D² are biased low)
-    trs_v = [v for v in lastv[lastv.pid.isin(cal_pid)].vid.values if v in vi]           # calibration plots' last visits (not used by the MDN fit)
-    zt = mdn.sample(Xv[[vi[v] for v in trs_v]], vyear[trs_v], MS); St = summ(zt.reshape(-1, D_Z)); o_ts = obs_summ(torch.tensor(trs_v))
-    CAL = [float(tmed(torch.log((o_ts[i] + 1e-3) / lmed(St[i].view(len(trs_v), MS))))) for i in range(3)]
-    print(f'calibration log-factors (TPH, BA, QMD) from {len(trs_v)} calibration plots:', [round(c, 3) for c in CAL], flush=True)
+    trs_v = [v for v in lastv[lastv.pid.isin(cal_pid)].vid.values if v in vi and not bool(VCONV[v])]   # calibration plots' last visits (not in the MDN fit; G51.21: no converted plot)
+    zt = mdn.sample(Xv[[vi[v] for v in trs_v]], vyear[trs_v], MS); St = summ(zt.reshape(-1, D_Z)); o_ts = obs_summ(torch.tensor(trs_v)); skc = o_ts[0] > 0
+    CAL = [float(tmed(torch.log((o_ts[i][skc] + 1e-3) / lmed(St[i].view(len(trs_v), MS))[skc]))) if skc.any() else float('nan') for i in range(3)]   # (G51.17: stocked visits, as fit_cf)
+    print(f'calibration log-factors (TPH, BA, QMD) from the {int(skc.sum())} stocked of {len(trs_v)} calibration plots:', [round(c, 3) for c in CAL], flush=True)
     predA_raw = predA; predA = [predA[i] * math.exp(CAL[i]) for i in range(3)]
     compA = S_[4].view(len(te_l), MS, NK).mean(1)
     y_tr = vyear[tr_l]
@@ -166,25 +171,27 @@ with torch.no_grad():
         far = ((yq.unsqueeze(1) - y_tr.unsqueeze(0)).abs() > 3); c_ = FALLBACK['knn_queries_with_lt5_in_window']; c_[FB_SET] = c_.get(FB_SET, 0) + int(((~far).sum(1) < 5).sum())
         dd = torch.cdist(Xq, X_tr) + 1e9 * far.float(); return dd.topk(5, largest=False).indices
     nn5 = knn_idx(X_te, vyear[te_l]); knn = [o_tr[i][nn5].float().median(1).values for i in range(3)]; compK = o_tr[4][nn5].mean(1)   # (5 neighbours: the median is the middle one)
-    err = lambda p, o: float(tmed(torch.abs(torch.log((p + 1e-3) / (o + 1e-3)))))
-    bias = lambda p, o: float(tmed(torch.log((p + 1e-3) / (o + 1e-3))))
+    err = lambda p, o: float(tmed(torch.abs(torch.log((p + 1e-3) / (o + 1e-3))))) if len(o) else float('nan')     # (NaN on an empty set: G51.20)
+    bias = lambda p, o: float(tmed(torch.log((p + 1e-3) / (o + 1e-3)))) if len(o) else float('nan')
     bray = lambda p, o: float((torch.abs(p - o).sum(1) / 2).mean())
-    # per-plot dumps (G48.5 / gv_verify T11i): one row per (kind, start year, replicate, half, visit), enough to recompute CAL / CALF, the validation and
-    # test errors, the null / kNN baselines and map_accept independently. g04_plots.parquet columns: kind ('A_cal' | 'cf_fit' | 'score' | 'baseline'),
-    # set, y0, rep, half, pid, vid, stocked; obs_{TPH,BA,QMD} and obs_log_* = log(obs + 1e-3); pred_* = the UNCALIBRATED true median of the draws (lmed)
-    # and pred_log_* = log(pred); cf_* = the log factors applied (score rows); bray_medoid / dom_hit_medoid (score rows); null_* / knn_* and bray_null /
-    # bray_knn / dom_hit_knn (baseline rows)
-    PLOT_ROWS = []
-    def dump_rows(kind, set_, y0, rep_, half, vs, obs, pred=None, cf=None, extra=None):
+    # per-plot dumps (G48.5 / G51.18 / gv_verify T11i): one row per (kind, start year, replicate set, replicate, half, visit), enough to recompute CAL /
+    # CALF, the validation and test errors, the null / kNN baselines, the start-year gate's landscape dependence and map_accept with its bootstrap bound
+    # independently. g04_plots.parquet columns: kind ('A_cal' | 'cf_fit' | 'score' | 'baseline' | 'gate_shuffled' | 'gate_redraw'), set, y0, rset (1 =
+    # the selection replicates of the gate and CALF, 2 = the acceptance replicates, 0 = neither), rep, half, pid, vid, stocked; obs_{TPH,BA,QMD} and
+    # obs_log_* = log(obs + 1e-3); pred_* = the UNCALIBRATED true median of the draws (lmed) and pred_log_* = log(pred); cf_* = the log factors applied
+    # (score rows); bray_medoid / dom_hit_medoid (score rows); null_* / knn_* and bray_null / bray_knn / dom_hit_knn (baseline rows); x_vid (gate_shuffled
+    # rows: the visit whose landscape the deranged draw used)
+    PLOT_ROWS = []; SET_LBL = 'validation' if VAL_SPLIT else 'calibration'       # (G51.20: the label of the judged set is conditional)
+    def dump_rows(kind, set_, y0, rep_, half, vs, obs, pred=None, cf=None, extra=None, rset=0):
         for j_, v in enumerate(vs):
-            r_ = dict(kind=kind, set=set_, y0=float(y0), rep=int(rep_), half=half, pid=int(vpid[v]), vid=int(v), stocked=bool(obs[0][j_] > 0))
+            r_ = dict(kind=kind, set=set_, y0=float(y0), rset=int(rset), rep=int(rep_), half=half, pid=int(vpid[v]), vid=int(v), stocked=bool(obs[0][j_] > 0))
             for i, k in enumerate(('TPH', 'BA', 'QMD')):
                 r_[f'obs_{k}'] = float(obs[i][j_]); r_[f'obs_log_{k}'] = math.log(float(obs[i][j_]) + 1e-3)
                 if pred is not None: r_[f'pred_{k}'] = float(pred[i][j_]); r_[f'pred_log_{k}'] = math.log(float(pred[i][j_]))
                 if cf is not None: r_[f'cf_{k}'] = float(cf[i])
             for k, x in (extra or {}).items(): r_[k] = float(x[j_])
             PLOT_ROWS.append(r_)
-    dump_rows('A_cal', 'validation' if VAL_SPLIT else 'calibration', float('nan'), -1, '', trs_v, o_ts, [lmed(St[i].view(len(trs_v), MS)) for i in range(3)])
+    dump_rows('A_cal', SET_LBL, float('nan'), -1, '', trs_v, o_ts, [lmed(St[i].view(len(trs_v), MS)) for i in range(3)])
     ev['calibration_log_factors_TPH_BA_QMD'] = CAL
     sk = o_te[0] > 0                                                                 # stocked visits (bare visits: no composition; reported separately)
     p_trl = np.array([vpid[v] for v in tr_l])
@@ -235,9 +242,10 @@ with torch.no_grad():
     # ---- the MAPPING path of g05, validated: z ~ p(z | X_L, MAP_Y0) -> v2 flow (decoder-consistent) through a prior-drawn candidate's history to the visit
     # date -> decode -> the medoid draw (medoid_draw) and the calibrated median (calibrated_median), MS iid draws: the estimator g05 maps (G46.13).
     # Calibration factors for THIS path from the calibration plots (visits 2022-2025), errors on held-out plots' visits 2022-2025.
-    def map_path(vs, y0, ms=MS, X=None, to_end=False):
+    def map_path(vs, y0, ms=MS, X=None, to_end=False, mkey=(0, -1, '')):
         """per visit: [true-median TPH, BA, QMD of the ms draws (uncalibrated: calibrated_median with CF 0), mean BA shares, medoid BA shares, medoid
-        dominant key, medoid age-class distribution by TPH, by BA]. to_end: flow to the end of 2025 as g05 maps (G46.14), not to the visit date"""
+        dominant key, medoid age-class distribution by TPH, by BA]. to_end: flow to the end of 2025 as g05 maps (G46.14), not to the visit date.
+        mkey (replicate set, replicate, half): visit v's medoid presence uniforms are seeded by draw_seed(v, set, replicate, y0, half) (G51.16)"""
         out_ = []
         for q_, v in enumerate(vs):
             cid, pr = cand_of[vpid[v]]; ci = torch.tensor(np.random.choice(cid, ms, replace=True, p=pr)); yv = vyear[v]
@@ -248,11 +256,15 @@ with torch.no_grad():
                 yy = min(int(math.floor(float(yv))), YEARS[-1])
                 st = flow(zs, torch.full((ms,), y0), [yy], DIST[ci], SOIL[ci], end=yv.repeat(ms), re=VREC[[v]].repeat(ms))
             lp_m, val_m = dec(st[yy]); s_ = summaries(lp_m, val_m)
-            md_ = medoid_draw(lp_m, val_m, s_, int(v))                       # the composition / dominant key g05 maps (G32)
+            md_ = medoid_draw(lp_m, val_m, s_, draw_seed(int(v), int(mkey[0]), int(mkey[1]), float(y0), str(mkey[2])))   # the composition / dominant key g05 maps (G32)
             aN, aB = torch.zeros(NA), torch.zeros(NA)                        # the medoid's cohorts by age class (g05's cohort table; its scaling keeps the shares)
             for j_ in md_['pres']: aN[j_ % NA] += float(md_['Nr'][md_['i'], j_]); aB[j_ % NA] += float(md_['Nr'][md_['i'], j_] * md_['Dd'][md_['i'], j_] ** 2)
             out_.append([calibrated_median(s_[i], 0.0) for i in range(3)] + [s_[4].mean(0), md_['comp'], md_['dom'], aN / aN.sum().clamp(min=1e-12), aB / aB.sum().clamp(min=1e-12)])
         return out_
+    def seed_call(*key):
+        """seed the global generators (the candidate and MDN draws of map_path) from a key: every replicate of every set is reproducible and the two
+        replicate sets are independent (G51.19)"""
+        s_ = draw_seed('call', *key); torch.manual_seed(s_); np.random.seed(s_ % 2 ** 32)
     def obs_age(vs):    # observed age-class distribution by TPH, by BA
         m = slot_p[vs]; N = torch.exp(slot_v[vs][..., 0]) * m; Dq = torch.exp(slot_v[vs][..., 1])
         aN = N.view(-1, NK, NA).sum(1); aB = (N * Dq ** 2).view(-1, NK, NA).sum(1)
@@ -261,53 +273,63 @@ with torch.no_grad():
         return 10 * (torch.cumsum(p, -1) - torch.cumsum(o, -1)).abs().sum(-1)
     rec = lambda vs: [v for v in vs if 2022.0 <= float(vyear[v]) < 2026.0]
     cal_m = rec(trs_v); te_m = rec(te_l)
-    if cal_m and te_m:
-        ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0; FB_SET = 'test_2022_2025'; nm_ = null_pred(vyear[te_m])
-        def fit_cf(y0, cal, tag=None):
-            """the mapping-path calibration log-factors (TPH, BA, QMD) fitted on the visits cal: true median of log(observed / median draw), stocked visits.
-            tag (set, replicate, half): the fit's rows go to the per-plot dump"""
-            occ = obs_summ(torch.tensor(cal)); skc_ = occ[0] > 0; pc = map_path(cal, y0)
-            if tag: dump_rows('cf_fit', tag[0], y0, tag[1], tag[2], cal, occ, [torch.stack([r[i] for r in pc]) for i in range(3)])
+    def mean_sd(xs):
+        """replicate mean, per-replicate sd and sd of the mean (G51.23)"""
+        return float(np.mean(xs)), float(np.std(xs)), float(np.std(xs) / math.sqrt(len(xs)))
+    if cal_m:      # (G51.20) map_accept is decided on the validation visits alone; the test visits are a report (when there are any)
+        def fit_cf(y0, cal, tag):
+            """the mapping-path calibration log-factors (TPH, BA, QMD) fitted on the visits cal: true median of log(observed / median draw), stocked visits
+            (NaN without one). tag (set, replicate set, replicate, half): the seeds and the fit's rows in the per-plot dump"""
+            seed_call('cf_fit', tag[1], tag[2], float(y0), tag[3])
+            occ = obs_summ(torch.tensor(cal)); skc_ = occ[0] > 0; pc = map_path(cal, y0, mkey=tag[1:])
+            dump_rows('cf_fit', tag[0], y0, tag[2], tag[3], cal, occ, [torch.stack([r[i] for r in pc]) for i in range(3)], rset=tag[1])
+            if not skc_.any(): return [float('nan')] * 3
             return [float(tmed(torch.log((occ[i][skc_] + 1e-3) / torch.stack([r[i] for r in pc])[skc_]))) for i in range(3)]
-        def score(y0, CF, te, tag=None):
+        def score(y0, CF, te, tag):
             """the mapped estimator at the visits te with factors CF: per-visit draws, calibrated predictions, and its metrics (stocked: median |log err|,
-            medoid Bray / dominant key; report-only: medoid age-class Wasserstein (G46.19); bare visits: the predicted BA)"""
-            ott = obs_summ(torch.tensor(te)); skt_ = ott[0] > 0; pt = map_path(te, y0)
+            medoid Bray / dominant key; report-only: medoid age-class Wasserstein (G46.19); bare visits: the predicted BA). tag as fit_cf"""
+            seed_call('score', tag[1], tag[2], float(y0), tag[3])
+            ott = obs_summ(torch.tensor(te)); skt_ = ott[0] > 0; pt = map_path(te, y0, mkey=tag[1:])
             P_ = [torch.stack([r[i] for r in pt]) * math.exp(CF[i]) for i in range(3)]   # = calibrated_median of each visit's draws
             P_[2] = torch.where(P_[0] > 0, 100 * torch.sqrt(P_[1] / (P_[0] * math.pi / 4).clamp(min=1e-9)), torch.zeros_like(P_[0]))   # QMD as g05 maps it:
             # from the calibrated TPH / BA (GEN_QMD), not the samples' median QMD x its own factor (audit r8 M6)
             Cmd = torch.stack([r[4] for r in pt]); dmd = torch.tensor([r[5] for r in pt]); oaN, oaB = obs_age(torch.tensor(te))
-            if tag: dump_rows('score', tag[0], y0, tag[1], tag[2], te, ott, [torch.stack([r[i] for r in pt]) for i in range(3)], CF,
-                              {'bray_medoid': torch.abs(Cmd - ott[4]).sum(1) / 2, 'dom_hit_medoid': (dmd == ott[3]).float()})
-            aN_, aB_ = torch.stack([r[6] for r in pt]), torch.stack([r[7] for r in pt])
-            met = {**{nm: err(P_[i][skt_], ott[i][skt_]) for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
-                   'bray_medoid': bray(Cmd[skt_], ott[4][skt_]), 'dominant_acc_medoid': float((dmd[skt_] == ott[3][skt_]).float().mean()),
-                   'age_w1_tph_yr': float(tmed(w1_age(aN_[skt_], oaN[skt_]))), 'age_w1_ba_yr': float(tmed(w1_age(aB_[skt_], oaB[skt_]))),
+            dump_rows('score', tag[0], y0, tag[2], tag[3], te, ott, [torch.stack([r[i] for r in pt]) for i in range(3)], CF,
+                      {'bray_medoid': torch.abs(Cmd - ott[4]).sum(1) / 2, 'dom_hit_medoid': (dmd == ott[3]).float()}, rset=tag[1])
+            aN_, aB_ = torch.stack([r[6] for r in pt]), torch.stack([r[7] for r in pt]); nan_ = float('nan'); st_ = bool(skt_.any())
+            met = {**{nm: err(P_[i][skt_], ott[i][skt_]) if st_ else nan_ for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
+                   'bray_medoid': bray(Cmd[skt_], ott[4][skt_]) if st_ else nan_, 'dominant_acc_medoid': float((dmd[skt_] == ott[3][skt_]).float().mean()) if st_ else nan_,
+                   'age_w1_tph_yr': float(tmed(w1_age(aN_[skt_], oaN[skt_]))) if st_ else nan_, 'age_w1_ba_yr': float(tmed(w1_age(aB_[skt_], oaB[skt_]))) if st_ else nan_,
                    'n_bare': int((~skt_).sum()), 'bare_pred_BA_median': float(tmed(P_[1][~skt_])) if (~skt_).any() else None}
             return pt, P_, met
-        def evaluate(y0, cal, te, tags=(None, None)):
+        def evaluate(y0, cal, te, tags):
             CF = fit_cf(y0, cal, tags[0]); pt, P_, met = score(y0, CF, te, tags[1]); return CF, pt, P_, met
         _cp = sorted(set(vpid[cal_m])); _hp = set(np.random.default_rng(34).permutation(_cp)[:len(_cp) // 2])     # random plot halves (r13 C-8: not pid parity)
         hA = [v for v in cal_m if vpid[v] in _hp]; hB = [v for v in cal_m if vpid[v] not in _hp]
-        HALVES = ((hA, hB), (hB, hA))                                                     # each half judged with factors from the other (dump: half 'A' = hA, 'B' = hB)
-        XF = {}                                                                           # (y0, replicate) -> the two halves' cross-fitted (CF, draws, P, metrics)
-        def crossfit(y0, r_):
-            if (y0, r_) not in XF: XF[(y0, r_)] = [evaluate(y0, ca, cb, (('validation', r_, 'AB'[h_]), ('validation', r_, 'BA'[h_]))) for h_, (ca, cb) in enumerate(HALVES)]
-            return XF[(y0, r_)]
+        HALVES = ((hA, hB), (hB, hA))                                                     # half h judged with the factors fitted on the OTHER half (dump: 'A' = hA, 'B' = hB)
+        # (G51.20) an empty or all-bare half can neither be fitted nor judged: an explicit FAIL of the gate and of map_accept, not a crash
+        hwhy = [f"half {nm} {'is empty' if not h_ else 'has no stocked visit'} (G51.20)" for nm, h_ in (('A', hA), ('B', hB)) if not h_ or not bool((obs_summ(torch.tensor(h_))[0] > 0).any())]
+        # replicate sets (G51.19): set 1 (R_REP replicates) selects map_y0 (the gate) and fits CALF; set 2 (R_REP fresh replicates) judges map_accept. The
+        # validation PLOTS are shared by the two sets (only the draws differ): the winner's curse of selecting and accepting on the same draws is avoided,
+        # not the reuse of the plots
+        XF = {}                                                                           # (y0, replicate set, replicate) -> the two halves' (CF, draws, P, metrics)
+        def crossfit(y0, r_, rs_):
+            if (y0, r_, rs_) not in XF: XF[(y0, r_, rs_)] = [evaluate(y0, ca, cb, ((SET_LBL, rs_, r_, 'AB'[h_]), (SET_LBL, rs_, r_, 'BA'[h_]))) for h_, (ca, cb) in enumerate(HALVES)]
+            return XF[(y0, r_, rs_)]
         def derange(n, rng_):
             """a uniformly random derangement of range(n) (no visit keeps its own landscape; rejection sampling); n < 2: the identity"""
             while n >= 2:
                 p_ = rng_.permutation(n)
                 if not (p_ == np.arange(n)).any(): return p_
             return np.arange(n)
-        def mean_sd(xs):
-            return float(np.mean(xs)), float(np.std(xs))
         # PRE-REGISTERED gate of the mapping start year (audit r4 B1): MAP_Y0 (e.g. 2000) is used only if its TPH and BA errors are no worse than the 2021
-        # path's and than the null's, AND the prediction still depends on the stand's landscape (at least half the 2021 path's landscape dependence, r10); else 2021. The gate is decided on the CALIBRATION plots (cross-fitted: factors from one half of the plots, errors on
-        # the other), never on the held-out plots it then reports (audit r5 M1). Every statistic is the mean of R_REP replicates (fresh draws, a fresh
-        # derangement of the landscapes; G46.11); a NaN statistic fails the gate with its reason (G46.18). The chosen year is recorded; g05 maps with it.
-        gate = {'requested': MAP_Y0, 'decided_on': 'calibration plots, 2-fold by plot (seeded random halves)', 'replicates': R_REP}
-        if MAP_Y0 != 2021.0:
+        # path's and than the null's, AND the prediction still depends on the stand's landscape (at least half the 2021 path's landscape dependence, r10);
+        # else 2021. Decided on the calibration plots (with VAL_SPLIT the validation plots), each half's errors with the factors fitted on the other half,
+        # never on the test plots (audit r5 M1). Every statistic is the mean of the R_REP replicates of set 1 (fresh draws, a fresh derangement of the
+        # landscapes; G46.11 / G51.19); a NaN statistic fails the gate with its reason (G46.18). The chosen year is recorded; g05 maps with it.
+        gate = {'requested': MAP_Y0, 'decided_on': f'{SET_LBL} plots, 2-fold by plot (seeded random halves)', 'replicate_set': 1, 'replicates': R_REP}
+        if hwhy: gate.update({'passed': False, 'fail_reasons': hwhy})
+        elif MAP_Y0 != 2021.0:
             FB_SET = 'gate_halves'; nulle = {k: 0.0 for k in ('TPH', 'BA')}
             for ca, cb in HALVES:                            # the null is deterministic: once per half
                 ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb], excl=set(vpid[cb]))
@@ -317,16 +339,21 @@ with torch.no_grad():
                 e0, e1, cs_, cs0_, cr_, cr0_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, [], [], [], []
                 rng_d = np.random.default_rng(7 + r_)           # a fresh derangement per replicate (C13)
                 for h_, (ca, cb) in enumerate(HALVES):
-                    r0, r1 = crossfit(2021.0, r_)[h_], crossfit(MAP_Y0, r_)[h_]
-                    Xs = Xv[[vi[cb[i]] for i in derange(len(cb), rng_d)]]
-                    ps_ = map_path(cb, MAP_Y0, X=Xs); ba_r = torch.log(torch.stack([r[1] for r in r1[1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
+                    r0, r1 = crossfit(2021.0, r_, 1)[h_], crossfit(MAP_Y0, r_, 1)[h_]; hl_ = 'BA'[h_]; ob_ = obs_summ(torch.tensor(cb))
+                    dr_ = derange(len(cb), rng_d); Xs = Xv[[vi[cb[i]] for i in dr_]]; xv_d = {'x_vid': torch.tensor([float(cb[i]) for i in dr_])}
+                    seed_call('gate_shuffled', r_, MAP_Y0, hl_); ps_ = map_path(cb, MAP_Y0, X=Xs, mkey=(1, r_, 'shuffled' + hl_))
+                    seed_call('gate_shuffled', r_, 2021.0, hl_); ps0 = map_path(cb, 2021.0, X=Xs, mkey=(1, r_, 'shuffled' + hl_))
+                    ba_r = torch.log(torch.stack([r[1] for r in r1[1]]) + 1e-3); ba_s = torch.log(torch.stack([r[1] for r in ps_]) + 1e-3)
                     cs_.append(float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]))
-                    ps0 = map_path(cb, 2021.0, X=Xs); b0r = torch.log(torch.stack([r[1] for r in r0[1]]) + 1e-3); b0s = torch.log(torch.stack([r[1] for r in ps0]) + 1e-3)
+                    b0r = torch.log(torch.stack([r[1] for r in r0[1]]) + 1e-3); b0s = torch.log(torch.stack([r[1] for r in ps0]) + 1e-3)
                     cs0_.append(float(np.corrcoef(b0r.numpy(), b0s.numpy())[0, 1]))   # the same statistic for the 2021 path (the reference: r10)
                     # the Monte-Carlo noise floor: the same landscapes REDRAWN (new candidate / MDN draws) — dependence = corr(redraw) − corr(shuffled) (r12 S-1)
-                    pr1 = map_path(cb, MAP_Y0); pr0 = map_path(cb, 2021.0)
+                    seed_call('gate_redraw', r_, MAP_Y0, hl_); pr1 = map_path(cb, MAP_Y0, mkey=(1, r_, 'redraw' + hl_))
+                    seed_call('gate_redraw', r_, 2021.0, hl_); pr0 = map_path(cb, 2021.0, mkey=(1, r_, 'redraw' + hl_))
                     cr_.append(float(np.corrcoef(ba_r.numpy(), torch.log(torch.stack([r[1] for r in pr1]) + 1e-3).numpy())[0, 1]))
                     cr0_.append(float(np.corrcoef(b0r.numpy(), torch.log(torch.stack([r[1] for r in pr0]) + 1e-3).numpy())[0, 1]))
+                    for kd_, y_, pp_ in (('gate_shuffled', MAP_Y0, ps_), ('gate_shuffled', 2021.0, ps0), ('gate_redraw', MAP_Y0, pr1), ('gate_redraw', 2021.0, pr0)):   # (G51.18)
+                        dump_rows(kd_, SET_LBL, y_, r_, hl_, cb, ob_, [torch.stack([r[i] for r in pp_]) for i in range(3)], extra=xv_d if kd_ == 'gate_shuffled' else None, rset=1)
                     for k in ('TPH', 'BA'): e0[k] += r0[3][k] / 2; e1[k] += r1[3][k] / 2
                 cs, cs0, cr, cr0 = float(np.mean(cs_)), float(np.mean(cs0_)), float(np.mean(cr_)), float(np.mean(cr0_))
                 reps.append({'err_2021': e0, 'err_requested': e1, 'shuffled_landscape_corr_BA': cs, 'shuffled_landscape_corr_BA_2021': cs0, 'redraw_corr_BA': cr,
@@ -348,59 +375,114 @@ with torch.no_grad():
             gate.update({'err_2021': {k: e0[k][0] for k in e0}, 'err_requested': {k: e1[k][0] for k in e1}, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs,
                          'shuffled_landscape_corr_BA_2021': cs0, 'redraw_corr_BA': cr, 'redraw_corr_BA_2021': cr0, 'landscape_dependence': dep, 'landscape_dependence_2021': dep0,
                          'sd': {**{f'err_2021_{k}': e0[k][1] for k in e0}, **{f'err_requested_{k}': e1[k][1] for k in e1}, **{k: v_[1] for k, v_ in gm.items()}},
+                         'sd_of_mean': {**{f'err_2021_{k}': e0[k][2] for k in e0}, **{f'err_requested_{k}': e1[k][2] for k in e1}, **{k: v_[2] for k, v_ in gm.items()}},
                          'per_replicate': reps, 'passed': bool(ok), 'fail_reasons': why})
         y0u = MAP_Y0 if gate.get('passed') else 2021.0
-        # the mapping calibration factors g05 applies (CALF): the mean of R_REP replicate fits on all calibration plots (G46.11); per path, for the report
-        CFr = {y0: [fit_cf(y0, cal_m, ('validation', r_, 'all')) for r_ in range(R_REP)] for y0 in sorted({2021.0, MAP_Y0})}
+        # the mapping calibration factors g05 applies (CALF): the mean of the R_REP replicate fits of set 1 on all calibration plots (G46.11); per path
+        CFr = {y0: [fit_cf(y0, cal_m, (SET_LBL, 1, r_, 'all')) for r_ in range(R_REP)] for y0 in sorted({2021.0, MAP_Y0})}
         CFm = {y0: [float(np.mean([c[i] for c in CFr[y0]])) for i in range(3)] for y0 in CFr}
-        res = {y0: score(y0, CFm[y0], te_m, ('test', -1, 'test')) for y0 in CFr}          # held-out (test) scores: reported, never used for a decision
-        if MAP_Y0 != 2021.0: gate.update({'heldout_err_2021': res[2021.0][2], 'heldout_err_requested': res[MAP_Y0][2]})
-        CALF = CFm[y0u]; pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
-        ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
-        # VALIDATION metrics of the chosen mapping path (cross-fitted on the calibration = validation plots: factors from one half, errors on the other;
-        # mean of R_REP replicates) with the null and kNN on the same visits (G46.12) — model choices (v3 vs v4, seeds) and the map acceptance are made on
-        # these; the held-out block below is the test report (r9)
+        CALF = CFm[y0u]; ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
+        ev['calibration_log_factors_mapping_path'] = CALF
+        ev['calibration_log_factors_mapping_path_replicates'] = {'replicate_set': 1, 'per_replicate': CFr[y0u], 'sd': [float(np.std([c[i] for c in CFr[y0u]])) for i in range(3)],
+                                                                 'sd_of_mean': [float(np.std([c[i] for c in CFr[y0u]]) / math.sqrt(R_REP)) for i in range(3)]}
         mk_ = ('TPH', 'BA', 'QMD', 'bray_medoid', 'dominant_acc_medoid', 'age_w1_tph_yr', 'age_w1_ba_yr', 'bare_pred_BA_median')
-        xr_ = [{k: float(np.mean([crossfit(y0u, r_)[h_][3][k] for h_ in range(2) if crossfit(y0u, r_)[h_][3][k] is not None] or [float('nan')])) for k in mk_} for r_ in range(R_REP)]
-        xv_ = {k: mean_sd([x[k] for x in xr_]) for k in mk_}
-        FB_SET = 'validation_halves'; nv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray')}; kv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray', 'dominant_acc')}
-        for ca, cb in HALVES:
-            ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb], excl=set(vpid[cb])); nnv = knn_idx(Xv[[vi[v] for v in cb]], vyear[cb])
-            knv = [o_tr[i][nnv].float().median(1).values for i in range(3)]; kcv = o_tr[4][nnv].mean(1)
-            for i, k in enumerate(('TPH', 'BA', 'QMD')): nv_[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2; kv_[k] += err(knv[i][sk_], ob_[i][sk_]) / 2
-            nv_['bray'] += bray(NULL_COMP.expand(int(sk_.sum()), -1), ob_[4][sk_]) / 2; kv_['bray'] += bray(kcv[sk_], ob_[4][sk_]) / 2
-            kv_['dominant_acc'] += float((kcv[sk_].argmax(1) == ob_[3][sk_]).float().mean()) / 2
-            dump_rows('baseline', 'validation', float('nan'), -1, 'BA'[HALVES.index((ca, cb))], cb, ob_, extra={**{f'null_{k}': nmb[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
-                      **{f'knn_{k}': knv[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ob_[4]).sum(1) / 2,
-                      'bray_knn': torch.abs(kcv - ob_[4]).sum(1) / 2, 'dom_hit_knn': (kcv.argmax(1) == ob_[3]).float()})
-        ev['mapping_path_validation_crossfit'] = {'map_y0': y0u, 'n': len(cal_m), 'replicates': R_REP, 'set': 'validation plots' if VAL_SPLIT else 'calibration blocks (training)',
-                                                  'median_abs_log_err': {k: xv_[k][0] for k in ('TPH', 'BA', 'QMD')}, 'composition': {k: xv_[k][0] for k in ('bray_medoid', 'dominant_acc_medoid')},
-                                                  'sd': {k: xv_[k][1] for k in mk_}, 'null': nv_, 'knn': kv_,
-                                                  'report_only': {k: xv_[k][0] for k in ('age_w1_tph_yr', 'age_w1_ba_yr', 'bare_pred_BA_median')}}
-        # PRE-REGISTERED map acceptance (G46.12): on validation, the chosen path's calibrated median |log err| of BA and TPH and its medoid Bray each below
-        # the null's (kNN reported, not gated); g05 refuses to map otherwise
-        mwhy = [f'NaN {k}' for k in ('TPH', 'BA', 'bray_medoid') if not math.isfinite(xv_[k][0])] + [f'NaN null {k}' for k in ('TPH', 'BA', 'bray') if not math.isfinite(nv_[k])]
-        mwhy += [f'{k} error {xv_[k][0]:.4f} >= null {nv_[k]:.4f}' for k in ('TPH', 'BA') if not xv_[k][0] < nv_[k]]
-        if not xv_['bray_medoid'][0] < nv_['bray']: mwhy.append(f"medoid Bray {xv_['bray_medoid'][0]:.4f} >= null {nv_['bray']:.4f}")
-        ev['map_accept'] = not mwhy; ev['map_accept_reasons'] = mwhy
+        def xsummary(rs_):
+            """the chosen path's cross-fitted validation metrics over the R_REP replicates of set rs_: {metric: (mean, per-replicate sd, sd of the mean)}"""
+            xr_ = [{k: float(np.mean([crossfit(y0u, r_, rs_)[h_][3][k] for h_ in range(2) if crossfit(y0u, r_, rs_)[h_][3][k] is not None] or [float('nan')])) for k in mk_} for r_ in range(R_REP)]
+            return {k: mean_sd([x[k] for x in xr_]) for k in mk_}
+        if hwhy: ev['map_accept'] = False; ev['map_accept_reasons'] = list(hwhy)
+        else:
+            if (y0u, 0, 1) in XF:                            # (report) the selection set's metrics of the chosen path, where the gate computed them
+                xs_ = xsummary(1); ev['mapping_path_validation_crossfit_selection'] = {'replicate_set': 1, 'median_abs_log_err': {k: xs_[k][0] for k in ('TPH', 'BA', 'QMD')},
+                                                                                       'bray_medoid': xs_['bray_medoid'][0], 'sd_of_mean': {k: xs_[k][2] for k in mk_}}
+            # VALIDATION metrics of the chosen mapping path (cross-fitted on the calibration = validation plots; replicate set 2, the acceptance set) with
+            # the null and kNN on the same visits (G46.12): model choices (v3 vs v4, seeds) and the map acceptance are made on these; the held-out block below
+            # is the test report (r9)
+            xv_ = xsummary(2)
+            FB_SET = 'validation_halves'; nv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray')}; kv_ = {k: 0.0 for k in ('TPH', 'BA', 'QMD', 'bray', 'dominant_acc')}; NULL_H = []
+            for ca, cb in HALVES:
+                ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb], excl=set(vpid[cb])); nnv = knn_idx(Xv[[vi[v] for v in cb]], vyear[cb])
+                knv = [o_tr[i][nnv].float().median(1).values for i in range(3)]; kcv = o_tr[4][nnv].mean(1); NULL_H.append((ob_, nmb))
+                for i, k in enumerate(('TPH', 'BA', 'QMD')): nv_[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2; kv_[k] += err(knv[i][sk_], ob_[i][sk_]) / 2
+                nv_['bray'] += bray(NULL_COMP.expand(int(sk_.sum()), -1), ob_[4][sk_]) / 2; kv_['bray'] += bray(kcv[sk_], ob_[4][sk_]) / 2
+                kv_['dominant_acc'] += float((kcv[sk_].argmax(1) == ob_[3][sk_]).float().mean()) / 2
+                dump_rows('baseline', SET_LBL, float('nan'), -1, 'BA'[HALVES.index((ca, cb))], cb, ob_, extra={**{f'null_{k}': nmb[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
+                          **{f'knn_{k}': knv[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ob_[4]).sum(1) / 2,
+                          'bray_knn': torch.abs(kcv - ob_[4]).sum(1) / 2, 'dom_hit_knn': (kcv.argmax(1) == ob_[3]).float()})
+            ev['mapping_path_validation_crossfit'] = {'map_y0': y0u, 'n': len(cal_m), 'replicate_set': 2, 'replicates': R_REP, 'set': 'validation plots' if VAL_SPLIT else 'calibration blocks (training)',
+                                                      'median_abs_log_err': {k: xv_[k][0] for k in ('TPH', 'BA', 'QMD')}, 'composition': {k: xv_[k][0] for k in ('bray_medoid', 'dominant_acc_medoid')},
+                                                      'sd': {k: xv_[k][1] for k in mk_}, 'sd_of_mean': {k: xv_[k][2] for k in mk_}, 'null': nv_, 'knn': kv_,
+                                                      'report_only': {k: xv_[k][0] for k in ('age_w1_tph_yr', 'age_w1_ba_yr', 'bare_pred_BA_median')}}
+            # PRE-REGISTERED map acceptance (G46.12, superiority by G51.15): on validation (replicate set 2), for each of the chosen path's calibrated median
+            # |log err| of TPH and BA and its medoid Bray, the one-sided 90 % upper bound of (model − null) must be < 0. The bound: a plot-cluster bootstrap
+            # within each judged half (plots drawn with replacement, every visit of a drawn plot kept, stocked visits scored; the replicates' predictions,
+            # their factors and the null held fixed), BOOT_B resamples from numpy default_rng(BOOT_SEED), per resample half A then half B, each
+            # rng.integers(0, n, n) over the half's sorted plot ids; statistic = (mean over replicates of the mean over the halves of the median |log err|
+            # (Bray: mean)) − (the same for the null); bound = numpy quantile(·, 0.9) (linear). A NaN resample (no stocked visit) makes the bound NaN: FAIL.
+            # kNN is reported, not gated; g05 refuses to map otherwise
+            BOOT_B, BOOT_SEED, BOOT_Q = 1000, 51015, 0.9
+            JH = {'A': (1, hA), 'B': (0, hB)}                  # judged half -> (its HALVES index, its visits)
+            bt_ = {}
+            for hl_, (hi_, cb) in JH.items():
+                ob_, nmb = NULL_H[hi_]; ob_ = [x.numpy().astype(np.float64) for x in ob_[:3]] + [ob_[4].numpy().astype(np.float64)]
+                P2 = [crossfit(y0u, r_, 2)[hi_] for r_ in range(R_REP)]
+                me = {k: np.stack([np.abs(np.log((p_[2][i].numpy().astype(np.float64) + 1e-3) / (ob_[i] + 1e-3))) for p_ in P2]) for i, k in ((0, 'TPH'), (1, 'BA'))}
+                me['bray'] = np.stack([np.abs(torch.stack([r[4] for r in p_[1]]).numpy().astype(np.float64) - ob_[3]).sum(1) / 2 for p_ in P2])
+                ne = {k: np.abs(np.log((nmb[i].numpy().astype(np.float64) + 1e-3) / (ob_[i] + 1e-3))) for i, k in ((0, 'TPH'), (1, 'BA'))}
+                ne['bray'] = np.abs(NULL_COMP.numpy().astype(np.float64) - ob_[3]).sum(1) / 2
+                pid_ = np.array([int(vpid[v]) for v in cb]); up_ = np.unique(pid_)
+                bt_[hl_] = dict(me=me, ne=ne, sk=ob_[0] > 0, members=[np.flatnonzero(pid_ == p_) for p_ in up_])
+            def boot_stat(sel):
+                """sel: judged half -> visit indices (a multiset) -> {criterion: model − null}"""
+                o_ = {}
+                for k in ('TPH', 'BA', 'bray'):
+                    agg = (lambda a_: np.median(a_, axis=-1)) if k != 'bray' else (lambda a_: np.mean(a_, axis=-1))
+                    mv, nv2 = [], []
+                    for hl_ in ('A', 'B'):
+                        ix_ = sel[hl_][bt_[hl_]['sk'][sel[hl_]]]
+                        if not len(ix_): mv.append(np.nan); nv2.append(np.nan); continue
+                        mv.append(float(np.mean(agg(bt_[hl_]['me'][k][:, ix_])))); nv2.append(float(agg(bt_[hl_]['ne'][k][ix_])))
+                    o_[k] = float(np.mean(mv) - np.mean(nv2))
+                return o_
+            pt_ = boot_stat({hl_: np.arange(len(JH[hl_][1])) for hl_ in JH}); rng_b = np.random.default_rng(BOOT_SEED); dr_b = {k: [] for k in ('TPH', 'BA', 'bray')}
+            for b_ in range(BOOT_B):
+                sel = {}
+                for hl_ in ('A', 'B'):
+                    mb_ = bt_[hl_]['members']; dw_ = rng_b.integers(0, len(mb_), len(mb_)); sel[hl_] = np.concatenate([mb_[j_] for j_ in dw_])
+                for k, x in boot_stat(sel).items(): dr_b[k].append(x)
+            ub_ = {k: float(np.quantile(np.array(x), BOOT_Q)) for k, x in dr_b.items()}
+            ev['map_accept_bootstrap'] = {'B': BOOT_B, 'seed': BOOT_SEED, 'level': BOOT_Q, 'replicate_set': 2, 'cluster': 'plot', 'halves_order': ['A', 'B'],
+                                          'n_plots': {hl_: len(bt_[hl_]['members']) for hl_ in bt_}, 'point_model_minus_null': pt_, 'upper_bound_model_minus_null': ub_,
+                                          'share_resamples_model_ge_null': {k: float(np.mean(np.array(x) >= 0)) for k, x in dr_b.items()}, 'draws_model_minus_null': dr_b}
+            mwhy = [f'NaN {k}' for k in ('TPH', 'BA', 'bray_medoid') if not math.isfinite(xv_[k][0])] + [f'NaN null {k}' for k in ('TPH', 'BA', 'bray') if not math.isfinite(nv_[k])]
+            mwhy += [f"{'medoid Bray' if k == 'bray' else k + ' error'}: upper {int(BOOT_Q * 100)} % bound of (model − null) {ub_[k]:.4f} not < 0 (point {pt_[k]:.4f}; G51.15)"
+                     for k in ('TPH', 'BA', 'bray') if not ub_[k] < 0]
+            ev['map_accept'] = not mwhy; ev['map_accept_reasons'] = mwhy
         # visit date vs end-2025 (G46.14, a documented residual): g04 validates the state at the visit date, g05 maps the end-2025 state; the median shift
         # of the calibrated medians between the two on the validation visits, with common random numbers
-        _rs = (torch.get_rng_state(), np.random.get_state()); pv_ = map_path(cal_m, y0u); torch.set_rng_state(_rs[0]); np.random.set_state(_rs[1]); pe_ = map_path(cal_m, y0u, to_end=True)
+        seed_call('visit_vs_end', 0, -1, float(y0u), 'all'); _rs = (torch.get_rng_state(), np.random.get_state()); pv_ = map_path(cal_m, y0u)
+        torch.set_rng_state(_rs[0]); np.random.set_state(_rs[1]); pe_ = map_path(cal_m, y0u, to_end=True)
         ev['visit_date_vs_end2025_validation'] = {'n': len(cal_m), 'median_years_to_end2025': float(np.median([2026.0 - float(vyear[v]) for v in cal_m])),
                                                   **{f'median_log_shift_{k}': float(tmed(torch.log(torch.stack([r[i] for r in pe_]) / torch.stack([r[i] for r in pv_])))) for i, k in ((0, 'TPH'), (1, 'BA'))}}
-        FB_SET = 'test_2022_2025'; nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]
-        dump_rows('baseline', 'test', float('nan'), -1, 'test', te_m, ot, extra={**{f'null_{k}': nm_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
-                  **{f'knn_{k}': km_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ot[4]).sum(1) / 2,
-                  'bray_knn': torch.abs(o_tr[4][nnm].mean(1) - ot[4]).sum(1) / 2, 'dom_hit_knn': (o_tr[4][nnm].mean(1).argmax(1) == ot[3]).float()})
-        ev['calibration_log_factors_mapping_path'] = CALF
-        ev['calibration_log_factors_mapping_path_replicates'] = {'per_replicate': CFr[y0u], 'sd': [float(np.std([c[i] for c in CFr[y0u]])) for i in range(3)]}
-        ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,
-            **{nm: {'map_path': err(Pm[i][skt], ot[i][skt]), 'map_bias': bias(Pm[i][skt], ot[i][skt]), 'knn': err(km_[i][skt], ot[i][skt]), 'null': err(nm_[i][skt], ot[i][skt])} for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
-            'bray_map_meanshare': bray(Cm[skt], ot[4][skt]), 'bray_knn': bray(o_tr[4][nnm].mean(1)[skt], ot[4][skt]),
-            'bray_map_medoid': res[y0u][2]['bray_medoid'], 'dominant_acc_map_medoid': res[y0u][2]['dominant_acc_medoid'],    # the composition g05 maps (G32)
-            'dominant_acc_knn': float((o_tr[4][nnm].mean(1).argmax(1)[skt] == ot[3][skt]).float().mean()),
-            'report_only': {k: res[y0u][2][k] for k in ('age_w1_tph_yr', 'age_w1_ba_yr', 'n_bare', 'bare_pred_BA_median')}}
-    else: ev['map_accept'] = False; ev['map_accept_reasons'] = ['no calibration or held-out visits 2022-2025: the mapping path cannot be validated']
+        if te_m:          # held-out (test) scores: reported, never used for a decision
+            ot = obs_summ(torch.tensor(te_m)); skt = ot[0] > 0; FB_SET = 'test_2022_2025'; nm_ = null_pred(vyear[te_m])
+            res = {y0: score(y0, CFm[y0], te_m, ('test', 0, -1, 'test')) for y0 in CFr}
+            if MAP_Y0 != 2021.0 and not hwhy: gate.update({'heldout_err_2021': res[2021.0][2], 'heldout_err_requested': res[MAP_Y0][2]})
+            pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
+            nnm = knn_idx(Xv[[vi[v] for v in te_m]], vyear[te_m]); km_ = [o_tr[i][nnm].float().median(1).values for i in range(3)]
+            dump_rows('baseline', 'test', float('nan'), -1, 'test', te_m, ot, extra={**{f'null_{k}': nm_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))},
+                      **{f'knn_{k}': km_[i] for i, k in enumerate(('TPH', 'BA', 'QMD'))}, 'bray_null': torch.abs(NULL_COMP - ot[4]).sum(1) / 2,
+                      'bray_knn': torch.abs(o_tr[4][nnm].mean(1) - ot[4]).sum(1) / 2, 'dom_hit_knn': (o_tr[4][nnm].mean(1).argmax(1) == ot[3]).float()})
+            ev['mapping_path_heldout_2022_2025'] = {'n': len(te_m), 'n_stocked': int(skt.sum()), 'n_calibration_visits': len(cal_m), 'map_y0': y0u,
+                **{nm: {'map_path': err(Pm[i][skt], ot[i][skt]), 'map_bias': bias(Pm[i][skt], ot[i][skt]), 'knn': err(km_[i][skt], ot[i][skt]), 'null': err(nm_[i][skt], ot[i][skt])} for i, nm in enumerate(['TPH', 'BA', 'QMD'])},
+                'bray_map_meanshare': bray(Cm[skt], ot[4][skt]), 'bray_knn': bray(o_tr[4][nnm].mean(1)[skt], ot[4][skt]),
+                'bray_map_medoid': res[y0u][2]['bray_medoid'], 'dominant_acc_map_medoid': res[y0u][2]['dominant_acc_medoid'],    # the composition g05 maps (G32)
+                'dominant_acc_knn': float((o_tr[4][nnm].mean(1).argmax(1)[skt] == ot[3][skt]).float().mean()),
+                'report_only': {k: res[y0u][2][k] for k in ('age_w1_tph_yr', 'age_w1_ba_yr', 'n_bare', 'bare_pred_BA_median')}}
+        else: ev['mapping_path_heldout_2022_2025'] = None                                 # (no test visits 2022-2025: no report; the acceptance does not need them)
+    else: ev['map_accept'] = False; ev['map_accept_reasons'] = ['no calibration visits 2022-2025: the mapping path cannot be validated']
 ev['baseline_fallbacks'] = FALLBACK
+# (G51.13 / G51.5) the model and table this evaluation belongs to: g05 refuses another MODEL, checkpoint content or table build
+ev['model'] = {'MODEL': os.environ.get('MODEL', 'model.pt'), 'sha256': MODEL_SHA256, 'table_build_id': BUILD_ID, 'replicate_sets': {'selection': 1, 'acceptance': 2, 'R': R_REP}}
 pd.DataFrame(PLOT_ROWS).to_parquet(f'{D}/g04_plots.parquet'); ev['plot_dump'] = 'g04_plots.parquet'      # (G48.5; T11i)
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/bayes_eval.json', 'w'), indent=1)

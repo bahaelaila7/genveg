@@ -302,7 +302,7 @@ No blocker. Important findings, all reproduced, by slice:
   vacuous / key-order / circular checks, coverage gaps). F#5 → G35 (span ratios over fs_ok visits).
 While implementing, the redesigned guard caught two new comment-swallows in my own g06 edits (fixed before commit).
 
-## Q. Audit round 14 (2026-10-27; multi-reviewer, HEAD e132568); decisions G45–G47
+## Q. Audit round 14 (2026-10-27; multi-reviewer, HEAD e132568); decisions G45–G50
 ### Q.1 Data fixes (g02b / g02e / g02g / g02j; G46.1–6)
 * **Incomplete curated visits (A14-1, G46.1).** g02b vets every curated visit against FIADB: n_cur = curated live tallied trees on the forested
   conditions, n_fia = FIADB's (`FV.n`). n_fia ≥ 3 and n_cur < n_fia / 2 ⇒ the visit leaves the table (no tokens, no pair endpoint, no bare visit);
@@ -397,7 +397,7 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   | undisturbed-like pairs: NN ratio flowed (z1 encoded) | 1.25 (1.32) | 1.36 (1.25) | 1.50 (1.47) |
   | 25-yr no-event flow: NN ratio (encoded z1) | 1.15 (1.32) | 1.41 (1.25) | 1.49 (1.47) |
   | 25-yr no-event flow: latent variance retained / eff. rank | 12 % / 2.18 | 10 % / 2.50 | 32 % / 3.21 |
-  | 25-yr no-event flow: BA log change / yr | +0.0014 | −0.0010 | +0.0059 |
+  | 25-yr no-event flow: BA log change / yr (÷ 24.5, see the note below) | +0.0014 | −0.0010 | +0.0059 |
   | g06 BA log change / yr by bin (obs +0.022 / +0.014 / +0.013) | +0.001 / +0.000 / +0.003 | +0.000 / −0.002 / −0.002 | +0.009 / +0.007 / +0.007 |
   | g06 decoded age per yr ÷ observed, by bin | 0.43 / 0.52 / 0.61 | 0.39 / 0.49 / 0.66 | 0.39 / 0.45 / 0.59 |
   | decoded age bias at v1 / at the flowed v2 (yr) | +4.3 / +1.7 | +5.1 / +2.3 | +2.9 / +0.2 |
@@ -415,6 +415,10 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   - Small regressions: the synthetic fire ratio 0.92 → 0.82 and clear-cut 0.004 → 0.008.
 
   A change-based age loss (decoded Δage vs observed Δage) would target the rate; that is not in G46.9. Decision for the coordinator.
+
+  Note (B15-9, round 15): the probe divided the 25-yr no-event flow's changes by 24.5 yr, but the flow runs from 2000.5 to the end of 2025
+  (25.5 yr). Every per-year rate of a "25-yr" row here and in the next table is 4 % too high (multiply by 0.961). The comparisons between
+  columns are unaffected.
 * **AGE_DELTA (G49; pre-registered A/B on the same harness, seed and subset: flow vs flow + AGE_DELTA).** The switch defaults to 0 and is
   training-only. The loss is W_AGE · the posterior-weighted squared error, over AGE_S, of the decoded age change (dec_age(flowed z2) −
   dec_age(z1)) against the observed change (`OBS_AGED`). It applies to UNDIST pairs with both visits stocked. Switches-off outputs are still
@@ -442,7 +446,8 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
   - 25-yr effective rank 3.21 → 2.34;
   - the flowed-v2 age bias +0.2 → +3.1 yr.
 
-  Each allowed spread is one run pair at 1200 steps. By G49, AGE_DELTA stays off and is not in the configs or the checkpoint `switches` list.
+  Each allowed spread is one run pair at 1200 steps. By G49, AGE_DELTA stays off: it is not set in the configs (it is recorded, like every
+  g03b switch, in the checkpoint `switches`, STAGE_SWITCHES and gv_verify T4Y_COMPARED: G50; B15-8 / F3 corrected this line).
 
 ## R. Audit round 15 (2026-10-27; multi-reviewer, HEAD 7068cac); decisions G51–G53
 ### R.1 Data fixes (g02b / g02e / g02g / g02j / g02f / g02i / g09 / r4_aef90 / common; G51.1–8, 23, 24)
@@ -528,3 +533,67 @@ against g02b on subsets (GA 6 counties on slim_r4, NC 8 counties on the r7 curat
   tag `zone_fallback_cells`). Tiles carry `zone_rule`; tiles of the old rule count as unfinished and assemble refuses them, so the next run
   rebuilds every tile (after the restart). E15-4 case (r4_sub cid 9009, lon −84.0008, zone 16): rebuilt window vs the zone-16 tile's own route
   cos 0.99991 (old product 0.99830); a synthetic test covers order independence, partial cells and the fallback.
+
+### R.2 Model and evaluation fixes (g03b / g04 / g05 / g06; G51.9–23)
+* **G51.10 clock target (structural; changes JUMP_RESET outputs).** Under JUMP_RESET + AGE_CH the clock component of the reset target is
+  zt0 = z_age0 + σ(s)·(z0 + 0.25 − z_age0), with z_age0 = −AGE_C / AGE_S = −1, s the jump network's raw clock-shift output and z0 the current
+  clock. A reset can rejuvenate (σ → 0), keep or raise the clock by at most 0.25 (40 × 0.25 = 10 yr at r = 1). The shift has a gradient
+  everywhere (the old max(−1, −1 + 0.25·tanh(s)) had none for s < 0, 99.7 % of event rows). For z0 ≥ −1 the jumped clock stays ≥ age 0. The
+  non-clock dimensions are unchanged (target z_post + 0.5·tanh(shift), clamped to ±3). G46.10's text should read 0.25 on the clock dimension (the
+  code always used it); that is a DECISIONS amendment for the coordinator.
+* **G51.12 SIGREG_FLOW routing.** SIGREG_FLOW is computed on a second flow of the same histories from the DETACHED z1, so its gradient
+  reaches the flow only. AGE_FLOW is unchanged. Cost: one more flow forward per batch when SIGREG_FLOW = 1.
+* **G51.9 DEC_AGE** (default 0, training only, in SWITCHES; the driver adds it to STAGE_SWITCHES, gv_verify to T4Y_COMPARED). Loss
+  W_AGE · mean over the stocked batch visits of ((dec_age(dec(enc(v))) − OBS_AGED[v]) / AGE_S)². It is posterior-free.
+* **G51.11 latent acceptance** (`latent_stats`, read by g06 and the eval JSON). ok iff the encodings pass G46.8 (max |mean| ≤ 2, min sd ≥ 0.3,
+  share |z| > 2.9 ≤ 1 %) plus effective rank ≥ 3 and share |z| > 2.5 ≤ 5 %, AND the 25-yr no-event flow passes G46.8. The flow: the stocked
+  visits of the set (observed BA > 5 m²/ha, plot with candidates), encoded at 2000.5, flowed with no event to the end of 2025 on the soil of the
+  plot's highest-prior candidate (B15-3's probe). Every statistic is on the non-clock dimensions. The record keeps both parts and `fail_reasons`.
+* **G51.13 / G51.5 load checks** (g03b's LOAD branch, so g04 / g05 / g06 all run them).
+  - The env's switches are compared with the checkpoint's `switches` (numbers numerically, unset = None) over every recorded or current
+    switch except DATA, MODEL, NT, LOAD, SMOKE_BATCHES, STAND_DIAG, SEED (gv_verify's T4Y_CONTEXT) and EPOCHS (g04 / g05 / g06 set it to 0
+    themselves). A mismatch is refused. A checkpoint without `switches` (before G48.5) loads with a warning.
+  - The checkpoint now also records the table `build_id` and `split_sha` (sha256 of the sorted test, validation and buffer plot ids). Either
+    differing from the current table / split is refused. Without `split_sha` (trained before G51.22) the load warns: such a model's test and
+    validation plots are not this code's.
+  - Training and evaluation refuse an `evk_provisional` table (G51.6) and check the provenance build_id / evk_hash of visits, fia_events,
+    fia_negs, cand_hist and localisation (g02b check_prov). A verifier-style exec (LOAD 0, EPOCHS 0) is not refused.
+  - bayes_eval.json and the g06 record carry `model` = {MODEL, sha256 of the checkpoint file, table_build_id}. g05 refuses another MODEL,
+    sha256 or build, a map_accept judged on anything but 'validation plots', and stands.parquet of another build.
+* **G51.7** pair_set and g06's event groups use the cluster's `det` flag (hard constraint), not lr ≥ 4.
+* **G51.14 g06.** The synthetic section uses validation plots only (test without VAL_SPLIT). Each horizon bin reports `n_plots` and a
+  report-only plot-cluster bootstrap (B 1000, seed 51014, 5 % / 95 %) of (median predicted − median observed) BA change and of the age ratio.
+  G7's tolerances are unchanged.
+* **G51.15 map_accept superiority.** For TPH, BA and medoid Bray, the statistic is d = (mean over the 8 acceptance replicates of the mean over
+  the two judged halves of the median |log err| over stocked visits; Bray: the mean) − (the same for the null). The bound is a plot-cluster
+  bootstrap within each judged half: plots drawn with replacement, every visit of a drawn plot kept, the replicates' predictions, their
+  factors and the null held fixed. B = 1000 from numpy default_rng(51015); per resample, half A then half B, each rng.integers(0, n, n) over
+  the half's sorted plot ids. The bound is numpy quantile(d_b, 0.9) (linear). Accept iff all three bounds are < 0. A NaN resample makes its
+  bound NaN, which fails. bayes_eval.json `map_accept_bootstrap` keeps B, seed, level, plot counts, the point d, the bounds, the shares of
+  d_b ≥ 0 and all 1000 draws.
+* **G51.16** map_path's medoid presence uniforms are seeded by draw_seed(visit, replicate set, replicate, y0, half), a sha256 of the key.
+  g05's are seeded by draw_seed(stand, 'presence'), apart from the stand's MDN / candidate stream.
+* **G51.19 replicate sets.** Set 1 (8 replicates) runs the start-year gate and the CALF fits; set 2 (8 fresh replicates) judges
+  map_accept. Every fit / score / gate call seeds the global generators from its key (call kind, set, replicate, y0, half). The plots are
+  shared by the two sets, only the draws differ. `mapping_path_validation_crossfit` is set 2; set 1's numbers at map_y0 are reported as
+  `mapping_path_validation_crossfit_selection` where the gate computed them.
+* **G51.17** CAL (A alone / A×B) is fitted on the stocked calibration visits. **G51.18** g04_plots.parquet adds `rset` and the kinds
+  gate_shuffled (with x_vid, the deranged landscape's visit) and gate_redraw, enough to recompute dep / dep0 (checked exactly on the smoke).
+* **G51.20** labels of the judged set are conditional ('validation' / 'calibration'). An empty or all-bare half is an explicit FAIL of the
+  gate and map_accept. map_accept no longer needs test visits (the test block is reported when present, else null). The k-means sample is
+  min(n, 200 000) (identical for n ≥ 200 000).
+* **G51.21** converted plots (G41) are out of g04's MDN fit (trA), the calibration / validation visits (A_cal, the halves) and the test
+  scoring sets, and out of g03b's eval te_last / va_last and its localisation sample. The kNN / null pools are unchanged.
+* **G51.22** the blocks are sorted before the seeded test draw. This changes the split of every existing table (sub 52 of 247 test blocks
+  kept, gafl_v4 109 of 544): old checkpoints evaluated with this code see plots they were trained on (hence the load warning).
+* **G51.23** every replicate `sd` now has `sd_of_mean` (sd / √R) next to it. The gate's comment was rewritten (C15-14). In §Q: the heading's
+  decisions (F3), the AGE_DELTA `switches` line (B15-8) and the probe's 24.5-yr divisor note (B15-9) were fixed. F4 (G46.2's text) is a
+  DECISIONS edit for the coordinator.
+* **Bit-identity, switches off.** I compared the current g03b with fefa2f2 on 300 random visits / candidates:
+  - v3 gafl_pipe/model.pt;
+  - v4 random init with SITE_ATTR + AGE_CH;
+  - v4 with SIGREG_MEAN + JUMP_RESET + STATE_ATTR and no AGE_CH.
+
+  z, the 2010 / 2025 flow, decoder lp / val, head, sigreg and a clear-cut jump all give max |Δ| = 0. dec_age differs (0.25 / 0.20 / 2.3 yr):
+  through POSW, which depends on the training visits and so on the G51.22 split. With the block sort reverted it is 0 too. JUMP_RESET + AGE_CH
+  differs, as expected (G51.10).

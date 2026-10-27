@@ -1,5 +1,5 @@
 """Held-out test of the learned DYNAMICS (disturbance response) of the v2 flow + decoder (g03b model.pt), anchored on FIA's own records.
-  1  synthetic: stocked visits of 2019-20 flowed to 2025 with no event / a 2023 clear-cut (harvest class + Hansen loss on the whole footprint, high
+  1  synthetic: stocked VALIDATION visits (VAL_SPLIT; else test, G51.14) of 2019-20 flowed to 2025 with no event / a 2023 clear-cut (harvest class + Hansen loss on the whole footprint, high
      severity) / a 2023 fire → decoded BA (ratio to no event).
   2  held-out remeasurement pairs (test plots, spatial blocks of g03b): z(v1) flowed to v2's date through candidate histories consistent with the
      plot's FIA records between the visits (g03b.pair_cand) → decoded BA and TPH vs v2's observed; grouped by the FIA record of the period:
@@ -14,9 +14,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); SRC = open(f'{_HERE}/g03b_tr
 exec(compile(SRC, 'g03b_train_gafl.py', 'exec')); sys.argv = _argv
 G4 = open(f'{_HERE}/g04_bayes_downscale.py').read(); exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'))
 torch.manual_seed(0); np.random.seed(0); out = {'tag': os.environ.get('TAG', '')}
-EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history, public or uniform
+out['model'] = {'MODEL': os.environ.get('MODEL', 'model.pt'), 'sha256': MODEL_SHA256, 'table_build_id': BUILD_ID}    # (G51.5 / G51.13)
+EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history, public, uniform
 with torch.no_grad():
-    o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021) & V.pid.isin(test_pid | val_pid)].vid.values; vv_ = vv_[fs_ok[vv_]]; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of]); vv_ = np.random.default_rng(33).choice(vv_, min(800, len(vv_)), replace=False); vt = torch.tensor(vv_)   # (held-out visits only: r8 M8)   # (fs_ok + max-prior soil: r13 C-5)
+    o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021) & V.pid.isin(val_pid if VAL_SPLIT else test_pid)].vid.values; vv_ = vv_[fs_ok[vv_]]; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of]); vv_ = np.random.default_rng(33).choice(vv_, min(800, len(vv_)), replace=False); vt = torch.tensor(vv_)   # (validation visits only: G51.14 / B15-6; r8 M8)   # (fs_ok + max-prior soil: r13 C-5)
     z = enc(vt, vyear[vt]); cid0 = np.array([cand_of[vpid[v]][0][int(np.argmax(cand_of[vpid[v]][1]))] for v in vv_]); soil = SOIL[cid0]; res = {}
     for kind in ('none', 'clearcut', 'fire'):
         d = torch.zeros(len(vv_), NY, NC + 2); j = 2023 - YEARS[0]
@@ -34,7 +35,7 @@ with torch.no_grad():
     for v1, v2 in vpair.items():
         if (vpid[v1] not in test_pid if os.environ.get('G06_SET', 'test') == 'test' else vpid[v1] not in set(vpid[tr_v])) or v1 not in pair_cand: continue
         y1, y2 = float(vyear[v1]), float(vyear[v2]); evp = recs_in(vpid[v1], y1, y2)        # records of the interval (recorded at v2: audit r5 I3)
-        cl_ = [c for c in clusters(evp) if c['lr'] >= 4]; grp = 'cut' if any(k in cutk for k, _ in evp) and cl_ else ('other_event' if cl_ else 'none')   # (the table's EVK)
+        cl_ = [c for c in clusters(evp) if detectable(c)]; grp = 'cut' if any(k in cutk for k, _ in evp) and cl_ else ('other_event' if cl_ else 'none')   # (the table's EVK)
         rows.append((v1, v2, grp))
     pred = {}
     for v1, v2, grp in rows:
@@ -71,6 +72,17 @@ with torch.no_grad():
     # every bin must hold >= 20 validation pairs, else the acceptance fails
     HBINS = ((0, 8), (8, 15), (15, 99)); NMIN = 20
     dump = []                                                                              # the per-pair dump (G46.17; the verifier recomputes the bins)
+    def plot_boot(r_, B_=1000, seed=51014):
+        """REPORT-ONLY (G51.14 / B15-7: the bins hold up to 4 pairs per plot): plot-cluster bootstrap 90 % intervals (5 % / 95 % quantiles, linear) of
+        the bin's (median predicted − median observed) BA log change per yr and of its decoded-age ratio (median predicted / median observed), plots drawn
+        with replacement (every pair of a drawn plot kept), numpy default_rng(seed); the pre-registered tolerances (G7) are unchanged"""
+        pid_ = np.array([x[5] for x in r_]); up_ = np.unique(pid_); mb_ = [np.flatnonzero(pid_ == p_) for p_ in up_]; A_ = np.array([x[1:5] for x in r_], dtype=np.float64)
+        rg_ = np.random.default_rng(seed); dba, rat = [], []
+        for _ in range(B_):
+            ix_ = np.concatenate([mb_[j_] for j_ in rg_.integers(0, len(mb_), len(mb_))]); m_ = np.median(A_[ix_], axis=0)
+            dba.append(m_[0] - m_[1]); rat.append(m_[2] / m_[3] if m_[3] > 0 else np.nan)
+        q_ = lambda x: [float(np.quantile(np.array(x), 0.05)), float(np.quantile(np.array(x), 0.95))]
+        return {'B': B_, 'seed': seed, 'BA_logchange_pred_minus_obs': q_(dba), 'age_ratio_pred_over_obs': q_(rat)}
     def long_horizon(pset, prefix, set_):
         lh = []
         for (v1, v2), (cid, pr) in pair_cand2.items():
@@ -83,13 +95,14 @@ with torch.no_grad():
             p0 = float(summaries(*dec(z0))[1][0])
             def dec_age_m(zz):  # decoded BA-weighted mean age of the expected slots (age-class midpoints; g03b.dec_age), median over the draws
                 return float(tmed(dec_age(*dec(zz))))
-            h_ = y2 - y1; r_ = (h_, math.log((pb + 0.5) / (p0 + 0.5)) / h_, math.log((ob2 + 0.5) / (ob1 + 0.5)) / h_, (dec_age_m(st[yy]) - dec_age_m(z0)) / h_, float(AGE_OBS[v2] - AGE_OBS[v1]) / h_)
+            h_ = y2 - y1; r_ = (h_, math.log((pb + 0.5) / (p0 + 0.5)) / h_, math.log((ob2 + 0.5) / (ob1 + 0.5)) / h_, (dec_age_m(st[yy]) - dec_age_m(z0)) / h_, float(AGE_OBS[v2] - AGE_OBS[v1]) / h_, int(vpid[v1]))
             lh.append(r_); dump.append(dict(set=set_, pid=int(vpid[v1]), v1=int(v1), v2=int(v2), y1=y1, y2=y2, horizon=h_, pred_BA_logchange_per_yr=r_[1], obs_BA_logchange_per_yr=r_[2],
                                             pred_age_per_yr=r_[3], obs_age_per_yr=r_[4], obs_BA_v1=ob1, obs_BA_v2=ob2, pred_BA_v1=p0, pred_BA_v2=pb))
         for lo_, hi_ in HBINS:
             r_ = [x for x in lh if lo_ <= x[0] < hi_]
-            out[f'{prefix}h{lo_}_{hi_}'] = {'n': len(r_), **({'median_pred_logchange_per_yr': float(np.median([x[1] for x in r_])), 'median_obs_logchange_per_yr': float(np.median([x[2] for x in r_])),
-                                                              'median_pred_age_per_yr': float(np.median([x[3] for x in r_])), 'median_obs_age_per_yr': float(np.median([x[4] for x in r_]))} if r_ else {})}
+            out[f'{prefix}h{lo_}_{hi_}'] = {'n': len(r_), 'n_plots': len({x[5] for x in r_}), **({'median_pred_logchange_per_yr': float(np.median([x[1] for x in r_])), 'median_obs_logchange_per_yr': float(np.median([x[2] for x in r_])),
+                                                              'median_pred_age_per_yr': float(np.median([x[3] for x in r_])), 'median_obs_age_per_yr': float(np.median([x[4] for x in r_])),
+                                                              'bootstrap_90ci': plot_boot(r_)} if r_ else {})}
     # acceptance on the VALIDATION plots when the model has them (VAL_SPLIT: audit r6 I2); the test plots are reported only
     ACC_SET = 'val' if VAL_SPLIT else 'test'
     long_horizon(val_pid if VAL_SPLIT else test_pid, 'undisturbed_', ACC_SET)
@@ -104,7 +117,7 @@ with torch.no_grad():
                    'age_ok': d_['median_obs_age_per_yr'] > 0 and 0.7 <= d_['median_pred_age_per_yr'] / d_['median_obs_age_per_yr'] <= 1.3}
         why += [f'{k_}: {c_}' for c_, ok_ in acc[k_].items() if not ok_]
     out['latent'] = latent_stats(np.asarray(va_v if VAL_SPLIT else te_v))     # (G46.8) latent health on the acceptance set's encodings
-    if not out['latent']['ok']: why.append('latent (G46.8: max |mean| <= 2, min sd >= 0.3, share |z| > 2.9 <= 1 %)')
+    if not out['latent']['ok']: why.append(f"latent (G46.8 / G51.11): {out['latent']['fail_reasons']}")
     _pf = f'dynamics_pairs_{out["tag"] or "run"}.parquet'; pd.DataFrame(dump).to_parquet(f'{D}/{_pf}'); out['pair_dump'] = _pf
     out['undisturbed_acceptance'] = {'set': ACC_SET, 'bins_required': [list(b_) for b_ in HBINS], 'n_min': NMIN, 'bins': acc, 'latent_ok': out['latent']['ok'],
                                      'passed': not why, 'fail_reasons': why}

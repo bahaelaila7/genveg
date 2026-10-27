@@ -17,6 +17,14 @@ SEED = int(os.environ.get('SEED', 0)); torch.manual_seed(SEED); np.random.seed(S
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # also when exec'd by g04 / g05 / gv_verify (same scripts directory)
 D = f'{ROOT}/data/proto/' + os.environ.get('DATA', 'gafl'); M = json.load(open(f'{D}/meta.json'))
 sys.path.insert(0, os.path.join(ROOT, 'scripts')); from region import region_check; region_check(M)
+if M.get('evk_provisional') and (os.environ.get('LOAD') == '1' or int(os.environ.get('EPOCHS', 30)) > 0):   # (G51.6) training / evaluation only
+    raise SystemExit(f'{D}/meta.json: evk_provisional (built with the GA+FL evidence table for a new region, G51.6): no training or evaluation on it; derive '
+                     'the region\'s table with g09 and rebuild')
+BUILD_ID = M.get('build_id')      # (G51.5) the table instance (g02b uuid); recorded in the checkpoint, compared at load
+import g02b_build_gafl as G2
+if os.environ.get('LOAD') == '1' or int(os.environ.get('EPOCHS', 30)) > 0:     # (G51.5) training / evaluation: the later data stages' outputs belong to THIS build
+    for _f in ('visits.parquet', 'fia_events.parquet', 'fia_negs.parquet', 'cand_hist.parquet', 'localisation.parquet'):    # (g02e; g02g where present)
+        if os.path.exists(f'{D}/{_f}'): G2.check_prov(f'{D}/{_f}', M)
 V = pd.read_parquet(f'{D}/visits.parquet'); TK = pd.read_parquet(f'{D}/tokens.parquet'); PR = pd.read_parquet(f'{D}/pairs.parquet')
 CF16 = os.environ.get('CF16', '0') == '1'      # keep the candidate features float16 in memory (Region 4: ~4 M candidates), cast to float32 when indexed
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r') if CF16 else np.load(f'{D}/cand_feat.npy').astype(np.float32)
@@ -88,7 +96,8 @@ cand_of = {pid: (g.cid.values, g.prior.values) for pid, g in C.groupby('pid')}
 cand_hist = {pid: (g.prior0.values, g.cons.values) for pid, g in C.groupby('pid')} if 'cons' in C.columns else {}   # g02b prior + history-consistency flag
 cand_iw = {pid: (g.incl_w.values, g.hi.values) for pid, g in C.groupby('pid')}     # inverse inclusion weights (footprints per candidate), high-posterior (credible) flag
 P = pd.read_parquet(f'{D}/plots.parquet'); P['blk'] = (P.x // 10000).astype(int) * 1000 + (P.y // 10000).astype(int)
-rng = np.random.default_rng(1); blks = P.blk.unique(); test_blk = set(rng.choice(blks, max(1, int(0.2 * len(blks))), replace=False))
+# (G51.22 / C15-13) the blocks are SORTED before the seeded test draw (and the validation draw below): the split no longer depends on plots.parquet's row order
+rng = np.random.default_rng(1); blks = np.sort(P.blk.unique()); test_blk = set(rng.choice(blks, max(1, int(0.2 * len(blks))), replace=False))
 test_pid = set(P.pid[P.blk.isin(test_blk)]); have = set(cand_of)
 from scipy.spatial import cKDTree as _KD
 _te = P[P.pid.isin(test_pid)]; _dn, _ = _KD(_te[['x', 'y']].values).query(P[['x', 'y']].values)
@@ -139,6 +148,9 @@ SIGREG_FLOW = os.environ.get('SIGREG_FLOW', '0') == '1'; AGE_FLOW = os.environ.g
 # AGE_DELTA = 1 (G49; training only): the decoded age CHANGE of the flowed pair, dec_age(flowed z2) − dec_age(z1), against the observed change on
 # FIA-undisturbed pairs (UNDIST) with both visits stocked, posterior-weighted — the rate, which AGE_FLOW (the level) left at 0.4-0.6x
 AGE_DELTA = os.environ.get('AGE_DELTA', '0') == '1'
+# DEC_AGE = 1 (G51.9; training only): the decoded age of the ENCODING, dec_age(enc(v)), against the observed (OBS_AGED) on stocked visits — the decoder
+# compressed age (slope 0.82; +10 yr on the clock moved the decoded age by +2.4 yr: B15-1), which no flow loss reaches
+DEC_AGE = os.environ.get('DEC_AGE', '0') == '1'
 NJ = 2 * D_Z if JUMP_RESET else D_Z + (1 if AGE_CH else 0)                  # jump-network outputs (shift + reset logits; AGE_CH alone: + the clock-reset logit)
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
     sparse_j = False
@@ -151,15 +163,16 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
             s.Am = nn.Sequential(nn.Linear(ns + (D_Z if STATE_ATTR else 0), 64), nn.Tanh(), nn.Linear(64, D_Z)); nn.init.zeros_(s.Am[2].weight); nn.init.zeros_(s.Am[2].bias)
         if JUMP_RESET: s.P = nn.Sequential(nn.Linear(NC + 2 + ns, 64), nn.Tanh(), nn.Linear(64, D_Z))   # post-disturbance state from (event, soil)
     def jump(s, z, ev, so=None):
-        """bounded disturbance jump of the state; with AGE_CH, dimension 0 (the age clock) is RESET toward age 0 by a learned fraction r (a clear-cut of a
-        100-yr stand needs −2.5 on the clock, beyond any bounded additive jump: audit r5 I1) plus a small bounded shift (thinning from below raises the age)"""
+        """bounded disturbance jump of the state. With AGE_CH, dimension 0 (the age clock) is RESET by a learned fraction r (a clear-cut of a 100-yr stand
+        needs −2.5 on the clock, beyond any bounded additive jump: audit r5 I1): without JUMP_RESET toward age 0 plus a small bounded shift; with
+        JUMP_RESET toward the clock target of G51.10 (a blend between age 0 and the current clock + 0.25, so a partial cut can also keep or raise the age)"""
         o = s.J(torch.cat([z, ev], -1)); jd = torch.tanh(o[:, :D_Z])
         if JUMP_RESET:                                                  # (G30 / G46.10) partial reset toward the target zt: z ← (1 − r) z + r zt, a convex combination
             r = torch.sigmoid(o[:, D_Z:2 * D_Z]); zp = 3 * torch.tanh(s.P(torch.cat([ev, so], -1)))
-            if AGE_CH: zp = torch.cat([torch.full_like(zp[:, :1], -AGE_C / AGE_S), zp[:, 1:]], 1)
-            sc = torch.full((D_Z,), 0.5); sc[0] = 0.25 if AGE_CH else 0.5
-            zt = (zp + sc * jd).clamp(-3, 3)                            # target = z_post + a small bounded shift, inside the encoder range
-            if AGE_CH: zt = torch.cat([zt[:, :1].clamp(min=-AGE_C / AGE_S), zt[:, 1:]], 1)   # the clock target is never below age 0 (B14-6)
+            zt = (zp + 0.5 * jd).clamp(-3, 3)                           # target = z_post + a small bounded shift, inside the encoder range
+            if AGE_CH:      # (G51.10 / B15-2) clock target zt0 = z_age0 + σ(shift)·(z0 + 0.25 − z_age0): a convex blend of age 0 and the current clock + 0.25
+                            # (non-saturating in the shift; the G46.10 clamp at age 0 left the shift without gradient on 99.7 % of the event rows)
+                za0 = -AGE_C / AGE_S; zt = torch.cat([za0 + torch.sigmoid(o[:, :1]) * (z[:, :1] + 0.25 - za0), zt[:, 1:]], 1)
             return r * (zt - z)
         if not AGE_CH: return jd
         r = torch.sigmoid(o[:, D_Z:D_Z + 1]); return torch.cat([r * (-AGE_C / AGE_S - z[:, :1]) + 0.25 * jd[:, :1], jd[:, 1:]], 1)
@@ -266,18 +279,36 @@ def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17), w=None):
     else: ecf_re, ecf_im = (w.view(-1, 1, 1) * torch.cos(arg)).sum(0), (w.view(-1, 1, 1) * torch.sin(arg)).sum(0)
     tgt = torch.exp(-t ** 2 / 2)
     w = torch.exp(-t ** 2 / 2); return (((ecf_re - tgt) ** 2 + ecf_im ** 2) * w).mean()
+def _lat_crit(zc):
+    """the latent statistics of a set of states (non-clock dimensions) [n, d]: max |mean|, min per-dimension sd, shares of |z| > 2.9 and > 2.5, and the
+    effective rank (participation ratio of the covariance eigenvalues)"""
+    mu = zc.mean(0); sd = zc.std(0); ev_ = torch.linalg.eigvalsh(torch.cov(zc.T)).clamp(min=0)
+    return dict(n=int(zc.shape[0]), dims=int(zc.shape[1]), max_abs_mean=float(mu.abs().max()), n_dims_abs_mean_gt2=int((mu.abs() > 2.0).sum()), min_sd=float(sd.min()),
+                share_abs_gt_2p9=float((zc.abs() > 2.9).float().mean()), share_abs_gt_2p5=float((zc.abs() > 2.5).float().mean()),
+                effective_rank=float(ev_.sum() ** 2 / (ev_ ** 2).sum().clamp(min=1e-12)))
+def _g468(c): return c['max_abs_mean'] <= 2.0 and c['min_sd'] >= 0.3 and c['share_abs_gt_2p9'] <= 0.01   # the G46.8 criteria
 def latent_stats(vs, bs=2048):
-    """latent health on encoded visits, over the non-clock dimensions (pre-registered, G46.8; supersedes G29's rank rule): ok iff max |mean| ≤ 2.0 (no
-    collapse onto the ±3 encoder bound), min per-dimension sd ≥ 0.3 (no shrunk dimension) and share of values with |z| > 2.9 ≤ 1 % (no saturation,
-    one- or two-sided). The effective rank (participation ratio of the covariance eigenvalues) is reported only: it did not tell a collapsed latent
-    from a healthy one (r14 B14-1)."""
+    """latent health (pre-registered: G46.8, extended by G51.11), over the non-clock dimensions. ok iff
+      (a) the ENCODINGS of the visits vs: max |mean| ≤ 2.0 (no collapse onto the ±3 encoder bound), min per-dimension sd ≥ 0.3 (no shrunk dimension),
+          share of values with |z| > 2.9 ≤ 1 % (no saturation, one- or two-sided) [G46.8]; effective rank ≥ 3 (rank-1 / rank-2 collapse) and share of
+          |z| > 2.5 ≤ 5 % (bimodal saturation) [G51.11];
+      (b) the 25-yr NO-EVENT FLOW of the stocked visits of vs (observed BA > 5 m²/ha, plot with candidates): encoded at 2000.5, flowed with no event
+          to the end of 2025 on the soil of the plot's highest-prior candidate (B15-3's probe), passes the G46.8 criteria of (a) [G51.11]."""
     with torch.no_grad():
         z = torch.cat([enc(torch.tensor(vs[i:i + bs]), vyear[vs[i:i + bs]]) for i in range(0, len(vs), bs)])
-    zc = z[:, 1:] if AGE_CH else z; mu = zc.mean(0); sd = zc.std(0); ev_ = torch.linalg.eigvalsh(torch.cov(zc.T)).clamp(min=0)
-    pr_ = float(ev_.sum() ** 2 / (ev_ ** 2).sum().clamp(min=1e-12)); d_ = zc.shape[1]; sat = float((zc.abs() > 2.9).float().mean())
-    mx = float(mu.abs().max()); sdm = float(sd.min())
-    return dict(n=len(vs), dims=d_, max_abs_mean=mx, n_dims_abs_mean_gt2=int((mu.abs() > 2.0).sum()), min_sd=sdm, share_abs_gt_2p9=sat, effective_rank=pr_,
-                ok=bool(mx <= 2.0 and sdm >= 0.3 and sat <= 0.01))
+        sv = np.array([v for v in vs if float(OBS_B[v]) > 5.0 and vpid[v] in cand_of], dtype=int); fl = []
+        for i in range(0, len(sv), bs):
+            b_ = sv[i:i + bs]; t_ = torch.full((len(b_),), 2000.5); c0_ = torch.tensor([int(cand_of[vpid[v]][0][int(np.argmax(cand_of[vpid[v]][1]))]) for v in b_])
+            fl.append(flow(enc(torch.tensor(b_), t_), t_, [2025], torch.zeros(len(b_), NY, NC + 2), SOIL[c0_])[2025])
+    zc = z[:, 1:] if AGE_CH else z; ce = _lat_crit(zc)
+    ok_e = _g468(ce) and ce['effective_rank'] >= 3.0 and ce['share_abs_gt_2p5'] <= 0.05
+    if fl:
+        zf = torch.cat(fl); cf = _lat_crit(zf[:, 1:] if AGE_CH else zf); cf['ok'] = bool(_g468(cf))
+    else: cf = dict(n=0, ok=False)                                   # nothing to flow: the flowed criterion cannot pass
+    why = [k for k, b_ in (('max_abs_mean > 2', ce['max_abs_mean'] > 2.0), ('min_sd < 0.3', ce['min_sd'] < 0.3), ('share |z| > 2.9 > 1 %', ce['share_abs_gt_2p9'] > 0.01),
+                           ('effective rank < 3', ce['effective_rank'] < 3.0), ('share |z| > 2.5 > 5 %', ce['share_abs_gt_2p5'] > 0.05),
+                           ('25-yr no-event flow fails G46.8', not cf['ok'])) if b_]
+    return dict(ce, ok_encodings=bool(ok_e), flowed_25yr=cf, ok=bool(ok_e and cf['ok']), fail_reasons=why)
 def sample_cands(pids, K):
     idx = []
     for p in pids:
@@ -330,9 +361,12 @@ vpair = {a: b for a, b in zip(PR.v1.values, PR.v2.values) if fs_ok[a] and fs_ok[
 # take between v1 and v2. Every detectable FIA event cluster in the period (likelihood ratio >= 4, the table's EVK / clusters) must be matched by compatible
 # LANDFIRE / Hansen evidence in its window; if v2 carries no code that could hide a stand-replacing event, the history must have none in between
 # (harvest class or Hansen loss on >= half the footprint). Candidates are then drawn from the location prior restricted to that set.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import g02b_build_gafl as G2
 EVK = G2.evk_from_meta(M)       # (G46.4) the evidence table the TABLE was built with (meta.json evk, hash-checked; refused if absent), not g02b's module's
 def clusters(evs): return G2.clusters(evs, EVK)     # FIA records of one physical event -> event clusters, on the table's EVK
+def detectable(c):
+    """(G51.7) a cluster is a hard constraint iff it holds a record of a DETECTABLE kind (the EVK row's flag, g02b clusters' `det`); its lr is the
+    evidence weight only (calibrated per region by g09), no longer the lr >= 4 threshold"""
+    return bool(c['det'])
 EVID_END = int(M.get('evid_end', G2.EVID_END))      # (G36 / G46.5) the table's evidence end, as g02g clips with
 FEV = pd.read_parquet(f'{D}/fia_events.parquet')
 if 'rmd' not in FEV.columns: sys.exit('fia_events.parquet has no recording visit (rmd): rerun g02e_fia_records.py (audit r5 I3)')
@@ -375,7 +409,7 @@ pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained':
 UNDIST = {}      # (v1, v2) -> the pair is FIA-undisturbed (g06's undisturbed set, G46.16): set by pair_set for every pair it is asked about
 SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
-PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' or 'period'
+PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; also 'plot', 'period'
 def _narrow(m, new, tag):
     """apply a constraint only if candidates remain (a constraint that would empty the set is skipped and counted, the earlier ones are kept)"""
     if (m & new).any(): return m & new
@@ -392,7 +426,7 @@ def pair_set(v1, v2, blk=None, span=None):
     p_ = vpid[v1]; y1, y2 = float(vyr[v1]), float(vyr[v2])
     ya, yb = act_span(y1, y2, bool(VREC[v1]), bool(VREC[v2]), pair_ra(v1, v2)); a, b = max(ya - YEARS[0], 0), min(yb - YEARS[0], NY - 1)    # applied years (index, inclusive)
     be_ = min(b, EVID_END - YEARS[0])                               # (G36 / G46.5) the constrained part of the span ends at the evidence window
-    pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if c['lr'] >= 4]
+    pcl = pair_clusters(p_, y1, y2, ya, yb); cl_ = [c for c in pcl if detectable(c)]
     r_ = min(BAv.get(u, 0.0) for u in span) / max(BAv.get(v1, 0.0), 1e-6) if BAv.get(v1, 0.0) > 1.0 else None
     # FIA-undisturbed (outcome-independent of the switches): no hiding code, no detectable record, a constrained part of the span, no measured collapse
     UNDIST[(v1, v2)] = bool(not blk and not cl_ and be_ >= a and not (r_ is not None and r_ < 0.3))
@@ -457,9 +491,48 @@ if PAIR_ALL:
                 if r_ is not None: pairs_of.setdefault(a_, []).append(b_); pair_cand2[(a_, b_)] = r_
 print(f'FIA-anchored pairs {len(pair_cand)} (mode {PAIR}): {_n_consec} | multi-horizon pairs {len(pair_cand2)} (PAIR_ALL {PAIR_ALL}) | '
       f"pairs of converted plots dropped {nanch.get('converted_dropped', 0)} (G46.7)", flush=True)
+# the training switches (every stage switch g03b reads, its string value; None = unset) recorded in the checkpoint: the loss-only switches leave no
+# trace in the weights (G48.5 / gv_verify T4y). Older checkpoints without the key still load (only enc / flow / dec / q / h22 / h25 are read)
+SWITCHES = SWITCHES_NOW = {'AGE_CH': os.environ.get('AGE_CH'), 'AGE_DELTA': os.environ.get('AGE_DELTA'), 'AGE_FLOW': os.environ.get('AGE_FLOW'), 'ARCH': os.environ.get('ARCH'),
+            'BATCH': os.environ.get('BATCH'), 'CF16': os.environ.get('CF16'), 'CURRIC': os.environ.get('CURRIC'), 'DATA': os.environ.get('DATA'),
+            'DEC_AGE': os.environ.get('DEC_AGE'), 'DZ': os.environ.get('DZ'), 'EPOCHS': os.environ.get('EPOCHS'), 'JUMP_RESET': os.environ.get('JUMP_RESET'), 'KC': os.environ.get('KC'),
+            'LOAD': os.environ.get('LOAD'), 'LOC': os.environ.get('LOC'), 'LR': os.environ.get('LR'), 'MIN_FSHARE': os.environ.get('MIN_FSHARE'),
+            'MODEL': os.environ.get('MODEL'), 'NT': os.environ.get('NT'), 'PAIR_ALL': os.environ.get('PAIR_ALL'),
+            'PAIR_ANCHOR': os.environ.get('PAIR_ANCHOR'), 'PAIR_HMAX': os.environ.get('PAIR_HMAX'), 'QD_WIN': os.environ.get('QD_WIN'),
+            'SEED': os.environ.get('SEED'), 'SEVERITY_ANCHOR': os.environ.get('SEVERITY_ANCHOR'), 'SIGREG_FLOW': os.environ.get('SIGREG_FLOW'),
+            'SIGREG_MEAN': os.environ.get('SIGREG_MEAN'), 'SITE_ATTR': os.environ.get('SITE_ATTR'), 'SMOKE_BATCHES': os.environ.get('SMOKE_BATCHES'),
+            'STAND_DIAG': os.environ.get('STAND_DIAG'), 'STATE_ATTR': os.environ.get('STATE_ATTR'), 'T_PAIR': os.environ.get('T_PAIR'),
+            'VAL_SPLIT': os.environ.get('VAL_SPLIT'), 'W_AGE': os.environ.get('W_AGE'), 'W_COMP': os.environ.get('W_COMP'),
+            'W_SUM': os.environ.get('W_SUM')}
+# switches recorded by the checkpoint but not compared at load: run context / performance (gv_verify T4Y_CONTEXT) and EPOCHS, which g04 / g05 / g06 set
+# to 0 themselves before they exec this file
+SWITCH_CONTEXT = ('DATA', 'MODEL', 'NT', 'LOAD', 'SMOKE_BATCHES', 'STAND_DIAG', 'SEED', 'EPOCHS')
+def switch_mismatch(rec):
+    """(G51.13 / B15-5) the training switches whose value in this process's env differs from the checkpoint's record `rec` (numbers numerically,
+    unset = None = ''), as {name: (recorded, env)}; the compared names are every recorded or current switch outside SWITCH_CONTEXT"""
+    def same(a, b):
+        if a in (None, '') or b in (None, ''): return a in (None, '') and b in (None, '')
+        try: return abs(float(a) - float(b)) < 1e-12
+        except (TypeError, ValueError): return str(a) == str(b)
+    names = (set(rec) | set(SWITCHES_NOW)) - set(SWITCH_CONTEXT)
+    return {k: (rec.get(k), SWITCHES_NOW.get(k)) for k in sorted(names) if not same(rec.get(k), SWITCHES_NOW.get(k))}
+import hashlib
+# the split fingerprint (test, validation and excluded buffer plots), recorded in the checkpoint and compared at load: a model is evaluated on the split
+# it was trained with (G51.22 changed every table's split; a checkpoint without the record predates it and is warned about)
+SPLIT_SHA = hashlib.sha256(json.dumps([sorted(int(x) for x in test_pid), sorted(int(x) for x in val_pid), sorted(int(x) for x in buffer_pid | vbuf_pid)]).encode()).hexdigest()
 if os.environ.get('LOAD') == '1':
-    sd = torch.load(f"{D}/{os.environ.get('MODEL', 'model.pt')}"); enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
-    h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', f"{D}/{os.environ.get('MODEL', 'model.pt')}", flush=True)
+    MODEL_PATH = f"{D}/{os.environ.get('MODEL', 'model.pt')}"; sd = torch.load(MODEL_PATH)
+    MODEL_SHA256 = hashlib.sha256(open(MODEL_PATH, 'rb').read()).hexdigest()       # (G51.13) recorded by g04 / g06, checked by g05
+    if 'switches' in sd:
+        _mm = switch_mismatch(sd['switches'])
+        if _mm: raise SystemExit(f'{MODEL_PATH}: the env\'s training switches differ from the checkpoint\'s (recorded, env): {_mm} (G51.13): refused')
+    else: print(f'WARNING {MODEL_PATH} records no training switches (a checkpoint before G48.5): the env cannot be compared with it', flush=True)
+    if sd.get('build_id') and BUILD_ID and sd['build_id'] != BUILD_ID:
+        raise SystemExit(f"{MODEL_PATH} was trained on table build {sd['build_id']}, {D} is build {BUILD_ID} (G51.5: candidate / visit ids shift between builds): refused")
+    if 'split_sha' not in sd: print(f'WARNING {MODEL_PATH} records no split: trained before G51.22 sorted the blocks, its test / validation plots differ from this split', flush=True)
+    elif sd['split_sha'] != SPLIT_SHA: raise SystemExit(f'{MODEL_PATH} was trained on another test / validation split than this code and table give: refused (G51.22)')
+    enc.load_state_dict(sd['enc']); flow.load_state_dict(sd['flow']); dec.load_state_dict(sd['dec']); qn.load_state_dict(sd['q'])
+    h22.load_state_dict(sd['h22']); h25.load_state_dict(sd['h25']); EP = 0; print('loaded', MODEL_PATH, flush=True)
 for ep in range(EP):
     perm = np.random.permutation(tr_good if ep < E1 else tr_v); tot = {}; nseen = 0
     for b in range(0, len(perm), B):
@@ -497,8 +570,12 @@ for ep in range(EP):
             lp2, val2 = dec(fz.reshape(-1, D_Z)); tp = slot_p[v2].repeat_interleave(K, 0); tv = slot_v[v2].repeat_interleave(K, 0); tm = slot_vm[v2].repeat_interleave(K, 0) * tp.unsqueeze(-1)
             bce2 = bce(lp2, tp, reduction='none').mean(-1); mse2 = (((val2 - tv) ** 2 * tm).sum((-1, -2)) / tm.sum((-1, -2)).clamp(min=1))
             v2r = v2.repeat_interleave(K); ldecf = ((bce2 + mse2 + W_SUM * summ_err(lp2, val2, v2r) + 0.1 * absent_reg(val2, v2r)).view(len(has2), K) * wph).sum(1).mean()
-            if SIGREG_FLOW:   # (G46.9) the flowed population at the pair end tested against N(0, 1) like the encodings (non-clock dims), weighted by the posterior
-                fzr = fz.reshape(-1, D_Z); lsigf = sigreg(fzr[:, 1:] if AGE_CH else fzr, w=wph.reshape(-1) / len(has2)) * len(has2) ** 0.5
+            if SIGREG_FLOW:   # (G46.9) the flowed population at the pair end tested against N(0, 1) like the encodings (non-clock dims), weighted by the posterior;
+                # (G51.12 / B15-4) from the DETACHED z1, so it regularises the flow only (most of its gradient went to the encoder): the same flow re-run
+                st2d = flow(zz.detach(), vyear[v[sel]].repeat_interleave(K), stp, d2, SOIL[c2], end=y2.repeat_interleave(K), rs=VREC[v[sel]].repeat_interleave(K),
+                            re=VREC[v2].repeat_interleave(K), ra=torch.tensor([pair_ra(v[i].item(), t_) for i, t_ in zip(has2, tgt2)]).repeat_interleave(K))
+                fzr = torch.stack([st2d[int(yy[i // K])][i] for i in range(len(c2))])
+                lsigf = sigreg(fzr[:, 1:] if AGE_CH else fzr, w=wph.reshape(-1) / len(has2)) * len(has2) ** 0.5
             if AGE_FLOW:      # (G46.9) decoded age of the flowed state vs v2's observed (decoder form), stocked v2 only, posterior-weighted
                 sk2 = (OBS_B[v2] > 0).float(); ea_ = (((dec_age(lp2, val2) - OBS_AGED[v2r]) / AGE_S) ** 2).view(len(has2), K)
                 lagef = ((ea_ * wph).sum(1) * sk2).sum() / sk2.sum().clamp(min=1)
@@ -526,30 +603,22 @@ for ep in range(EP):
         wy = wy * okv.float() * wmil; lqd = ((dq.view(-1, K) * pq).sum(1) * wy).sum() / wy.sum().clamp(min=1e-6)   # (G46.7: no converted plots)
         ldec = dec_loss(z, v); zr = z[:, 1:] if AGE_CH else z                          # (the age clock is supervised, not regularised toward N(0, 1))
         lage = ((z[:, 0] - AGE_Z[v]) ** 2).mean() if AGE_CH else torch.tensor(0.0)
+        ldage = torch.tensor(0.0)
+        if DEC_AGE:     # (G51.9) decoded age of the ENCODING vs the observed (decoder form), stocked visits, posterior-free: the decoder reads the clock
+            skv = (OBS_B[v] > 0).float(); ldage = ((((dec_age(*dec(z)) - OBS_AGED[v]) / AGE_S) ** 2) * skv).sum() / skv.sum().clamp(min=1)
         loss = mil + 0.5 * lpair + ldec + 0.5 * ldecf + 1.0 * sigreg(zr) * z.shape[0] ** 0.5 + 0.2 * lq + 0.5 * lqd + W_AGE * lage
         if SIGREG_FLOW: loss = loss + 1.0 * lsigf
         if AGE_FLOW: loss = loss + W_AGE * lagef
         if AGE_DELTA: loss = loss + W_AGE * laged
+        if DEC_AGE: loss = loss + W_AGE * ldage
         opt.zero_grad(); loss.backward(); nn.utils.clip_grad_norm_(params, 5.0); opt.step()
         for k_, val in (('mil', mil), ('pair', lpair), ('dec', ldec), ('decflow', ldecf), ('q', lq), ('qdec', lqd)) + ((('age', lage),) if AGE_CH else ()) \
-                + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()) + ((('agedelta', laged),) if AGE_DELTA else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
+                + ((('sigflow', lsigf),) if SIGREG_FLOW else ()) + ((('ageflow', lagef),) if AGE_FLOW else ()) + ((('agedelta', laged),) if AGE_DELTA else ()) \
+                + ((('decage', ldage),) if DEC_AGE else ()): tot[k_] = tot.get(k_, 0) + float(val.detach()) * len(v)
     print(f'epoch {ep+1} ' + ' '.join(f'{k_} {val/max(nseen, 1):.4f}' for k_, val in tot.items()) + f' ({time.time()-t0:.0f}s)', flush=True)
 if SMOKE_B: print('SMOKE_BATCHES: training step ran; no checkpoint, no evaluation', flush=True); sys.exit(0)
-# the training switches (every stage switch g03b reads, its string value; None = unset) recorded in the checkpoint: the loss-only switches leave no
-# trace in the weights (G48.5 / gv_verify T4y). Older checkpoints without the key still load (only enc / flow / dec / q / h22 / h25 are read)
-SWITCHES = {'AGE_CH': os.environ.get('AGE_CH'), 'AGE_DELTA': os.environ.get('AGE_DELTA'), 'AGE_FLOW': os.environ.get('AGE_FLOW'), 'ARCH': os.environ.get('ARCH'),
-            'BATCH': os.environ.get('BATCH'), 'CF16': os.environ.get('CF16'), 'CURRIC': os.environ.get('CURRIC'), 'DATA': os.environ.get('DATA'),
-            'DZ': os.environ.get('DZ'), 'EPOCHS': os.environ.get('EPOCHS'), 'JUMP_RESET': os.environ.get('JUMP_RESET'), 'KC': os.environ.get('KC'),
-            'LOAD': os.environ.get('LOAD'), 'LOC': os.environ.get('LOC'), 'LR': os.environ.get('LR'), 'MIN_FSHARE': os.environ.get('MIN_FSHARE'),
-            'MODEL': os.environ.get('MODEL'), 'NT': os.environ.get('NT'), 'PAIR_ALL': os.environ.get('PAIR_ALL'),
-            'PAIR_ANCHOR': os.environ.get('PAIR_ANCHOR'), 'PAIR_HMAX': os.environ.get('PAIR_HMAX'), 'QD_WIN': os.environ.get('QD_WIN'),
-            'SEED': os.environ.get('SEED'), 'SEVERITY_ANCHOR': os.environ.get('SEVERITY_ANCHOR'), 'SIGREG_FLOW': os.environ.get('SIGREG_FLOW'),
-            'SIGREG_MEAN': os.environ.get('SIGREG_MEAN'), 'SITE_ATTR': os.environ.get('SITE_ATTR'), 'SMOKE_BATCHES': os.environ.get('SMOKE_BATCHES'),
-            'STAND_DIAG': os.environ.get('STAND_DIAG'), 'STATE_ATTR': os.environ.get('STATE_ATTR'), 'T_PAIR': os.environ.get('T_PAIR'),
-            'VAL_SPLIT': os.environ.get('VAL_SPLIT'), 'W_AGE': os.environ.get('W_AGE'), 'W_COMP': os.environ.get('W_COMP'),
-            'W_SUM': os.environ.get('W_SUM')}
 os.environ.get('LOAD') == '1' or torch.save(dict(enc=enc.state_dict(), flow=flow.state_dict(), dec=dec.state_dict(), q=qn.state_dict(), h22=h22.state_dict(), h25=h25.state_dict(),
-                                                switches=SWITCHES), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
+                                                switches=SWITCHES, build_id=BUILD_ID, split_sha=SPLIT_SHA), f"{D}/{os.environ.get('MODEL', 'model.pt')}")
 # ---------------- evaluation on held-out plots (last visit of each plot): vegetation summaries from satellite features
 def summaries(lp, val):
     """slots → plot summaries: TPH, BA (m²/ha), QMD (cm), the dominant key, BA shares by key — EXPECTED values (slot density × calibrated presence probability)."""
@@ -561,7 +630,8 @@ def obs_summ(v):
     tph = N.sum(1); ba = (N * math.pi / 4 * (Dq / 100) ** 2).sum(1); qmd = torch.sqrt((N * Dq ** 2).sum(1) / tph.clamp(min=1e-6))
     bk = (N * Dq ** 2).view(-1, NK, NA).sum(-1); return tph, ba, qmd, bk.argmax(1), bk / bk.sum(1, keepdim=True).clamp(min=1e-9)
 last = V[fs_ok]; last = last.loc[last.groupby('pid').year.idxmax()]; last = last[last.year >= 2019]       # Q predicts the 2025 state: compare with recent visits only (both model and kNN)
-te_last = last[last.pid.isin(test_pid & have)].vid.values; tr_last = last[last.pid.isin(set(vpid[tr_v]))].vid.values   # kNN / null pool: TRAINING plots only (no validation self-matches: r10 I-1)
+_cv = set(V.pid[V.plot_converted.astype(bool)])          # (G51.21) converted plots (G41): not scored (their candidates are mislocated)
+te_last = last[last.pid.isin((test_pid & have) - _cv)].vid.values; tr_last = last[last.pid.isin(set(vpid[tr_v]))].vid.values   # kNN / null pool: TRAINING plots only (no validation self-matches: r10 I-1)
 def plot_feat(pid):    # prior-weighted mean candidate features (the plot's satellite description under location uncertainty)
     cid, pr = cand_of[pid]; X = torch.cat([AEF[cid], DIST[cid].flatten(1), SOIL[cid]], -1); return (X * torch.tensor(pr, dtype=torch.float32).unsqueeze(-1)).sum(0)
 with torch.no_grad():
@@ -603,7 +673,7 @@ with torch.no_grad():
     ev = {'all_heldout': metrics(torch.ones(len(te_last), dtype=torch.bool)), 'baker_50km_heldout': metrics(mk_b) if mk_b.sum() > 5 else None,
           'latent_test': latent_stats(np.asarray(te_v)), **({'latent_validation': latent_stats(np.asarray(va_v))} if VAL_SPLIT and len(va_v) else {})}   # (G29)
     # the same metrics on the VALIDATION plots (VAL_SPLIT): model choices (v3 vs v4, seeds) are made here, the test block above is the report (r9)
-    va_last = last[last.pid.isin(val_pid & have)].vid.values if VAL_SPLIT else np.array([], dtype=int)
+    va_last = last[last.pid.isin((val_pid & have) - _cv)].vid.values if VAL_SPLIT else np.array([], dtype=int)
     if len(va_last) > 5:
         Xte = torch.stack([plot_feat(vpid[v]) for v in va_last]); pp = [pred_plot(vpid[v]) for v in va_last]
         m_t = [torch.stack([p_[i] for p_ in pp]) for i in range(5)]; o_t = obs_summ(torch.tensor(va_last))
@@ -612,12 +682,13 @@ with torch.no_grad():
         ev['validation'] = metrics(torch.ones(len(va_last), dtype=torch.bool))
     # localisation check: plots with dated FIA events — posterior mass (uniform prior) on prior-favoured (event-matching) candidates vs their share
     loc = []
-    for v in np.random.default_rng(31).choice(te_v, min(400, len(te_v)), replace=False):   # a random sample, not the first plots in key order (one state; r11 M-2)
+    te_lv = np.array([v for v in te_v if not bool(VCONV[v])], dtype=int)              # (G51.21: no converted plot in the localisation diagnostic)
+    for v in np.random.default_rng(31).choice(te_lv, min(400, len(te_lv)), replace=False):   # a random sample, not the first plots in key order (one state; r11 M-2)
         p = vpid[v]; cid, pr = cand_of[p]; iw_, hi_ = cand_iw[p]
         if not hi_.any() or hi_.all(): continue                                 # no event information for this plot
         z = enc(torch.tensor([v]), vyear[[v]]).repeat(len(cid), 1); st = flow(z, vyear[[v]].repeat(len(cid)), [2022, 2025], DIST[cid], SOIL[cid], rs=VREC[[v]].repeat(len(cid)), ra=VRA[[v]].repeat(len(cid)))
         nh_ = sum(float(vyear[v] <= y + 1) for y in (2022, 2025))
-        dd_ = sum(((hh(st[y]) - AEF[cid][:, sl]) ** 2).sum(-1) * float(vyear[v] <= y + 1) for y, hh, sl in ((2022, h22, A22), (2025, h25, A25))) / max(nh_, 1)   # mean over heads, as in training
+        dd_ = sum(((hh(st[y]) - AEF[cid][:, sl]) ** 2).sum(-1) * float(vyear[v] <= y + 1) for y, hh, sl in ((2022, h22, A22), (2025, h25, A25))) / max(nh_, 1)   # mean over heads (the training form)
         post = torch.softmax(-dd_ / TEMP + torch.log(torch.tensor(iw_, dtype=torch.float32)), 0).numpy()   # uniform over the DISK (candidates x footprints they stand for)
         loc.append((post[hi_].sum(), iw_[hi_].sum() / iw_.sum()))
     if loc:

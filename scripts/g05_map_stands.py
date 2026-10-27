@@ -6,7 +6,8 @@ nearest node of a 1 km grid: the node explained 41-65 % of the stand-to-stand va
 optional likelihood weighting (USE_B=1, B's flow + heads saved by g04 — likelihood only; joint evidence of the stand's footprints = mean AlphaEarth distance); flow to 2025
 through the footprints' disturbance histories with the v2 flow (decoder-consistent; samples spread over the footprints); decode;
 the estimator g04 validated (G46.13): MS iid draws, the calibrated median e^CF · lmed (calibrated_median) and the medoid draw (medoid_draw), with g04's
-mapping-path calibration factors. Refuses unless g04 accepted the mapped estimator on validation (bayes_eval.json map_accept, G46.12).
+mapping-path calibration factors. Refuses unless g04 accepted the mapped estimator on the validation plots (bayes_eval.json map_accept, G46.12 / G51.15)
+for this MODEL, checkpoint content (sha256) and table build (G51.13).
 USE_B=1 is NOT validated (non-production, audit F4 / C11): it reweights the draws by the stand likelihood but applies the B0 path's calibration factors,
 and B was fine-tuned on encoder latents at the visit year while it scores MDN prior draws from map_y0 here. Writes data/proto/<data>/stand_veg_v3_B<USE_B>.parquet + stand_cohorts_v3_B<USE_B>.parquet (genveg_pipeline promotes the production one to
 stand_veg_v3.parquet / stand_cohorts_v3.parquet) and prints diagnostics (by status, correlation with TreeMap)."""
@@ -27,11 +28,18 @@ import copy; flowB, h22B, h25B = copy.deepcopy(flow), copy.deepcopy(h22), copy.d
 mdn = MDN(); mdn.load_state_dict(BM['mdn']); flowB.load_state_dict(BM['flowB']); h22B.load_state_dict(BM['h22B']); h25B.load_state_dict(BM['h25B'])   # B: likelihood only
 xmu, xsd = BM['xmu'], BM['xsd']; nx = lambda x: torch.tensor((x - xmu) / xsd, dtype=torch.float32)
 BE = json.load(open(f'{D}/bayes_eval.json'))
-if BE.get('map_accept') is not True:     # (G46.12) the pre-registered acceptance of the mapped estimator on validation
+if BE.get('map_accept') is not True:     # (G46.12 / G51.15) the pre-registered acceptance of the mapped estimator on validation
     raise SystemExit(f"g04 did not accept the mapped estimator on validation (bayes_eval.json map_accept {BE.get('map_accept')}: {BE.get('map_accept_reasons')}): not mapping")
-CAL = BE['calibration_log_factors_mapping_path']                                    # calibrated and validated for THIS path in g04
+_set = (BE.get('mapping_path_validation_crossfit') or {}).get('set')
+if _set != 'validation plots':           # (G51.20 / C15-6) accepted on the validation plots, not on training calibration blocks (VAL_SPLIT=0)
+    raise SystemExit(f'bayes_eval.json map_accept was judged on {_set!r}, not on the validation plots: not mapping')
+_bm = BE.get('model') or {}              # (G51.13 / G51.5) the acceptance belongs to THIS checkpoint (name and content) and table build
+_bad = [f'{k} {_bm.get(k)!r} != {x!r}' for k, x in (('MODEL', os.environ.get('MODEL', 'model.pt')), ('sha256', MODEL_SHA256), ('table_build_id', BUILD_ID)) if _bm.get(k) != x]
+if _bad: raise SystemExit(f'bayes_eval.json was written for another model or table ({"; ".join(_bad)}): rerun g04 for this one; not mapping')
+CAL = BE['calibration_log_factors_mapping_path']                                    # calibrated and validated for THIS path by g04
 MAP_Y0 = float(BE.get('map_y0', 2021.0))   # the start year g04 calibrated and gated (not the env's request)
 G2.init(); land = G2._S['land']
+G2.check_prov(f'{D}/stands.parquet', M)                                             # (G51.5) the stand footprints of THIS table build (g02j)
 S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
 SA = torch.tensor(SF[:, :128]); SD = torch.tensor(SF[:, DS].reshape(-1, NY, NC + 2)); SS = torch.tensor(SF[:, SO])
 # ---- per-stand landscapes: footprint features once over the extent (global stride-3 grid, row bands), then each stand's own 1.6 km disk
@@ -74,10 +82,11 @@ with torch.no_grad():
         tph_m, ba_m = (float(calibrated_median(s_[i], CAL[i])) for i in range(2))      # the calibrated stand summary e^CF · lmed (G46.13)
         # stand cohorts (TreeMap-independent initial state for the simulation engines): ONE plausible stand — the medoid draw (closest to the median summary
         # in log TPH / BA / QMD-from-TPH-BA, F#12; calibration does not move it) with its present slots (presence sampled per slot by Bernoulli(calibrated
-        # p) seeded by the stand id, inside medoid_draw; else its largest slot) — not the ensemble mean of the draws, which spread every stand over ~13 keys
+        # p) from its own generator seeded by (stand id, 'presence'), not the stream of the stand's draws (G51.16 / C15-12), inside medoid_draw; else its
+        # largest slot) — not the ensemble mean of the draws, which spread every stand over ~13 keys
         # and ~48 cohorts (audit F2) and made the mean-share dominant collapse onto the regional mode (F3). Its totals are scaled to the calibrated median
         # TPH / BA (one density and one diameter factor; ages, heights, crowns kept). The SHARED estimator g04 validates (medoid_draw, G32)
-        md_ = medoid_draw(lp_, val_, s_, int(sid)); i_, pres, Nr, Dd = md_['i'], md_['pres'], md_['Nr'], md_['Dd']
+        md_ = medoid_draw(lp_, val_, s_, draw_seed(int(sid), 'presence')); i_, pres, Nr, Dd = md_['i'], md_['pres'], md_['Nr'], md_['Dd']
         Hh = (val_[..., 2] * 30).clamp(min=1.37); Cr = val_[..., 3].clamp(0.05, 0.95)
         c0_ = len(crows)
         for j_ in pres:
