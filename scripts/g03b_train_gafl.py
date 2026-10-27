@@ -377,6 +377,7 @@ def pair_set(v1, v2, blk=None, span=None):
         srw = np.zeros(len(cid), bool)
         for c in cl_:
             lo, hi = max(c['lo'] - YEARS[0], 0), min(c['hi'] - YEARS[0], NY - 1) + 1
+            hi = min(hi, G2.EVID_END - YEARS[0] + 1)                     # (G36: no stand-replacing evidence after EVID_END)
             if hi > lo: srw |= (np.maximum(per[:, lo:hi, G2.IX['harvest']], per[:, lo:hi, G2.H_]) >= 0.5).any(1)
         if r_ < 0.3: m = _narrow(m, srw, 'replacing'); loss_applied = True; nanch['replacing'] = nanch.get('replacing', 0) + 1
         elif r_ > 0.6: m = _narrow(m, ~srw, 'partial'); nanch['partial'] = nanch.get('partial', 0) + 1

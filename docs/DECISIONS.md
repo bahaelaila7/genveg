@@ -266,3 +266,18 @@ recommendations, but document the decision point and the different options"). Th
   - config env keys that are not switches are refused;
   - train fingerprints cand_loc_aef / cand_prior under LOC aef / plot;
   - stages always run in pipeline order.
+
+## G16 correction (2026-10-27, from the r13 verifier work)
+- The live Forest Explorer layer (fe_pan/.../baker_fl.geojson, tag "v3 (pipeline)") matches NO stand_veg file in gafl / gafl_pipe (median |ΔBA| 14.6 ft²/ac against gafl_pipe B0). G16's "the live layer was built from B0" does not hold for the current files.
+- The restored B0 files also predate the cohort scaling and the QMD fix.
+- The live layer's provenance is unknown. It will be replaced by the rebuilt pipeline's fe output after the restart; the user restarts FE on the host.
+
+## G44 — Verifier-side decisions (r13, implementer d8294ea)
+- Check names: the old T12 became T4r, fs_ok is T4v, and T12 is g04 set hygiene.
+- E-F7: independent visits carry the table's visit ids, matched by plot + date, so one T1a mismatch does not cascade.
+- T5s: a per-dimension rule plus an aggregate χ² rule (the per-dimension rule alone had no power).
+- T3i is per state (cells n ≥ 30).
+- T3c2z covers UTM zones 15–18 through the remote AlphaEarth COGs. It needs the network; a fetch failure FAILs, with no bypass.
+- T15 re-derives the G7 + G29 acceptance and requires it to pass.
+- **Real data defects found:** T1m — 337 / 9,034 (3.7 %) FIADB live-tree plots in the curated L3 scope are absent from the curated product. This goes to the curation loop.
+- **Stale artifacts found:** T6c — stand_feat.npy predates the G8 severity labels, so stands_fp must re-run.

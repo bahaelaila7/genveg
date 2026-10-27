@@ -41,7 +41,7 @@ STAGES = {
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize'], stands_gafl=['clean']),   # (clean: g02b.feats' forest filter, r13 A-11)
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify.n_upstream'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
     # vtab: gv_verify BEFORE training — the table-level data checks (T0-T10, incl. the pre-registered T1k / T1l) must pass before any seed is trained (r11 M-3)
-    'vtab':         dict(code=['gv_verify.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'g04_bayes_downscale.py', 'check_comments.py'], cfg=['verify.n', 'train'], up=['history', 'stands_fp'], stands=['finalize'], stands_gafl=['clean']),
+    'vtab':         dict(code=['gv_verify.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'g04_bayes_downscale.py', 'check_comments.py'], cfg=['verify.n', 'train', 'table.TOPK', 'table.NCAND', 'table.RADIAL_P'], up=['history', 'stands_fp'], stands=['finalize'], stands_gafl=['clean']),
     # train: up = history only (g03b reads the table, the FIA records and the history-consistent candidates; its stand map is the opt-in STAND_DIAG
     # diagnostic, so no stands_fp: G27); gated on the upstream checks (vup, r10 M-1) and the table checks (vtab, r11 M-3)
     'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history'], gate=['vup', 'vtab'], stands=[]),
@@ -51,7 +51,7 @@ STAGES = {
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize'], stands_gafl=['clean']),
     'fe':           dict(code=['24_export_fe.py', 'g07_fe_attach.py'], cfg=['fe'], up=['map'], stands=[]),
     # (dynamics: T15 re-derives the production seed's acceptance from its dynamics_check file)
-    'verify':       dict(code=['gv_verify.py', 'gv_verify_upstream.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'check_comments.py'], cfg=['verify', 'train'], up=['fe', 'history', 'dynamics'], stands=['finalize', 'land', 'clean']),
+    'verify':       dict(code=['gv_verify.py', 'gv_verify_upstream.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'check_comments.py'], cfg=['verify', 'train', 'table.TOPK', 'table.NCAND', 'table.RADIAL_P'], up=['fe', 'history', 'dynamics'], stands=['finalize', 'land', 'clean']),
 }
 ORDER = list(STAGES)
 def scanned_scripts():
@@ -403,8 +403,9 @@ def main():
         if st == 'fe':
             gj = os.path.join(WS, cfg['fe']['geojson'])
             return [(S('24_export_fe.py', os.path.join(ROOT, cfg['fe']['area']), gj, f'{SR}/finalize/stands.gpkg'), {}), (S('g07_fe_attach.py', gj, cfg['fe']['tag']), {})]
-        if st == 'vtab': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, GV_REQUIRE_MAP='0'))]
-        if st == 'verify': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, MODEL=model, GV_REQUIRE_MAP='1')), (S('gv_verify_upstream.py', cfg['verify']['n_upstream']), dict(GV_REQUIRE_MAP='1'))]
+        tab_ = {k: str(cfg['table'][k]) for k in ('TOPK', 'NCAND', 'RADIAL_P') if k in cfg.get('table', {})}   # (gv_verify T1q checks meta against them)
+        if st == 'vtab': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, **tab_, GV_REQUIRE_MAP='0'))]
+        if st == 'verify': return [(S('gv_verify.py', cfg['verify']['n']), dict(tenv, **tab_, MODEL=model, GV_REQUIRE_MAP='1')), (S('gv_verify_upstream.py', cfg['verify']['n_upstream']), dict(GV_REQUIRE_MAP='1'))]
     def fe_ext():                                                              # fe's layer (+ g07's cohorts sidecar), WORKSPACE-relative: [size, mtime]
         gj = cfg['fe']['geojson']; cj = gj[:-len('.geojson')] + '_cohorts.json' if gj.endswith('.geojson') else gj + '_cohorts.json'
         return {p: stat_(os.path.join(WS, p)) for p in (gj, cj) if os.path.exists(os.path.join(WS, p))}
