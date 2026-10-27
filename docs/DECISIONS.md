@@ -368,3 +368,22 @@ Chosen option first; rejected options after "Rejected".
 3. **U10r tolerance:** treecover2000 within 1 vs the GA+FL product (GDAL `average` rounding, 5.5 % of pixels at ±1) — accepted, documented in the pre-registration table.
 4. **Stale/divergent label limit:** a table with no recorded code hash labels every failure "stale". Accepted: every production table is rebuilt with provenance before its verify run, so the limit only affects pre-r14 tables.
 5. **Missing interfaces assigned to the model side:** g03b saves the training switches into the checkpoint (`switches` dict, every STAGE_SWITCHES name g03b reads) for T4y; g04 writes per-plot dumps sufficient to recompute the null baselines and CAL (T11i); the verifier then lists them in G04_DUMPS.
+
+## G49 — SIGREG_FLOW / AGE_FLOW outcome and the age-rate lag (r14 model implementer A/B, c048e50; coordinator)
+The pre-registered G46.9 acceptance was only partly met on B's 1200-step subset harness (docs/GENVEG_V4_R4.md §Q.2):
+- **Improved:** 25-yr variance retained 10 → 32 %; g06 BA growth +0.000 / −0.002 / −0.002 → +0.009 / +0.007 / +0.007 per yr (observed +0.022 / +0.014 / +0.013); flowed-v2 age bias +2.3 → +0.2 yr; 25-yr composition Bray 0.375 → 0.281.
+- **Not improved:** the decoded age *rate* (0.39–0.66 → 0.39–0.59 of observed); pair-level composition Bray is flat.
+- **Small regressions:** synthetic fire ratio 0.92 → 0.82; undisturbed-like NN ratio 1.36 → 1.50, which now matches the encoded baseline 1.47.
+
+Options:
+- (a) keep both switches on and add a change-based age loss for the rate;
+- (b) turn both off, since the criterion was not met;
+- (c) keep SIGREG_FLOW only.
+
+**Chosen: (a).** Contraction and the BA-growth deficit are the defects g06 judges, and both moved strongly in the right direction. The regressions are small, and one of them is a move to the encoded baseline. The real gate remains g06's pre-registered validation acceptance on the production run, which fails or passes independently of this choice. The partial miss is recorded here rather than re-defined as a pass.
+
+**New switch AGE_DELTA.** W_AGE · ((dec_age(flowed z2) − dec_age(z1)) − (obs_age(v2) − obs_age(v1)))² / AGE_S², posterior-weighted, on pairs with both visits stocked and undisturbed (UNDIST). It targets the rate directly; AGE_FLOW targets the level.
+- Acceptance (pre-registered): on the same harness, flow + AGE_DELTA vs flow:
+  - the decoded age ratio rises in every bin by ≥ 0.1 or reaches ≥ 0.8;
+  - no other row of the §Q.2 table regresses by more than the flow-vs-ctl spread.
+- If this fails, AGE_DELTA stays off and the age-rate lag is logged as a known residual for g06 to judge.
