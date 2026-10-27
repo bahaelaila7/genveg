@@ -1,6 +1,7 @@
 """History-consistent candidates per plot (user, 2026-10-21: what coinciding FIA / LANDFIRE records establish holds for ALL of the plot's visits).
 A candidate footprint is consistent with the plot's WHOLE FIA history (g02e) when
-  - every detectable FIA event cluster (g02b.clusters, likelihood ratio >= 4) has compatible LANDFIRE / Hansen evidence in its window, and
+  - every detectable FIA event cluster (g02b.clusters `det`: a record of a detectable kind, G51.7) has compatible LANDFIRE / Hansen evidence in its
+    window, and
   - no FIA-undisturbed period (g02e negs) shows stand-replacing evidence (harvest class or Hansen loss on >= half the footprint);
 applied sequentially in time order, skipping a constraint that no remaining footprint satisfies (2026-10-22).
 g03b (LOC=history, default) draws every visit of the plot — MIL AlphaEarth matches, remeasurement pairs, Q targets — from the prior restricted to this
@@ -9,15 +10,19 @@ NOT a localisation claim: g02f's held-out test (2026-10-21) found ~0.003 nats / 
 placebo — the set constrains which disturbance HISTORIES the plot can have, which is what the dynamics need.
 Writes data/proto/gafl/cand_hist.parquet (cid, pid, cons) and localisation.parquet (n_hi = consistent footprints, mass_hi = their prior mass).
 The evidence table is the table's own (meta.json evk, G46.4); undisturbed periods are clipped to the evidence end (meta evid_end: G36 / G46.5, as the
-location prior); both outputs carry the provenance record G2.PROV_KEY (G46.6)."""
+location prior); g02e's outputs must carry this table's build_id and evk_hash (G51.5); both outputs carry the provenance record G2.PROV_KEY (code
+hash at the start, build_id, evk_hash) and are written together."""
 import os, sys, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 import json as _json; from region import region_check
 from features import ROOT
 D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC
-META = _json.load(open(f'{D}/meta.json')); region_check(META); EVK = G2.evk_from_meta(META); EVID_END = int(META.get('evid_end', G2.EVID_END))
-PROV = {'code_hash': {'g02g': G2.code_hash(os.path.abspath(__file__)), 'g02b': G2.code_hash(os.path.abspath(G2.__file__))}, 'evk_hash': META['evk_hash']}
+PROV = {'code_hash': {'g02g': G2.code_hash(os.path.abspath(__file__)), 'g02b': G2.code_hash(os.path.abspath(G2.__file__))}}   # (at the start: A15-6f)
+META = _json.load(open(f'{D}/meta.json')); region_check(META); EVK = G2.evk_from_meta(META)
+if 'evid_end' not in META: sys.exit('meta.json has no evid_end (table built before G46.5): rebuild it with scripts/g02b_build_gafl.py')
+EVID_END = int(META['evid_end']); PROV.update(build_id=G2.meta_build_id(META), evk_hash=META['evk_hash'])
+for f_ in ('fia_events.parquet', 'fia_negs.parquet'): G2.check_prov(f'{D}/{f_}', META)        # (g02e's records of THIS table build)
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r'); P = pd.read_parquet(f'{D}/plots.parquet').set_index('pid')
 E = pd.read_parquet(f'{D}/fia_events.parquet'); N = pd.read_parquet(f'{D}/fia_negs.parquet')
 ev = {p: list(zip(g.kind, g.year.astype(int))) for p, g in E.groupby('pid')}; ng = {p: list(zip(g.y_lo.astype(int), g.y_hi.astype(int))) for p, g in N.groupby('pid')}
@@ -26,7 +31,7 @@ def consistent(per, evs, negs):
     skipped (a missed detection / FIA-LANDFIRE disagreement must not erase the plot's whole history) — the same rule as g03b's pairs"""
     m = np.ones(len(per), bool); ncl = 0; sr = np.maximum(per[:, :, G2.IX['harvest']], per[:, :, G2.H_]) >= 0.5; cons_ = []
     for c in G2.clusters(evs, EVK):
-        if c['lr'] < 4: continue
+        if not c['det']: continue
         lo, hi = max(c['lo'] - G2.YEARS[0], 0), min(c['hi'] - G2.YEARS[0], NY - 1) + 1
         if hi > lo: cons_.append((c['lo'], (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1))); ncl += 1
     for a, b in negs:
@@ -42,9 +47,8 @@ if __name__ == '__main__':
         m, ncl = consistent(per, ev.get(pid, []), ng.get(pid, []))
         out.append(pd.DataFrame({'cid': g.cid.values, 'pid': pid, 'cons': m}))           # pid with cid: consumers check the file belongs to THIS table
         loc.append((pid, float(iw[m].sum()), float(g.prior.values[m].sum()), float(iw.sum()), ncl))
-    G2.to_parquet_prov(pd.concat(out, ignore_index=True), f'{D}/cand_hist.parquet', PROV)
     L = pd.DataFrame(loc, columns=['pid', 'n_hi', 'mass_hi', 'n', 'n_clusters']).set_index('pid').join(P[['st', 'u', 'c', 'p']])
     L['mass_hi'] = np.where(L.n_hi > 0, 1.0, 0.0)            # all mass on the consistent set when it exists (g03b LOC=history)
-    G2.to_parquet_prov(L, f'{D}/localisation.parquet', PROV)
+    G2.to_parquet_prov_all([(pd.concat(out, ignore_index=True), f'{D}/cand_hist.parquet'), (L, f'{D}/localisation.parquet')], PROV)
     for nm, s_ in (('all', L), ('>=1 detectable cluster', L[L.n_clusters > 0]), ('>=2', L[L.n_clusters > 1])):
         print(f'{nm:24s} n {len(s_):5d}: consistent footprints median {s_.n_hi.median():5.0f} of {s_.n.median():.0f} | empty {np.mean(s_.n_hi == 0):.3f} | <=50 {np.mean((s_.n_hi > 0) & (s_.n_hi <= 50)):.3f}')

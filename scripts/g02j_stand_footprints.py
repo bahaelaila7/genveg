@@ -2,13 +2,17 @@
 the configured stand-delineation run without rebuilding the training table): the stands of the run (common.stands_run: STANDS_RUN) that intersect
 Baker County, up to 4 footprints (3x3 x 30 m) per stand drawn without replacement (seed 0) from the 3-px grid, plus one at the central pixel of
 every stand the grid misses (slivers), with the candidate features of g02b.feats (identical code to the plots' candidates). Writes data/proto/gafl/stands.parquet (stand_id, row, col) and stand_feat.npy (float16);
-stands.parquet carries the provenance record g02b.PROV_KEY (G46.6: this script's and g02b's code hash)."""
+stands.parquet carries the provenance record g02b.PROV_KEY (G51.5: this script's code hash over itself and its local imports, taken at the start,
+g02b's, and the build_id of the table it is written next to)."""
 import os, sys, numpy as np, pandas as pd, rasterio, geopandas as gpd
 from rasterio.windows import Window
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import g02b_build_gafl as B
+import g02b_build_gafl as B, json
 from stand_runs import stands_run
+from region import region_check
 if __name__ == '__main__':
+    PROV = {'code_hash': {'g02j': B.code_hash(os.path.abspath(__file__)), 'g02b': B.code_hash(os.path.abspath(B.__file__))}}   # (at the start: A15-6f)
+    META = json.load(open(f'{B.OUT}/meta.json')); region_check(META); PROV['build_id'] = B.meta_build_id(META)   # (stage stands_fp runs after table)
     SR_ = stands_run(); print('stand run', SR_['dir'], flush=True)
     B.init(); OUT = B.OUT
     cty = gpd.read_file(f'{B.ROOT}/data/derived/baker_county.gpkg').to_crs(B._S['land'].crs).geometry.iloc[0]
@@ -35,7 +39,6 @@ if __name__ == '__main__':
         if os.path.islink(f'{OUT}/{f}'): os.unlink(f'{OUT}/{f}')
     S_ = pd.DataFrame({'stand_id': np.concatenate([sid[sel], np.array(sx, sid.dtype)]), 'row': np.concatenate([rr[sel] + r0, fr]).astype(int),
                        'col': np.concatenate([cc[sel] + c0, fc]).astype(int), 'kind': ['grid'] * len(sel) + ['sliver'] * len(sx)})
-    PROV = {'code_hash': {'g02j': B.code_hash(os.path.abspath(__file__)), 'g02b': B.code_hash(os.path.abspath(B.__file__))}}
     B.to_parquet_prov(S_, f'{OUT}/stands.parquet', PROV); np.save(f'{OUT}/stand_feat.npy', np.concatenate([F[sel], np.array(Fx, F.dtype).reshape(-1, F.shape[1])]).astype(np.float16))
     sid = S_.stand_id.values; sel = np.arange(len(sid))
     missing = set(st.stand_id) - set(sid)

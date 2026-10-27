@@ -2,8 +2,11 @@
 (2026-10-22: strict data-derived rules). The stratified candidate sample and its inclusion weights incl_w are design-based and stay valid for any
 prior: kept candidate c carries prior ∝ w_c · incl_w_c (w = g02b.prior_weights, unnormalised, baseline 1). Full-disk numbers are Horvitz-Thompson
 estimates: n_hi = Σ incl_w over hi (w >= 4), mass_hi = their prior mass, conc = prior mass on the top 10 % of footprints, n_fp = Σ incl_w.
-Rewrites cands.parquet (prior, hi) and plots.parquet (conc, n_hi, mass_hi, n_fp); backups *.bak_prior_<tag>. Run g02e first (records), then g02g."""
+Rewrites cands.parquet (prior, hi) and plots.parquet (conc, n_hi, mass_hi, n_fp); backups *.bak_prior_<tag>. Run g02e first (records), then g02g.
+LEGACY, REFUSES TO RUN (G51.6 / A15-7): it read g02b's module EVK instead of the table's, dropped the radial location prior and rewrote the table
+without a new build id; rebuild the table with scripts/g02b_build_gafl.py instead."""
 import os, sys, shutil, numpy as np, pandas as pd
+sys.exit('g02i_reprior.py is legacy and refuses to run (docs/DECISIONS.md G51.6): rebuild the table with scripts/g02b_build_gafl.py')
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT

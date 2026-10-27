@@ -4,7 +4,8 @@ records holds for ALL of the plot's visits). One posterior per plot, shared by e
 Model (per plot; footprints c of the 1.6 km disk, each kept candidate standing for incl_w footprints — Horvitz-Thompson, valid for any prior):
   base_c   FIA fuzz: a share pi of plots lies uniformly within 800 m of the public point, the rest uniformly in the 800-1600 m ring
   LR_c     Π over the plot's FIA event clusters (g02b.clusters of g02e's events, all visits) of  q_g / b  if c shows compatible evidence in the
-           window, (1 - q_g) / (1 - b) if not   (q_g = detection probability of group g = strong / medium / weak by g02b.EVK likelihood ratio;
+           window, (1 - q_g) / (1 - b) if not   (q_g = detection probability of group g = detectable / weak by the cluster's `det`, the table's
+           evidence table (meta.json evk, G46.4 / G51.6-7: not g02b's module table, and not keyed by the lr values, which g09 now measures);
            b = share of footprints with such evidence in the footprint's distance class, inner disk / ring)
            × Π over FIA-undisturbed periods (g02e negs) of  f / b0  if c shows stand-replacing evidence (harvest class or Hansen loss on >= half the
            footprint), (1 - f) / (1 - b0) if not
@@ -17,7 +18,9 @@ import os, sys, json, numpy as np, pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT
-D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC; GRP = {8.0: 'strong', 4.0: 'medium', 3.0: 'weak'}; R_IN = 800.0
+from region import region_check
+D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; NY, NC = len(G2.YEARS), G2.NC; GRP = {True: 'detectable', False: 'weak'}; R_IN = 800.0
+META = json.load(open(f'{D}/meta.json')); region_check(META); EVK = G2.evk_from_meta(META)      # (the table's evidence table and region, A15-7)
 C = pd.read_parquet(f'{D}/cands.parquet'); CF = np.load(f'{D}/cand_feat.npy', mmap_mode='r'); P = pd.read_parquet(f'{D}/plots.parquet').set_index('pid')
 E = pd.read_parquet(f'{D}/fia_events.parquet'); N = pd.read_parquet(f'{D}/fia_negs.parquet')
 ev = {p: list(zip(g.kind, g.year.astype(int))) for p, g in E.groupby('pid')}; ng = {p: list(zip(g.y_lo.astype(int), g.y_hi.astype(int))) for p, g in N.groupby('pid')}
@@ -39,11 +42,11 @@ def records(shift):
     out = []
     for pid, cid, iw, inn, per in PL:
         evl, ngl = [], []
-        for c in G2.clusters([(k, y + shift) for k, y in ev.get(pid, [])]):
+        for c in G2.clusters([(k, y + shift) for k, y in ev.get(pid, [])], EVK):
             lo, hi = max(c['lo'] - G2.YEARS[0], 0), min(c['hi'] - G2.YEARS[0], NY - 1) + 1
             if hi <= lo: continue
             m = (per[:, lo:hi][:, :, sorted(c['cols'])].sum(-1) > 0).any(1); b = bg(m, iw, inn)
-            if b is not None: evl.append((GRP[c['lr']], m, b))
+            if b is not None: evl.append((GRP[c['det']], m, b))
         sr = np.maximum(per[:, :, G2.IX['harvest']], per[:, :, G2.H_]) >= 0.5
         for a, bb in ng.get(pid, []):
             a, bb = max(a + shift - G2.YEARS[0], 0), min(bb + shift - G2.YEARS[0], NY - 1)
