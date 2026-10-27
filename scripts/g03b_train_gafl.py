@@ -100,7 +100,7 @@ if VAL_SPLIT:
     val_pid = set(P.pid[P.blk.isin(val_blk)]) - buffer_pid
     _va = P[P.pid.isin(val_pid)]; _dv, _ = _KD(_va[['x', 'y']].values).query(P[['x', 'y']].values)
     vbuf_pid = set(P.pid[(_dv < 3200) & ~P.pid.isin(val_pid) & ~P.pid.isin(test_pid)])
-MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9 % of
+MIN_FS = float(os.environ.get('MIN_FSHARE', 0.25))     # data vetting 2026-10-22: per-forested-area densities from < 1/4 of the plot are inflated / noisy (9% of
 VCONV = torch.tensor(V.plot_converted.values if 'plot_converted' in V.columns else np.zeros(nv, bool), dtype=torch.bool)   # (g02e; r13 G41)
 fs_ok = (V.fsub.values >= MIN_FS) if 'fsub' in V.columns else np.ones(nv, bool)   # visits with forest share 0.10-0.25 have BA > 60 m2/ha vs 0.5 % when fully forested)
 tr_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] not in test_pid and vpid[v] not in buffer_pid and vpid[v] not in val_pid and vpid[v] not in vbuf_pid and fs_ok[v]]); te_v = np.array([v for v in range(nv) if vpid[v] in have and vpid[v] in test_pid and fs_ok[v]])
@@ -127,8 +127,8 @@ PAIR_HMAX = float(os.environ.get('PAIR_HMAX', 25.0))
 # r13 model switches (docs/DECISIONS.md G29-G31; the new configs set them, defaults keep the older checkpoints loadable):
 # SIGREG_MEAN = 1: SIGReg tests the projections against N(0, 1) INCLUDING location (centring left the mean free: 11-12 of 16 dimensions sat on the ±3 bound);
 # JUMP_RESET = 1: every dimension's jump is a learned partial reset toward a learned post-disturbance state, r ⊙ (z_post − z) + 0.5 tanh(shift) (a ±1
-#   bounded jump could not represent a stand-replacing change, median max |Δz| 4.5); STATE_ATTR = 1: the attractor depends on the state too, A + Am([soil, z])
-#   (the LTC equilibria were confined to the box between 0 and A(soil))
+#   bounded jump could not represent a stand-replacing change, median max |Δz| 4.5); STATE_ATTR = 1: the attractor depends on the state too, `A + Am([soil, z])`
+#   (the LTC equilibria were confined to the box between 0 and `A(soil)`)
 SIGREG_MEAN = os.environ.get('SIGREG_MEAN', '0') == '1'; JUMP_RESET = os.environ.get('JUMP_RESET', '0') == '1'; STATE_ATTR = os.environ.get('STATE_ATTR', '0') == '1'
 NJ = 2 * D_Z if JUMP_RESET else D_Z + (1 if AGE_CH else 0)                  # jump-network outputs (shift + reset logits; AGE_CH alone: + the clock-reset logit)
 class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = −(1/τ + g) z + g A, exact exponential step over each year's part after the visit, + disturbance jumps
@@ -137,7 +137,7 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         super().__init__(); ns = SOIL.shape[1]
         s.g = nn.Sequential(nn.Linear(D_Z + ns, 64), nn.Tanh(), nn.Linear(64, D_Z)); s.A = nn.Parameter(torch.zeros(D_Z)); s.ltau = nn.Parameter(torch.full((D_Z,), 2.0))
         s.J = nn.Sequential(nn.Linear(D_Z + NC + 2, 64), nn.GELU(), nn.Linear(64, NJ))
-        if AGE_CH: s.lrho = nn.Parameter(torch.zeros(1))                  # (AGE_CH) log clock rate: the BA-weighted mean age advances < 1 yr / yr (ingrowth, mortality)
+        if AGE_CH: s.lrho = nn.Parameter(torch.zeros(1))                  # (AGE_CH) log clock rate: the BA-weighted mean age advances < 1 yr per yr (ingrowth, mortality)
         if SITE_ATTR or STATE_ATTR:
             s.Am = nn.Sequential(nn.Linear(ns + (D_Z if STATE_ATTR else 0), 64), nn.Tanh(), nn.Linear(64, D_Z)); nn.init.zeros_(s.Am[2].weight); nn.init.zeros_(s.Am[2].bias)
         if JUMP_RESET: s.P = nn.Sequential(nn.Linear(NC + 2 + ns, 64), nn.Tanh(), nn.Linear(64, D_Z))   # post-disturbance state from (event, soil)
@@ -167,7 +167,7 @@ class Flow(nn.Module):        # liquid time-constant cell (Hasani et al.): dz = 
         y0 = int(math.floor(start.min().item())); out = {st: z for st in stop if st < max(y0, YEARS[0])}   # stops before the run: initial state (masked by the caller)
         Aa = s.A + s.Am(soil) if (SITE_ATTR and not STATE_ATTR) else s.A      # (SITE_ATTR: the site's attractor; soil is constant along the run)
         for j, y in enumerate(range(max(y0, YEARS[0]), YEARS[-1] + 1)):
-            dt = (torch.clamp(end, max=y + 1) - torch.clamp(start, min=y)).clamp(0, 1).unsqueeze(-1)   # part of year y inside [start, end]
+            dt = (torch.clamp(end, max=y + 1) - torch.clamp(start, min=y)).clamp(0, 1).unsqueeze(-1)   # part of year y inside the closed span (start, end)
             jj = y - YEARS[0]
             g = torch.sigmoid(s.g(torch.cat([z, soil], -1)))
             if STATE_ATTR: Aa = s.A + s.Am(torch.cat([soil, z], -1))            # (G31) state-dependent attractor, frozen within the year
@@ -246,7 +246,7 @@ opt = torch.optim.AdamW(params, lr=float(os.environ.get('LR', 1e-3)), weight_dec
 def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):
     """LeJEPA SIGReg: Epps-Pulley distance between the empirical characteristic function of random 1-D projections of z and that of N(0, 1)."""
     u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z if SIGREG_MEAN else z - z.mean(0)) @ u   # [n, nproj] (SIGREG_MEAN: location tested too, G29)
-    arg = p.unsqueeze(-1) * t                                                                            # [n, nproj, T]
+    arg = p.unsqueeze(-1) * t                                                                            # shape (n, nproj, T)
     ecf_re, ecf_im = torch.cos(arg).mean(0), torch.sin(arg).mean(0); tgt = torch.exp(-t ** 2 / 2)
     w = torch.exp(-t ** 2 / 2); return (((ecf_re - tgt) ** 2 + ecf_im ** 2) * w).mean()
 def latent_stats(vs, bs=2048):
@@ -345,7 +345,7 @@ def pair_clusters(p_, y1, y2, a, b):
 pair_cand = {}; nanch = {'with_event': 0, 'event_matched': 0, 'neg_constrained': 0}
 SEVER = os.environ.get('SEVERITY_ANCHOR', '1') in ('1', '2') and os.environ.get('LOAD') != '1'; SEVER2 = os.environ.get('SEVERITY_ANCHOR', '1') == '2' and SEVER   # outcome-informed candidate selection (training only, never in evaluation)
 _tb = TK.assign(ba=TK.N * math.pi / 4 * (TK.QMD / 100) ** 2).groupby('vid').ba.sum(); BAv = dict(zip(_tb.index.values, _tb.values))
-PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' | 'period'
+PAIR = os.environ.get('PAIR_ANCHOR', 'both')    # 'both': plot-history set ∩ this period's consistent set, else the period set, else the prior; 'plot' or 'period'
 def _narrow(m, new, tag):
     """apply a constraint only if candidates remain (a constraint that would empty the set is skipped and counted, the earlier ones are kept)"""
     if (m & new).any(): return m & new
@@ -429,7 +429,7 @@ for ep in range(EP):
     for b in range(0, len(perm), B):
         if SMOKE_B and b // B >= SMOKE_B: break                               # (SMOKE_BATCHES: a code-path check of the training step only)
         v = torch.tensor(perm[b:b + B]); pids = vpid[v.numpy()]; nseen += len(v)
-        z = enc(v, vyear[v]); ci = sample_cands(pids, K)                                                  # [B, K]
+        z = enc(v, vyear[v]); ci = sample_cands(pids, K)                                                  # shape (B, K)
         cz = z.repeat_interleave(K, 0); cst = vyear[v].repeat_interleave(K); cidx = torch.tensor(ci.ravel())
         crs = VREC[v].repeat_interleave(K); cra = VRA[v].repeat_interleave(K); st = flow(cz, cst, [2022, 2025], DIST[cidx], SOIL[cidx], rs=crs, ra=cra)
         d = torch.zeros(len(cidx)); n_t = torch.zeros(len(cidx))
@@ -568,7 +568,7 @@ if os.environ.get('STAND_DIAG') == '1':
         res = []
         for k_ in range(8):
             z = qm + torch.exp(qls) * torch.randn_like(qm); lp, val = dec(z); tph, ba, qmd, dk, _ = summaries(lp, val); res.append(torch.stack([tph, ba, qmd, dk.float()], 1))
-        R_ = torch.stack(res)                                                     # [samples, footprints, 4]
+        R_ = torch.stack(res)                                                     # shape (samples, footprints, 4)
     S['tph'] = R_[:, :, 0].mean(0).numpy(); S['ba'] = R_[:, :, 1].mean(0).numpy(); S['qmd'] = R_[:, :, 2].mean(0).numpy()
     S['ba_sd'] = R_[:, :, 1].std(0).numpy(); S['dom'] = torch.mode(R_[:, :, 3].long(), 0).values.numpy()
     out = S.groupby('stand_id').agg(tph=('tph', 'mean'), ba=('ba', 'mean'), qmd=('qmd', 'mean'), ba_sd=('ba_sd', 'mean'), dom=('dom', lambda x: x.mode().iloc[0])).reset_index()

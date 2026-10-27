@@ -82,8 +82,8 @@ params = [*enc.parameters(), *flow.parameters(), *dec.parameters(), *qn.paramete
 opt = torch.optim.AdamW(params, lr=float(os.environ.get('LR', 1e-3)), weight_decay=1e-4)
 def sigreg(z, nproj=32, t=torch.linspace(-3, 3, 17)):
     """LeJEPA SIGReg: Epps-Pulley distance between the empirical characteristic function of random 1-D projections of z and that of N(0, 1)."""
-    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z - z.mean(0)) @ u                       # [n, nproj]
-    arg = p.unsqueeze(-1) * t                                                                            # [n, nproj, T]
+    u = Fn.normalize(torch.randn(z.shape[1], nproj), dim=0); p = (z - z.mean(0)) @ u                       # shape (n, nproj)
+    arg = p.unsqueeze(-1) * t                                                                            # shape (n, nproj, T)
     ecf_re, ecf_im = torch.cos(arg).mean(0), torch.sin(arg).mean(0); tgt = torch.exp(-t ** 2 / 2)
     w = torch.exp(-t ** 2 / 2); return (((ecf_re - tgt) ** 2 + ecf_im ** 2) * w).mean()
 def sample_cands(pids, K):
@@ -100,7 +100,7 @@ for ep in range(EP):
     perm = np.random.permutation(tr_v); tot = {}
     for b in range(0, len(perm), B):
         v = torch.tensor(perm[b:b + B]); pids = vpid[v.numpy()]
-        z = enc(v, vyear[v]); ci = sample_cands(pids, K)                                                  # [B, K]
+        z = enc(v, vyear[v]); ci = sample_cands(pids, K)                                                  # shape (B, K)
         cz = z.repeat_interleave(K, 0); cst = vyear[v].repeat_interleave(K); cidx = torch.tensor(ci.ravel())
         st = flow(cz, cst, [2022, 2025], DIST[cidx], SOIL[cidx])
         d = torch.zeros(len(cidx)); n_t = torch.zeros(len(cidx))
@@ -186,7 +186,7 @@ with torch.no_grad():
     res = []
     for k_ in range(8):
         z = qm + torch.exp(qls) * torch.randn_like(qm); lp, val = dec(z); tph, ba, qmd, dk = summaries(lp, val); res.append(torch.stack([tph, ba, qmd, dk.float()], 1))
-    R_ = torch.stack(res)                                                     # [samples, footprints, 4]
+    R_ = torch.stack(res)                                                     # shape (samples, footprints, 4)
 S['tph'] = R_[:, :, 0].mean(0).numpy(); S['ba'] = R_[:, :, 1].mean(0).numpy(); S['qmd'] = R_[:, :, 2].mean(0).numpy()
 S['ba_sd'] = R_[:, :, 1].std(0).numpy(); S['dom'] = torch.mode(R_[:, :, 3].long(), 0).values.numpy()
 out = S.groupby('stand_id').agg(tph=('tph', 'mean'), ba=('ba', 'mean'), qmd=('qmd', 'mean'), ba_sd=('ba_sd', 'mean'), dom=('dom', lambda x: x.mode().iloc[0])).reset_index()

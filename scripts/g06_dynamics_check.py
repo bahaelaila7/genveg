@@ -12,7 +12,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); SRC = open(f'{_HERE}/g03b_tr
 exec(compile(SRC, 'g03b_train_gafl.py', 'exec')); sys.argv = _argv
 G4 = open(f'{_HERE}/g04_bayes_downscale.py').read(); exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'))
 torch.manual_seed(0); np.random.seed(0); out = {'tag': os.environ.get('TAG', '')}
-EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history | public | uniform
+EVAL_LOC = os.environ.get('EVAL_LOC', 'history'); out['eval_loc'] = EVAL_LOC; C0 = pd.read_parquet(f'{D}/cands.parquet')   # history, public or uniform
 with torch.no_grad():
     o_ = obs_summ; vv_ = V[(V.year >= 2019) & (V.year < 2021) & V.pid.isin(test_pid | val_pid)].vid.values; vv_ = vv_[fs_ok[vv_]]; vv_ = vv_[o_(torch.tensor(vv_))[1].numpy() > 10]; vv_ = np.array([v for v in vv_ if vpid[v] in cand_of]); vv_ = np.random.default_rng(33).choice(vv_, min(800, len(vv_)), replace=False); vt = torch.tensor(vv_)   # (held-out visits only: r8 M8)   # (fs_ok + max-prior soil: r13 C-5)
     z = enc(vt, vyear[vt]); cid0 = np.array([cand_of[vpid[v]][0][int(np.argmax(cand_of[vpid[v]][1]))] for v in vv_]); soil = SOIL[cid0]; res = {}

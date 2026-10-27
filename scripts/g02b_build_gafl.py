@@ -102,7 +102,7 @@ def feats(r0, c0, h, w, keep_all=False):
             return (S_ / np.maximum(N_, 1)).T
         F = [m3n(A2), m3n(A5)]; n = len(rr); br, bc = rr, cc
     OH = np.zeros((n, len(YEARS), NC), np.float32); SV = np.zeros((n, len(YEARS)), np.float32)
-    # disturbance evidence = FRACTION of the footprint's 3x3 pixels (90 m, as for AlphaEarth) per class and event calendar year; severity = max
+    # disturbance evidence = FRACTION of the footprint's 3x3 pixels (90 m, as for AlphaEarth) per class and event calendar year; severity: the max
     # a pixel counts ONCE per class and event year: the fiscal-year products (2024 / 2025) repeat Oct-Dec of the previous calendar year that the
     # previous file also codes (r10 M-2: 8-10 % of those pixels counted 2/9)
     PX = np.zeros((n, len(YEARS), NC, 9), bool)
@@ -124,7 +124,7 @@ H_ = NC + 1; IX = {k: i for i, k in enumerate(CLS)}
 # generic 'unknown' change class and Hansen loss matched every record type). Evidence classes per record type are those with a clear association in
 # the data (lift at the FIA year vs the plot's quiet years: cutting -> harvest ×4.4-4.8, Hansen ×2.5-2.8; site preparation / planting -> chemical
 # ×7-8; natural regeneration -> fire ×5.6; fire -> fire ×4.9, Hansen ×9 (crown); wind -> weather ×15; human -> harvest ×5.6). Stand-replacing evidence
-# (Hansen loss) is compatible only with records whose FIA-measured outcome is stand-replacing (site preparation / regeneration median BA(v2)/BA(v1)
+# (Hansen loss) is compatible only with records whose FIA-measured outcome is stand-replacing (site preparation / regeneration median `BA(v2)/BA(v1)`
 # 0.17-0.30, cutting 0.57 with 34 % < 0.3, crown fire). Mild records (wind, insects, human, other treatments: median 0.84-1.13) never match Hansen
 # or 'unknown'. Likelihood ratio 4 = a detectable record (a hard constraint for the history-consistent sets / pairs, threshold lr >= 4; the old ×8
 # was far stronger than the observed lifts ≈ 2); 2 = weak (never a hard constraint).

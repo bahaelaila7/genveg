@@ -13,8 +13,8 @@ _argv = sys.argv; sys.argv = ['g03b']
 _HERE = os.path.dirname(os.path.abspath(__file__)); SRC = open(f'{_HERE}/g03b_train_gafl.py').read(); SRC = SRC[:SRC.index('# ---------------- evaluation on held-out plots')]
 exec(compile(SRC, 'g03b_train_gafl.py', 'exec')); sys.argv = _argv
 G4 = open(f'{_HERE}/g04_bayes_downscale.py').read()
-exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'))            # summaries / obs_summ
-exec(compile(G4[G4.index('BINS = '):G4.index('XL = {}')], 'g04', 'exec'))                               # landscape()
+exec(compile(G4[G4.index('# decoded summaries'):G4.index('t0 = time.time()')], 'g04', 'exec'))            # summaries, obs_summ
+exec(compile(G4[G4.index('BINS = '):G4.index('XL = {}')], 'g04', 'exec'))                               # the landscape function
 exec(compile(G4[G4.index('GM = 8'):G4.index('mdn = MDN()')], 'g04', 'exec'))                            # MDN class
 sys.path.insert(0, _HERE); import g02b_build_gafl as G2
 from stand_runs import stands_run

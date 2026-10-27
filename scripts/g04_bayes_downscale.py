@@ -58,7 +58,7 @@ def landscape(F_aef, F_dist, F_soil, wt=None):
     lab = km.predict(F_aef[:, 64:].numpy()); hist = np.bincount(lab, weights=w_.numpy(), minlength=32)
     ev = []
     for a, b in BINS:
-        sl = slice(a - YEARS[0], b - YEARS[0] + 1); d = F_dist[:, sl]                      # [n, years, NC+2]
+        sl = slice(a - YEARS[0], b - YEARS[0] + 1); d = F_dist[:, sl]                      # shape (n, years, NC+2)
         ev += list(((d[:, :, :NC].amax(1) > 0).float() * w_.unsqueeze(-1)).sum(0).numpy()) + [float(((d[:, :, NC + 1].amax(1) > 0).float() * w_).sum())]
     return np.r_[(F_aef * w_.unsqueeze(-1)).sum(0).numpy(), hist, ev, (F_soil * w_.unsqueeze(-1)).sum(0).numpy()].astype(np.float32)
 XL = {}
@@ -79,7 +79,7 @@ class MDN(nn.Module):
         lw, mu, ls = s(x, yr); lp = (-0.5 * ((z.unsqueeze(1) - mu) / torch.exp(ls)) ** 2 - ls - 0.5 * math.log(2 * math.pi)).sum(-1)
         return -(torch.logsumexp(lw + lp, -1)).mean()
     def sample(s, x, yr, m):
-        lw, mu, ls = s(x, yr); k = torch.multinomial(lw.exp(), m, replacement=True)               # [n, m]
+        lw, mu, ls = s(x, yr); k = torch.multinomial(lw.exp(), m, replacement=True)               # shape (n, m)
         i = torch.arange(len(x)).unsqueeze(-1); return (mu[i, k] + torch.exp(ls[i, k]) * torch.randn(len(x), m, D_Z)).clamp(-3, 3)   # encoder range (3 tanh)
 mdn = MDN(); om = torch.optim.AdamW(mdn.parameters(), lr=1e-3, weight_decay=1e-4)
 Xv = torch.stack([nx(XL[vpid[v]]) for v in range(nv) if vpid[v] in XL]); vv = np.array([v for v in range(nv) if vpid[v] in XL]); vi = {v: i for i, v in enumerate(vv)}
@@ -185,7 +185,7 @@ with torch.no_grad():
             yv = float(vyear[v])
             if yv > 2025.5: continue
             cid, pr = hi_cands(vpid[v]); zs = mdn.sample(Xv[[vi[v]]], torch.tensor([yv]), MS)[0]
-            Dm = torch.stack([fwd_dist(zs, torch.full((MS,), yv), torch.tensor([c_] * MS), rs=VREC[[v]].repeat(MS), ra=VRA[[v]].repeat(MS))[0] for c_ in cid])     # [footprints, MS]
+            Dm = torch.stack([fwd_dist(zs, torch.full((MS,), yv), torch.tensor([c_] * MS), rs=VREC[[v]].repeat(MS), ra=VRA[[v]].repeat(MS))[0] for c_ in cid])     # shape (footprints, MS)
             lw = torch.logsumexp(-Dm / TEMP + torch.log(torch.tensor(pr, dtype=torch.float32)).unsqueeze(1), 0)    # log Σ_c p_c exp(-d_c(z)/T): location mixture
             w = torch.softmax(lw, 0); idx = torch.multinomial(w, 32, replacement=True); ess.append(float(1 / (w ** 2).sum()))
             sA = summ(zs); sB = summ(zs[idx]); used.append(v)
