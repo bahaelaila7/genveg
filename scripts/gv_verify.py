@@ -44,6 +44,7 @@ PRE-REGISTERED THRESHOLDS (one line each: check — threshold — rationale). [r
   T4d   >= 3200 m; VAL_SPLIT -> val non-empty [r13]   two 1.6 km disks cannot overlap
   T4e-m 1e-5 / 1e-7                    float32 closed forms of the flow
   T4n/o/p/q 1e-5 / 1e-4; SIGReg ratio > 20, |Δ| <= 25 % [r13]   G29-G31 closed forms; the shifted-cloud ratio is ~100x when the location is tested
+        [r14] T4n bounded reset (G46.10: clamp(z_post + shift) target, states stay in ±3, clock >= age 0); T4q exact G46.8 verdicts
   T4r   1e-6                           the loss vanishes at a perfect prediction
   T4v   exact [r13]                    MIN_FSHARE vetting is deterministic
   T4w   1e-6 [r14]                     G46.20 / A14-8: a 2026 visit's flow state = the end-2025 state (the YEARS[-1] clamp), 2026 events dropped
@@ -989,7 +990,8 @@ def main(argv=None, force_pairs=(), stop_after=None):
     nso = ns_['SOIL'].shape[1]
     if 'JUMP_RESET' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
         try:
-            for age_ in (False, True):          # T4n JUMP_RESET (G30): jump = r ⊙ (z_post − z) + sc ⊙ tanh(shift), z_post = 3 tanh(P([ev, soil])) (AGE_CH: clock z_post = −AGE_C / AGE_S)
+            for age_ in (False, True):          # T4n JUMP_RESET (G30, bounded by G46.10): the jump is r ⊙ (zt − z) with target zt = z_post + sc ⊙ tanh(shift) clamped to ±3, z_post the P network's 3·tanh output
+                                                # (AGE_CH: clock z_post = −AGE_C / AGE_S, its shift scale 0.25 (G30), its target never below age 0); a convex step stays in [−3, 3]
                 sw(True, age_, True, False); torch.manual_seed(5); fj = type(ns_['flow'])()
                 with torch.no_grad():
                     for p_ in fj.J.parameters(): p_.fill_(0.0)
@@ -997,15 +999,21 @@ def main(argv=None, force_pairs=(), stop_after=None):
                     W1, b1, W2, b2 = fj.P[0].weight, fj.P[0].bias, fj.P[2].weight, fj.P[2].bias; zp_ = 3 * torch.tanh(torch.tanh(torch.cat([ev_, so_], 1) @ W1.T + b1) @ W2.T + b2)
                     if age_: zp_[:, 0] = -ns_['AGE_C'] / ns_['AGE_S']
                     sc_ = torch.full((Dz,), 0.5); sc_[0] = 0.25 if age_ else 0.5
-                    ej = (fj.jump(z_, ev_, so_) - (torch.sigmoid(bj[Dz:]) * (zp_ - z_) + sc_ * torch.tanh(bj[:Dz]))).abs().max().item()
+                    zt_ = (zp_ + sc_ * torch.tanh(bj[:Dz])).clamp(-3, 3)
+                    if age_: zt_[:, 0] = zt_[:, 0].clamp(min=-ns_['AGE_C'] / ns_['AGE_S'])
+                    ej = (fj.jump(z_, ev_, so_) - torch.sigmoid(bj[Dz:]) * (zt_ - z_)).abs().max().item()
+                    zb_ = (torch.rand(256, Dz) * 6 - 3); eb_, sb_ = torch.rand(256, NC + 2), torch.randn(256, nso)
+                    fj.J[-1].bias.copy_(torch.randn(2 * Dz) * 3); nb_ = zb_ + fj.jump(zb_, eb_, sb_); fj.J[-1].bias.copy_(bj)
+                    eb = max(0.0, (nb_.abs().max().item() - 3.0))                  # (G46.10: bounded)
+                    ec = max(0.0, (-ns_['AGE_C'] / ns_['AGE_S'] - nb_[:, 0]).max().item()) if age_ and (zb_[:, 0] >= -ns_['AGE_C'] / ns_['AGE_S']).all() else 0.0
                     fj.J[-1].bias[:Dz].fill_(0.0); fj.J[-1].bias[Dz:].fill_(40.0)          # r -> 1, no shift: a stand at +2.9 lands AT z_post
                     dj = torch.zeros(1, NY, NC + 2); dj[0, 2010 - 2000, 0] = 1; sj = torch.randn(1, nso)
                     land_ = fj(torch.full((1, Dz), 2.9), torch.tensor([2009.2]), [2010], dj, sj)[2010]
                     zq = 3 * torch.tanh(fj.P(torch.cat([dj[:, 2010 - 2000], sj], 1)))
                     if age_: zq[:, 0] = -ns_['AGE_C'] / ns_['AGE_S']
                     el = (land_ - zq).abs().max().item()
-                check(f'T4n JUMP_RESET{" + AGE_CH" if age_ else ""}: jump = sigmoid(r) (z_post − z) + sc tanh(shift) exactly; with r -> 1 a stand at +2.9 lands at z_post', ej < 1e-5 and el < 1e-5,
-                      f'max |jump − spec| {ej:.1e}; |landed − z_post| {el:.1e}')
+                check(f'T4n JUMP_RESET{" + AGE_CH" if age_ else ""}: jump = sigmoid(r) (clamp(z_post + sc tanh(shift)) − z) exactly; with r -> 1 a stand at +2.9 lands at z_post; jumped states stay in [−3, 3] (G46.10)',
+                      ej < 1e-5 and el < 1e-5 and eb < 1e-6 and ec < 1e-6, f'max |jump − spec| {ej:.1e}; |landed − z_post| {el:.1e}; beyond ±3 by {eb:.1e}' + (f'; clock below age 0 by {ec:.1e}' if age_ else ''))
         finally: ns_.update(_sw0)
     else: print('SKIP  T4n g03b has no JUMP_RESET switch')
     if 'STATE_ATTR' in open(f'{ROOT}/scripts/g03b_train_gafl.py').read():
@@ -1040,16 +1048,21 @@ def main(argv=None, force_pairs=(), stop_after=None):
         check('T4p SIGREG_MEAN: sigreg(N(0, I) + 3) >> sigreg(N(0, I)) with SIGREG_MEAN = 1; about equal with 0', on3 > 20 * max(on0, 1e-6) and abs(of3 - of0) <= 0.25 * max(of0, of3) + 1e-4,
               f'SIGREG_MEAN 1: {on0:.5f} vs shifted {on3:.5f}; 0: {of0:.5f} vs {of3:.5f}')
     else: print('SKIP  T4p g03b has no SIGREG_MEAN switch')
-    if 'latent_stats' in ns_:                   # T4q latent_stats (G29) must flag 3 of 8 non-clock dims at mean 2.9 and a rank-2 latent, and accept a standard normal cloud
+    if 'latent_stats' in ns_:                   # T4q latent_stats (G46.8, superseding G29's rank rule): its verdict = the rule re-derived here on each test cloud
         _enc0 = ns_['enc']; _ac = 1 if ns_.get('AGE_CH') else 0; _nq = min(4096, len(V)); torch.manual_seed(8)
         def _lat(Zn):
             Zf = torch.cat([torch.randn(len(Zn), _ac), Zn], 1) if _ac else Zn; ns_['enc'] = lambda v, yr: Zf[v]
             try: return ns_['latent_stats'](np.arange(len(Zf)))
             finally: ns_['enc'] = _enc0
-        q_ok, q_sh = _lat(torch.randn(_nq, 8)), _lat(torch.randn(_nq, 8) + torch.tensor([2.9, 2.9, 2.9, 0, 0, 0, 0, 0]))
-        q_r2 = _lat(torch.randn(_nq, 2) @ torch.randn(2, 16) * torch.tensor([1.0] * 8 + [0.5] * 8)); q_ok16 = _lat(torch.randn(_nq, 16))
-        check('T4q latent_stats: N(0, I) passes; 3 of 8 dims at mean 2.9 and a rank-2 latent are flagged', q_ok['ok'] and q_ok16['ok'] and not q_sh['ok'] and not q_r2['ok'] and q_sh['n_dims_abs_mean_gt2'] == 3,
-              f"N(0,I): max|mean| {q_ok['max_abs_mean']:.2f} rank {q_ok['effective_rank']:.2f}/{q_ok['dims']}; shifted: {q_sh['n_dims_abs_mean_gt2']} dims > 2; rank-2: effective rank {q_r2['effective_rank']:.2f} of {q_r2['dims']}")
+        def _rule(Zn): return bool(Zn.mean(0).abs().max() <= 2.0 and Zn.std(0).min() >= 0.3 and (Zn.abs() > 2.9).float().mean() <= 0.01)   # (non-clock dims)
+        sat_ = torch.randn(_nq, 8); sat_[:int(0.03 * _nq), :] = 2.95 * torch.sign(torch.randn(int(0.03 * _nq), 8))
+        clouds = {'N(0, I) 8': torch.randn(_nq, 8), 'N(0, I) 16': torch.randn(_nq, 16), '3 dims at mean 2.9': torch.randn(_nq, 8) + torch.tensor([2.9, 2.9, 2.9, 0, 0, 0, 0, 0]),
+                  'one dim at mean 2.1': torch.randn(_nq, 8) + torch.tensor([2.1, 0, 0, 0, 0, 0, 0, 0]), 'one dim sd 0.1': torch.randn(_nq, 8) * torch.tensor([0.1] + [1.0] * 7),
+                  '3 % of the values at ±2.95': sat_, 'rank 2, sd >= 0.5 (rank is report-only)': torch.randn(_nq, 2) @ (torch.ones(2, 16) * 0.6)}
+        res_q = {k: (bool(_lat(z)['ok']), _rule(z)) for k, z in clouds.items()}
+        exp_q = {'N(0, I) 8': True, 'N(0, I) 16': True, '3 dims at mean 2.9': False, 'one dim at mean 2.1': False, 'one dim sd 0.1': False, '3 % of the values at ±2.95': False}
+        check('T4q latent_stats (G46.8): verdict = max |mean| <= 2, min sd >= 0.3, share |z| > 2.9 <= 1 % re-derived on every test cloud; healthy clouds pass, shifted / shrunk / saturated fail',
+              all(g_ == r_ for g_, r_ in res_q.values()) and all(res_q[k][0] == v for k, v in exp_q.items()), f'{{cloud: (latent_stats ok, rule)}} {res_q}')
     else: print('SKIP  T4q g03b has no latent_stats')
     TKp = TK[TK.N > 0]; ao = ns_['AGE_OBS']; _vs4 = np.random.default_rng(41).choice(TKp.vid.unique(), 300, replace=False); _e4 = 0.0
     for vv in _vs4:
