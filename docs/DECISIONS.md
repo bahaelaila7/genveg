@@ -387,3 +387,15 @@ Options:
   - the decoded age ratio rises in every bin by ≥ 0.1 or reaches ≥ 0.8;
   - no other row of the §Q.2 table regresses by more than the flow-vs-ctl spread.
 - If this fails, AGE_DELTA stays off and the age-rate lag is logged as a known residual for g06 to judge.
+
+## G50 — AGE_DELTA stays off (G49 pre-registered criterion failed; model implementer 421d91e, coordinator)
+- **What passed:** the age-rate part passed in every bin. The decoded age ratio went from 0.39 / 0.45 / 0.59 to 0.69 / 0.69 / 0.84.
+- **What regressed** beyond the flow-vs-ctl spread:
+  - latent min sd 0.78 → 0.47;
+  - closest reachable RMS 0.39 → 0.47;
+  - 25-yr effective rank 3.21 → 2.34;
+  - flowed-v2 age bias +0.2 → +3.1 yr (it trades AGE_FLOW's level fit for the rate).
+- **Decision:** under G49 as written, this fails, so AGE_DELTA stays 0 in every config.
+- **Rejected:** re-judging with a second seed after seeing the result. The spreads are noisy single-run-pair estimates, but widening them post hoc would be moving the goalposts.
+- **Known residual:** decoded age advances at about 0.4–0.6× the observed rate. g06's pre-registered age_ok on the production run decides whether this blocks the map.
+- **Switch handling:** g03b reads AGE_DELTA. So it is listed in STAGE_SWITCHES (unset = off), recorded in the checkpoint `switches`, and compared by T4y. A config that turns it on is then hashed and visible.
