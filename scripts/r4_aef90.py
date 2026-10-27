@@ -1,6 +1,10 @@
 """AlphaEarth annual embeddings -> Region 4 90 m footprint means (docs/GENVEG_V4_R4.md §B). Per 90 m output window (256 x 256 px = 768 x 768 at 30 m):
   1. the 20 m overview (level 0) of every intersecting source COG is read via /vsicurl (nothing stored locally), de-quantised, averaged to the 30 m
-     grid_r4 lattice, renormalised to unit length and int8-quantised EXACTLY as scripts/02_aef.py (the 30 m product of GA+FL);
+     grid_r4 lattice, renormalised to unit length and int8-quantised EXACTLY as scripts/02_aef.py (the 30 m product of GA+FL). Each 90 m cell takes
+     its pixels from the source tiles of the UTM zone that contains the cell centre (zone = floor((lon + 180) / 6) + 1 of the centre's longitude;
+     G51.24 / E15-4: the zone tiles overlap near -90 / -84 / -78 and the old last-tile-wins order mixed two tiles inside one footprint); among the
+     tiles of that zone the first valid pixel in path order counts. A cell no tile of its own zone covers at all takes the other tiles' pixels (same
+     order), so a coverage gap of the zone tiles stays filled; the per-tile count of such cells is the tile tag `zone_fallback_cells`;
   2. de-quantised again (sign(v)*(v/127.5)^2) and averaged over each 3x3 block, nodata excluded (= the footprint mean m3n of g02b.feats);
   3. re-quantised for storage with the same scheme (sign*rint(127.5*sqrt|v|)); -128 = no valid 30 m pixel or outside the AOI.
 Per-window tiles in data/aef90/tiles_<year>/ (resumable), then assembled into data/aef90/aef90_<year>.tif (64 bands int8, grid_r4_90).
@@ -12,6 +16,7 @@ from rasterio.warp import reproject, Resampling, transform_bounds
 from rasterio.windows import Window, transform as wtransform
 from rasterio.transform import Affine
 from multiprocessing import Pool
+from pyproj import Transformer
 from common import ROOT, PROFILE
 G90 = json.load(open(f'{ROOT}/data/grid/grid_r4_90.json')); TR90 = Affine(*G90['transform']); W90, H90 = G90['width'], G90['height']
 T = 256                                                            # output window (90 m px); sources are local copies (fetched ahead within a disk budget)
@@ -47,10 +52,34 @@ def fetch(p):
     open(lp + '.done', 'w').write(f'{a} {b}'); return b - a
 def tdir(y): return f'{OUT}/tiles_{y}'
 def tile_path(y, r, c): return f'{tdir(y)}/t_{r:05d}_{c:05d}.tif'
+ZONE_RULE = 'G51.24 cell-centre UTM zone'
+def tile_done(p):
+    """a finished window: an empty marker, or a tile written under the current zone rule (tiles of the old last-tile-wins rule are redone)"""
+    if os.path.exists(p + '.empty'): return True
+    if not os.path.exists(p): return False
+    with rasterio.open(p) as t_: return t_.tags().get('zone_rule') == ZONE_RULE
 def dq(a):
     v = a.astype(np.float32); out = np.sign(v) * (v / 127.5) ** 2; out[a == -128] = np.nan; return out
 def quant(x): return (np.sign(x) * np.rint(127.5 * np.sqrt(np.abs(x)))).clip(-127, 127).astype(np.int8)
 IDX = None
+def utm_zone_of_crs(crs):
+    """the UTM zone of a northern-hemisphere source tile's CRS (EPSG:326zz)"""
+    code = int(str(crs).split(':')[1])
+    if not 32601 <= code <= 32660: raise ValueError(f'source tile CRS {crs} is not a northern UTM zone')
+    return code - 32600
+_LL = Transformer.from_crs('EPSG:5070', 'EPSG:4326', always_xy=True)
+def cell_zones(wt90, h, w):
+    """UTM zone of the CENTRE of every 90 m cell (h x w) of an output window with transform wt90, from its longitude (G51.24)"""
+    rr, cc = np.mgrid[0:h, 0:w]; x, y = wt90 * (cc + 0.5, rr + 0.5); lon, _ = _LL.transform(x, y)
+    return (np.floor((np.asarray(lon) + 180) / 6).astype(int) + 1).reshape(h, w)
+def place(dst_k, alt_k, tmp, own):
+    """one band of one source tile into the window: its valid pixels fill the still-empty pixels of the cells of its own zone (dst) or, for the
+    other cells, of the fallback layer (alt)"""
+    ok = ~np.isnan(tmp); m = ok & own & np.isnan(dst_k); dst_k[m] = tmp[m]; m = ok & ~own & np.isnan(alt_k); alt_k[m] = tmp[m]
+def fallback(dst, alt, h, w):
+    """cells without any valid pixel from a tile of their own zone take the fallback layer; returns the number of such cells that it fills"""
+    empty = np.isnan(dst[0]).reshape(h, 3, w, 3).all(axis=(1, 3)); e30 = np.repeat(np.repeat(empty, 3, 0), 3, 1)
+    n = int((empty & ~np.isnan(alt[0]).reshape(h, 3, w, 3).all(axis=(1, 3))).sum()); dst[:, e30] = alt[:, e30]; return n
 def needs(job):
     """source COGs (rows of IDX) intersecting the window: the exact test of the loop below"""
     y, r, c = job; h = min(T, H90 - r); w = min(T, W90 - c)
@@ -65,15 +94,16 @@ def needs(job):
 def work(job):
     y, r, c = job
     out = tile_path(y, r, c)
-    if os.path.exists(out) or os.path.exists(out + '.empty'): return job, 'skip', 0
+    if tile_done(out): return job, 'skip', 0
     t0 = time.time(); h = min(T, H90 - r); w = min(T, W90 - c)
     with rasterio.open(f'{ROOT}/data/grid/aoi_r4_mask90.tif') as m: mm = m.read(1, window=Window(c, r, w, h))
     if mm.sum() == 0: open(out + '.empty', 'w').close(); return job, 'empty', 0
     wt90 = wtransform(Window(c, r, w, h), TR90); wt = Affine(30, 0, wt90.c, 0, -30, wt90.f); h3, w3 = 3 * h, 3 * w
     bx = (wt.c, wt.f - 30 * h3, wt.c + 30 * w3, wt.f)
-    dst = np.full((64, h3, w3), np.nan, np.float32); nsrc = 0
+    dst = np.full((64, h3, w3), np.nan, np.float32); alt = np.full((64, h3, w3), np.nan, np.float32); tmp = np.empty((h3, w3), np.float32); nsrc = 0
+    z30 = np.repeat(np.repeat(cell_zones(wt90, h, w), 3, 0), 3, 1)                 # zone of each 30 m pixel's 90 m cell (G51.24)
     gw, gs, ge, gn = transform_bounds('EPSG:5070', 'EPSG:4326', *bx, densify_pts=21); m_ = 0.05      # vectorised prefilter on the lon/lat boxes
-    cand = IDX[(IDX.wgs84_east >= gw - m_) & (IDX.wgs84_west <= ge + m_) & (IDX.wgs84_north >= gs - m_) & (IDX.wgs84_south <= gn + m_)]
+    cand = IDX[(IDX.wgs84_east >= gw - m_) & (IDX.wgs84_west <= ge + m_) & (IDX.wgs84_north >= gs - m_) & (IDX.wgs84_south <= gn + m_)].sort_values('path')
     with rasterio.Env(**ENV):
         for _, f in cand.iterrows():
             l, b, rr, t = transform_bounds('EPSG:5070', f.crs, *bx, densify_pts=21)
@@ -90,11 +120,14 @@ def work(job):
                     time.sleep(10)
             if (a[0] == -128).all(): continue
             a = a[:, ::-1]                                             # bottom-up -> north-up (as 02_aef.py)
-            st = Affine(20, 0, f.utm_west + c0 * 20, 0, -20, f.utm_south + r1 * 20)
+            st = Affine(20, 0, f.utm_west + c0 * 20, 0, -20, f.utm_south + r1 * 20); own = z30 == utm_zone_of_crs(f.crs)
             for k in range(64):
-                reproject(dq(a[k]), dst[k], src_transform=st, src_crs=f.crs, dst_transform=wt, dst_crs='EPSG:5070', resampling=Resampling.average,
+                tmp.fill(np.nan)
+                reproject(dq(a[k]), tmp, src_transform=st, src_crs=f.crs, dst_transform=wt, dst_crs='EPSG:5070', resampling=Resampling.average,
                           src_nodata=np.nan, dst_nodata=np.nan, init_dest_nodata=False)
+                place(dst[k], alt[k], tmp, own)
             nsrc += 1
+    nfb = fallback(dst, alt, h, w); del alt
     # 30 m product exactly as 02_aef.py: renormalise, quantise
     bad = np.isnan(dst[0]); dst[:, bad] = 0
     n = np.sqrt((dst ** 2).sum(0)); bad |= (n == 0); n[n == 0] = 1; dst /= n
@@ -106,17 +139,19 @@ def work(job):
     os.makedirs(tdir(y), exist_ok=True)
     with rasterio.open(out + '.part', 'w', **dict(PROFILE, width=w, height=h, count=64, dtype='int8', crs='EPSG:5070', transform=wt90, nodata=-128,
                                                    zstd_level=3, INTERLEAVE='PIXEL')) as d:
-        d.write(q90)
+        d.write(q90); d.update_tags(zone_rule=ZONE_RULE, zone_fallback_cells=str(nfb))
     os.replace(out + '.part', out)
     return job, f'{nsrc} src', time.time() - t0
 def assemble(y):
-    fs = sorted(glob.glob(f'{tdir(y)}/t_*.tif'))
+    fs = sorted(glob.glob(f'{tdir(y)}/t_*.tif')); old = [f for f in fs if not tile_done(f)]
+    if old: sys.exit(f'{len(old)} tiles of {tdir(y)} predate the G51.24 zone rule (e.g. {old[0]}): rerun `r4_aef90.py {y}` first')
     prof = dict(driver='GTiff', width=W90, height=H90, count=64, dtype='int8', crs='EPSG:5070', transform=TR90, nodata=-128, tiled=True, blockxsize=512,
                 blockysize=512, compress='ZSTD', zstd_level=9, predictor=2, INTERLEAVE='PIXEL', BIGTIFF='YES', SPARSE_OK='TRUE')
     with rasterio.open(f'{OUT}/aef90_{y}.tif', 'w', **prof) as d:
         for k in range(64): d.set_band_description(k + 1, f'A{k:02d}')
         d.update_tags(source='AlphaEarth Foundations annual v1 (tge-labs/aef, source.coop)', year=str(y), dequant='sign(v)*(v/127.5)**2',
-                      processing='20m overview -> 30m EPSG:5070 average (float), unit-normalised, int8 (02_aef.py); 3x3 mean of de-quantised 30m (nodata excluded) -> 90m, int8')
+                      processing='20m overview -> 30m EPSG:5070 average (float), unit-normalised, int8 (02_aef.py); 3x3 mean of de-quantised 30m (nodata excluded) -> 90m, int8; '
+                                 'each 90m cell from the source tiles of the UTM zone of its centre longitude (G51.24)')
         for f in fs:
             r, c = map(int, re.findall(r't_(\d+)_(\d+)', f)[0])
             with rasterio.open(f) as s: d.write(s.read(), window=Window(c, r, s.width, s.height))
@@ -131,7 +166,7 @@ if __name__ == '__main__':
     IDX = I[(I.wgs84_east >= B[0]) & (I.wgs84_west <= B[2]) & (I.wgs84_north >= B[1]) & (I.wgs84_south <= B[3])].reset_index(drop=True)
     os.makedirs(tdir(y), exist_ok=True); os.makedirs(CACHE, exist_ok=True)
     jobs = [(y, r, c) for r in range(0, H90, T) for c in range(0, W90, T)
-            if MM[r:r + T, c:c + T].any() and not os.path.exists(tile_path(y, r, c))]
+            if MM[r:r + T, c:c + T].any() and not tile_done(tile_path(y, r, c))]
     need = {j: needs(j) for j in jobs}
     for j in [j for j in jobs if not need[j]]: open(tile_path(*j) + '.empty', 'w').close()      # no source at all (ocean edge)
     jobs = [j for j in jobs if need[j]]
