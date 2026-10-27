@@ -307,14 +307,14 @@ While implementing, the redesigned guard caught two new comment-swallows in my o
 * **Incomplete curated visits (A14-1, G46.1).** g02b vets every curated visit against FIADB: n_cur = curated live tallied trees on the forested
   conditions, n_fia = FIADB's (`FV.n`). n_fia ≥ 3 and n_cur < n_fia / 2 ⇒ the visit leaves the table (no tokens, no pair endpoint, no bare visit);
   FIADB still supplies its records and negative evidence. Old curated DB (slim_r4): GA+FL 1,112 of 34,045 curated visits (FL 280, GA 832; 261
-  with no curated live tree). meta.json: `incomplete_visits`, `incomplete_visits_by_state`, `incomplete_curated_visits`, `vetted_curated_visits`,
+  with no curated live tree); Region 4 4,759 of 113,443 (1,037 with no curated live tree). meta.json: `incomplete_visits`, `incomplete_visits_by_state`, `incomplete_curated_visits`, `vetted_curated_visits`,
   `incomplete_no_live`. Re-check curated_v2 the same way.
 * **Share change vs FIA's previous measurement (A14-2, G46.2).** The |Δ forested share| ≥ 0.25 block also compares each visit with its
   PREV_PLT_CN measurement (pre-2000 predecessors included; PLOT_STATUS 2 ⇒ share 0; non-sampled or without condition shares: no comparison).
-  GA+FL: 313 additional blocked visits / negative periods (627 from the consecutive rule). meta.json `share_blocks`.
+  Additional blocked visits (negative periods removed): GA+FL 313 (627 from the consecutive rule), Region 4 1,171 (2,374). meta.json `share_blocks`.
 * **G41 refined (F3 / A14-3, G46.3).** `plot_converted` ⇔ the last sampled FIADB visit dated ≤ 2022 has no forested condition and ≥ 1
-  non-forest land / water one (COND_STATUS 2–4), after an earlier forested visit. GA+FL table plots: 385 (old rule 402; 31 forested again by
-  2022 leave, 14 forest → water enter).
+  non-forest land / water one (COND_STATUS 2–4), after an earlier forested visit. Table plots: GA+FL 385 (old rule 402: 31 forested again by
+  2022 leave, 14 enter), Region 4 1,034 (old 1,108: 109 leave, 35 enter).
 * **Evidence table per region (A14-5, G46.4).** `g02b.EVK_TABLES` keyed by the sorted state tuple (GA+FL = (12, 13)); a region without an entry
   is refused, and so is AEF90 with GA+FL; EVK_REGION_OK is gone. meta.json `evk` (kind → [class indices, [dlo, dhi], lr]) and `evk_hash`
   (sha256 of `json.dumps(evk, sort_keys=True, separators=(',', ':'))`); g02e / g02g (and g03b) read it through `g02b.evk_from_meta` and pass it
