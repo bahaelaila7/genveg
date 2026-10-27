@@ -399,3 +399,146 @@ Options:
 - **Rejected:** re-judging with a second seed after seeing the result. The spreads are noisy single-run-pair estimates, but widening them post hoc would be moving the goalposts.
 - **Known residual:** decoded age advances at about 0.4–0.6× the observed rate. g06's pre-registered age_ok on the production run decides whether this blocks the map.
 - **Switch handling:** g03b reads AGE_DELTA. So it is listed in STAGE_SWITCHES (unset = off), recorded in the checkpoint `switches`, and compared by T4y. A config that turns it on is then hashed and visible.
+
+## G51 — Round-15 model / data / evaluation decisions (r15 A / B / C / F slices, coordinator)
+Reports: scratchpad/audit_r15/rep_{A,B,C,F}.md. The chosen option comes first; rejected options follow "Rejected".
+
+**Data**
+1. **TPA-weighted vetting (A15-1, IMPORTANT).**
+   - A visit is incomplete if n_fia ≥ 3 and n_cur < 0.5·n_fia (G46.1), OR live TPA_cur < 0.5·TPA_fia, OR n_cur = 0 while n_fia ≥ 1 (A15-3: a curated visit is bare only when FIADB is bare too, the same definition as G40).
+   - meta.json records the counts by rule, plus the curated-DB and FIADB paths and their file fingerprints (A15-6c).
+   - The curation round-7 audit measured the new curated product at TPA share ≥ 0.993 in every state, so this mostly confirms the fix. It still guards against a sapling regression.
+   - Rejected: count-only (blind to saplings).
+2. **Raw keys (curation r7 A7-9 / D-F2, IMPORTANT).**
+   - g02b joins curated trees to FIADB on the curated canonical key (via `unitcd_raw` / `countycd_raw` / `plot_raw` per record).
+   - Coordinates follow the curated D28 location (latest visit).
+   - FIA events and negatives cover every chain segment of a canonical plot.
+3. **Float ties (A15-2).** Every |Δshare| ≥ 0.25 comparison (g02b, g03b G38, verifier) uses ≥ 0.25 − 1e-9.
+4. **Single source of evid_end (A15-4).** g02e takes evid_end from meta.json and passes it into fia_records.
+5. **Provenance completed (A15-6, E15-7).**
+   - code_hash covers each script plus the local modules it imports (region, common, features, stand_runs).
+   - It is computed at the START of the run.
+   - It is version-stable: a token-based serialisation with comments and docstrings dropped, giving identical results under Python 3.12 and 3.13.
+   - g02b writes a `build_id` (uuid) into meta.json. Every downstream output records the build_id it read: g02e / g02g / g02j parquet provenance, the checkpoint, bayes_eval.json and the g06 record.
+   - The parquet evk_hash is checked.
+   - Rejected: code-only hashes (cannot tell a stale table instance from a divergence).
+6. **EVK consumers outside the contract (A15-7).**
+   - g02f uses the meta EVK and region_check.
+   - g02i_reprior (legacy) refuses to run.
+   - **g09 becomes the per-region derivation tool.** It uses common.fiadb(), handles any region, and reproduces EVK_GAFL on GA+FL (including 'unknown') as its self-test.
+   - **Bootstrapping a new region.** g02b accepts `EVK_PROVISIONAL=1` (table env, driver STAGE_SWITCHES), which builds with the GA+FL table and marks meta `evk_provisional: true`. g03b and every training/eval stage refuse a provisional table. g09 then writes a proposed EVK_TABLES entry for the coordinator to commit.
+7. **Separate evidence weight from detectability (A15 G48.1 follow-up).**
+   - Measured inner-zone lifts of the detectable rows are 1.7–2.6, against the coded lr 4.
+   - Each EVK row gets two fields:
+     - `lr`, the evidence weight, measured by g09 on the region (GA+FL: re-derived now, with the method recorded in meta);
+     - `detectable`, the hard-constraint flag, unchanged: T10–T40 and Dcrown.
+   - Cluster and hard-constraint semantics are unchanged; only the prior / likelihood weights become calibrated.
+   - Rejected: keeping lr 4 (overconfident location prior); and deriving detectability from the measured lr (it would change the constraint set right before the rebuild).
+8. **UNDIST on converted plots (A15-8).** UNDIST is set after the VCONV return, so converted plots are never UNDIST.
+
+**Model (g03b)**
+9. **Decoder age compression (B15-1, IMPORTANT).**
+   - New switch DEC_AGE: a direct decoded-age loss on ENCODINGS (dec_age(enc(v)) vs the observed age, posterior-free, stocked visits). The decoder learns to read the clock.
+   - Pre-registered acceptance on the B harness (1200 steps), flow + fixes + DEC_AGE vs flow + fixes, reading:
+     - the oracle decoded-age rate (decoded enc(v2) − enc(v1)) ≥ 0.8 × observed in every bin;
+     - the decoded-vs-observed age slope on validation encodings ≥ 0.95;
+     - no other §Q.2 row regressing beyond the flow-vs-ctl spread.
+   - If it fails, DEC_AGE stays off and the residual stays as recorded.
+10. **Clock target (B15-2).**
+    - The clock component of the reset target becomes zt0 = z_age0 + σ(shift)·(z0 + 0.25 − z_age0), a convex blend between age 0 and the current clock + 0.25. A reset can rejuvenate, keep, or slightly raise the age.
+    - The gradient is non-saturating.
+    - G46.10's text is amended to the actual scales (0.25 on the clock).
+    - It is structural, so it is not A/B-gated, but its effect is reported in the same A/B. Partial cuts must show a clock rate ≥ 0.8 yr/yr.
+11. **Latent acceptance, extended (B15-3).** Pre-registered now, before any production run. latent_ok additionally requires:
+    - effective rank ≥ 3, a floor that catches rank-1 / rank-2 collapse; the healthy runs give 5.9–6.8;
+    - share of |z| > 2.5 ≤ 5 % (bimodal saturation);
+    - the same G46.8 criteria on the 25-yr no-event flow of the validation encodings (flowed states must stay on the distribution).
+
+    The implementer measures every criterion on the existing checkpoints (B ON, ctl, flow, delta, the 20 distinct v3 models) and REPORTS the numbers. If a criterion would fail on every candidate, it is reported, not retuned.
+12. **SIGREG_FLOW routing (B15-4).** z1 is detached in SIGREG_FLOW, so it regularises the flow only, as G46.9 intended. AGE_FLOW is unchanged. The effect is reported in the A/B.
+13. **Switch consistency at load (B15-5 / C15-7).** g04, g05 and g06 compare their env's T4Y_COMPARED switches with the checkpoint `switches` and refuse a mismatch. bayes_eval.json records MODEL and the checkpoint's sha256, and g05 checks both.
+14. **g06 (B15-6 / B15-7 / C15-9).**
+    - The synthetic section uses validation plots only.
+    - The BA tolerance (G7) is unchanged, since it is pre-registered. g06 adds report-only plot-cluster bootstrap CIs and per-bin plot counts.
+
+**Evaluation (g04 / g05)**
+15. **map_accept superiority (C15-1, IMPORTANT).** Pre-registered now, before any production map.
+    - Accept only if, for each of BA, TPH and medoid Bray, the one-sided 90 % upper bound of (model − null) is < 0.
+    - The bound comes from a plot-cluster bootstrap within the judged halves, B = 1000, seeded, with the factors held fixed.
+    - A model that cannot be shown better than the null is not mapped.
+    - Rejected: the point comparison (it flipped by seed: accepted in 5 of 12 runs on the subset).
+16. **Medoid draws replicated (C15-2).** The presence uniforms are seeded by (visit, replicate, path, half). g05 uses its own generator for presence (C15-12).
+17. **CAL on stocked visits (C15-3)**, as fit_cf does.
+18. **Gate dump (C15-4).** g04_plots.parquet also carries the shuffled and redraw predictions, so dep / dep0 can be recomputed.
+19. **Selection vs acceptance (C15-5).** map_y0 is selected on replicate set 1 (R = 8); map_accept is judged on an independent replicate set 2 (R = 8, fresh seeds). The plots are shared; this is documented.
+20. **Robustness (C15-6 / C15-8 / F10):**
+    - g05 checks that map_accept was judged on 'validation plots';
+    - dump set labels are conditional;
+    - an empty or all-bare judged half is an explicit FAIL;
+    - map_accept no longer requires test visits (test is report-only);
+    - the k-means sample uses min(n, 200 k).
+21. **Converted plots in the MDN and the eval sets (C15-11).** Excluded from trA (the landscape descriptor reads the mislocated footprint) and from the validation and test scoring sets, consistent with G46.7.
+22. **Split invariance (C15-13).** Blocks are sorted before the seeded choice.
+23. **Small items:**
+    - the JSON records sd of the mean alongside the per-replicate sd;
+    - stale prose fixed (C15-14);
+    - doc fixes (B15-8, F3, F4: G46.2's text widened to "every visit vs its PREV_PLT_CN measurement");
+    - the r14 probe's 24.5-yr divisor noted in §Q.2 (B15-9).
+24. **Upstream product (E15-4):** r4_aef90 takes each 90 m cell from the tile whose UTM zone contains the cell centre (zone from longitude), deterministically. The R4 product must be rebuilt (after the restart).
+
+## G52 — Round-15 verifier decisions (r15 E / F slices, coordinator)
+1. **Self-calibration and leakage (E15-1).**
+   - T12 adds an AST scan: any assignment to an anchored name or to HALVES anywhere in g04 outside its anchored line FAILs. HALVES must be the literal ((hA, hB), (hB, hA)) form.
+   - T11i adds set relations:
+     - each cf_fit half's visits equal the score visits of the OTHER half (disjoint from the half they are applied to);
+     - the score / baseline visits equal T12's independent gateE set;
+     - the replicate count equals R for both replicate sets (G51.19).
+2. **Trusted dumps (E15-2).**
+   - T15 recomputes the observed side (obs BA, ages, horizons) from the table, and pair membership from the verifier's own undisturbed spec.
+   - T15 recomputes the latent statistics from MODEL on validation encodings, applying G51.11.
+   - T11i recomputes the null composition (Bray) independently, and the G51.15 bootstrap bound from the dump.
+3. **T1j / T1k / T1l (E15-3 / F-F1 / F2).**
+   - T1j excludes the G46.1 / G51.1 incomplete visits, which is a spec mirror of decisions made before the rebuild.
+   - T1k and T1l keep their pre-registered thresholds. Under G51.1 and the new curated product they are expected to pass; if they fail on the rebuild, that is a finding and is not loosened.
+4. **T3c2z (E15-4)** uses the G51.24 zone rule independently: tile by the zone of the longitude.
+5. **Planted gaps (E15-5 / E15-6 / E15-8 / E15-9 / E15-11 / E15-12):**
+   - T4n samples clocks near age 0;
+   - T4q tests clock exclusion;
+   - U8 tests each XL block separately;
+   - T5 regains full coverage (the G47.7 restriction is for T5s only);
+   - U10r samples randomly;
+   - T4y compares the table build_id and FAILs without MODEL;
+   - T3j FAILs when its input is missing.
+6. **Labels (E15-7 / F-F9).** The G51.5 hash is used. A third label, "outcome", applies to checks whose failure is a model or data result (T15, T1k, T1l, T3i, T10). Labels compare table build_ids, not only code.
+7. **Pre-registration table (E15-10).** Every threshold is listed with the date it was set, including T12 runs |z| < 4 and n ≥ 20, T4x ≥ 8, and U10r 0.995. Where the history cannot show that a threshold was set before its first run, that is stated.
+8. **The rest of E15 INFO:**
+   - PRODUCERS lists every check that reads stage outputs;
+   - T8h counts the < 0.3 branch separately (≥ 20);
+   - R4 soils90 fill.json is checked.
+   - Mirrors of G51.1–3 / 7 / 8 / 10 / 11 / 15 / 21 / 22 in the spec.
+
+## G53 — Round-15 driver decisions (r15 D / F slices, coordinator)
+1. **Adopt (D15-1).** Refuse to adopt a file whose last writer is another stage that is not a later stage.
+2. **Detector (D15-2 / F-F5 / F-F6).**
+   - Adopt the D reviewer's broad tail scan: operator, keyword (and / or / not / in / is / if-else), comma, unary-without-space and call-paren tails, at any bracket depth and across continued lines. Add every new D / F case to the suite.
+   - Reword the 6 prose hits.
+   - The driver runs scripts/tests/test_check_comments.py at start and refuses if it fails.
+   - Rejected: accepting the misses (real lines in g04 / g02b / gv_verify would swallow silently).
+3. **Training switches outside train.env (D15-3 / B15-5).** Refused (T4Y_COMPARED names; NT is a perf knob and stays allowed).
+4. **Failed gates (D15-4).** A stage whose gate, transitively, FAILED is refused, not only marked; `--force` does not override this. This amends G21 / G45.12: downstream stages that are already current stay current, but nothing new runs past a failed gate.
+5. **Small items:**
+   - `--log` is opened after the lock (D15-5);
+   - non-production `dynamics_pairs_*` are REPORT_ONLY (D15-6 / C15-9 / F-F8);
+   - the late-file refusal is re-evaluated at the end of every run (D15-7);
+   - the AST env guard fails closed on any unrecognised os.environ / getenv / environ reference (D15-8);
+   - the typed-config gaps are refused (D15-10): null / invalid name and model_prefix, verify.n, a data path outside data/proto, a bool where an int is expected, duplicate seeds, missing sections, an empty config;
+   - WORKSPACE is made absolute (D15-11);
+   - VERIFY_INPUTS entries are made absolute, and the evaluation subprocess gets a timeout;
+   - STANDS_STAGE_JSON is stripped for the driver's own import;
+   - at start, the driver checks that g03b's SWITCHES keys equal g03b's env reads.
+6. **Accepted, documented:**
+   - over-invalidation (D15-9: hashing by bytes and by module statements is the safe direction);
+   - grandchild lock (D15-12: no stage spawns subprocesses);
+   - file-granular switch acceptance (D15-13);
+   - the microsecond Popen window.
+7. **Docs (D15-14, F-F11).**
