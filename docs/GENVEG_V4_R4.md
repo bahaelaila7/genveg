@@ -597,3 +597,58 @@ against g02b on subsets (GA 6 counties on slim_r4, NC 8 counties on the r7 curat
   z, the 2010 / 2025 flow, decoder lp / val, head, sigreg and a clear-cut jump all give max |Δ| = 0. dec_age differs (0.25 / 0.20 / 2.3 yr):
   through POSW, which depends on the training visits and so on the G51.22 split. With the block sort reverted it is 0 too. JUMP_RESET + AGE_CH
   differs, as expected (G51.10).
+
+### R.3 DEC_AGE A/B (G51.9, pre-registered) and the G51.10 partial-cut clock rate
+**Harness (rebuilt; the r14 / r15 harness was lost with the scratchpad).** Current code, HEAD 48b73bf. Table: g02b → g02d → g02e → g02g on the old
+curated DB (slim_r4, the code default) and FIADB, both restricted to 44 GA+FL counties drawn with numpy default_rng(51009) until ≥ 1,450 curated
+plots (scratch copies of curated_trees / PLOT / COND / REF_SPECIES and of FIADB PLOT / COND / TREE / data_plot_eco; the scripts are unchanged):
+1,424 plots, 4,818 visits, 3,394 pairs; split train 3,269 / val 326 / test 1,005 visits (98 val, 302 test plots). Training: g03b's own loop, exec'd
+with a step counter, 1,200 optimizer steps, SEED 0, NT 2, the train env of config/genveg_v4.yml (both arms; B adds DEC_AGE=1), then g06 with the
+config's dynamics env and a probe. The probe re-implements the §Q.2 rows from their descriptions (the r14 probe code is gone); both arms use the same
+definitions, so the A − B differences are comparable with the §Q.2 spreads, the absolute values with §Q.2 only roughly:
+- oracle rate: per g06 bin, median over the validation UNDIST pairs of (dec_age(enc v2) − dec_age(enc v1)) / h ÷ median observed age per yr;
+- age slope: OLS slope of dec_age(dec(enc v)) on OBS_AGED (decoder form), stocked validation visits (on AGE_OBS: 0.72 / 0.78);
+- stand-replacing: validation + test consecutive pairs with a detectable cut record and BA ratio < 0.3 (n 33), 64 draws of the histories with
+  stand-replacing evidence; closest = the draw nearest enc(v2) (RMS) and its BA ratio; posterior-weighted BA ratio (softmax(−mse / T_PAIR)); jump =
+  one clear-cut jump of z1;
+- NN ratio: median NN distance to the training encodings ÷ the training encodings' leave-one-out median NN distance;
+- 25-yr flow: latent_stats' set (n 270), variance retained = trace ratio, BA log change ÷ 25.5 yr;
+- age bias: undisturbed validation pairs, decoded − OBS_AGED at v1 and at the flowed v2;
+- partial cuts (G51.10): validation + test consecutive pairs with a detectable cut record and BA ratio > 0.6 (n 103), z1 flowed through the pair's
+  histories WITHOUT stand-replacing evidence (16 draws), clock change × AGE_S / h, median.
+
+g06 validation bins hold 114 / 49 / **16** pairs: the (15, 99) bin is below g06's n ≥ 20 on this subset (B's harness had 221 / 115 / 54).
+
+| (val unless noted) | flow + fixes | + DEC_AGE | Δ | allowed (\|flow − ctl\|, §Q.2) |
+|---|---|---|---|---|
+| **oracle decoded-age rate ÷ observed, by bin (criterion ≥ 0.8)** | 0.61 / 0.59 / 0.62 | **0.71 / 0.60 / 0.63** | | — |
+| (same, test plots; report only) | 0.60 / 0.66 / 0.66 | 0.72 / 0.79 / 0.77 | | — |
+| **decoded vs observed age slope (criterion ≥ 0.95)** | 0.73 | **0.80** | | — |
+| latent max \|mean\| / min sd / eff. rank | 0.60 / 0.64 / 6.61 | 0.60 / 0.61 / **5.22** | 0.00 / −0.03 / −1.39 | 0.09 / 0.15 / 0.55 |
+| stand-replacing: closest RMS / its BA ratio | 0.80 / 0.099 | 0.83 / **0.067** | +0.03 / −0.033 | 0.05 / 0.002 |
+| stand-replacing: jump BA ratio / posterior-weighted BA ratio | 0.152 / 0.080 | **0.111** / **0.088** | −0.041 / +0.008 | 0.020 / 0.004 |
+| g06 synthetic clear-cut / fire | 0.046 / 0.85 | 0.041 / 0.88 | −0.005 / +0.03 | 0.003 / 0.10 |
+| undisturbed NN ratio flowed (z1 encoded) / 25-yr NN ratio | 1.52 (1.19) / 1.64 | 1.62 (1.12) / **1.74** | +0.10 / +0.10 | 0.14 / 0.08 |
+| 25-yr variance retained / eff. rank | 25 % / 2.99 | 30 % / 3.14 | +5 pp / +0.15 | 22 pp / 0.71 |
+| 25-yr BA log change / yr | +0.0175 | +0.0135 | −0.004 | 0.007 |
+| g06 BA per yr by bin, pred (obs +0.033 / +0.019 / +0.007) | +0.029 / +0.015 / +0.007 | +0.022 / +0.015 / +0.003 | \|err\| +0.007 / 0.000 / +0.004 | 0.009 each |
+| g06 flowed decoded age ratio by bin | 0.54 / 0.46 / 0.52 | 0.67 / 0.51 / 0.45 | +0.13 / +0.05 / −0.07 | 0.00 / 0.04 / 0.07 |
+| decoded age bias at v1 / flowed v2 (yr) | +3.8 / +0.5 | −1.1 / **−2.9** | \|bias\| −2.6 / +2.5 | 2.2 / 2.1 |
+| **G51.10 partial-cut clock rate (yr / yr; criterion ≥ 0.8)** | **0.62** | 0.81 | | — |
+| (synthetic 2023 thin of 12 stocked 2019–20 visits / no event; report only) | 0.03 / 0.94 | −0.05 / 0.98 | | — |
+| latent_ok (G51.11) / g06 acceptance | fail (25-yr flow) / fail (age ×2, n bin 3, latent) | fail (25-yr flow) / fail (+ BA 0–8) | | — |
+
+**Verdict: the G51.9 criterion FAILS; DEC_AGE stays off (not set in the configs).**
+- The oracle rate rises in the 0–8 yr bin only (0.61 → 0.71) and stays at 0.60 / 0.63 in the others, below 0.8 everywhere.
+- The slope improves (0.73 → 0.80), below 0.95.
+- Beyond the spreads: encoding effective rank 6.61 → 5.22, the 25-yr NN ratio +0.10, the flowed-v2 age bias −2.9 yr, and the stand-replacing BA
+  ratios (closest, jump, posterior-weighted: the spreads 0.002–0.020 are one run pair, smaller than this harness's resolution).
+- Improved: the v1 age bias, the 25-yr variance and rank, the synthetic fire ratio, the flowed age ratio in bins 1–2.
+- The decoder's age compression is therefore not removed by a direct decoded-age loss at 1,200 steps; the residual stays as recorded (G51.9).
+
+**G51.10: the partial-cut clock rate FAILS for the production configuration (flow + fixes): 0.62 yr / yr < 0.8** (n 103 pairs). The synthetic thin
+resets the clock almost fully (0.03 yr / yr vs 0.94 without an event). With DEC_AGE it is 0.81, but DEC_AGE is not adopted. Decision for the
+coordinator (G51.10 says partial cuts "must" show ≥ 0.8; it is structural and was not A/B-gated).
+
+Harness caveats: one seed per arm; a smaller subset than B's (the third g06 bin has 16 pairs); probe rows reconstructed. Files:
+scratchpad/open/gv/ (mk_subset.py, train_steps.py, probe.py, run_arm.sh, probe_{ctl,dec}.json, g06_{ctl,dec}.log).
