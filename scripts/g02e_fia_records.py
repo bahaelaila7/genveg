@@ -1,20 +1,24 @@
 """FIA disturbance / treatment records of the training table, for anchoring the dynamics (user, 2026-10-20: FIA's own COND.DSTRB* / COND.TRT* records
 anchor FIA data to the disturbances LANDFIRE reports). The same records + rules that built the location prior (g02b.fia_records, shared code):
-  fia_events.parquet  pid, kind, year, rmd       typed FIA events (kinds of g02b.EVK) from every forested condition, with the RECORDING visit's date
+  fia_events.parquet  pid, kind, year, rmd       typed FIA events (kinds of the table's EVK) from every forested condition, with the RECORDING visit's date
                                                  (rmd; a record describes the interval ending at that visit — g03b.recs_in, audit r5 I3)
   fia_negs.parquet    pid, y_lo, y_hi            periods without stand-replacing disturbance (FIA protocol; see g02b.fia_records)
   visits.parquet      + fia_blocked              the visit carries a code that could hide stand-replacing evidence (no negative evidence for its period)
-                      + plot_converted           the plot turned entirely non-forest at a visit up to 2022 after a forested one (no MIL; r13 G41)
+                      + plot_converted           the plot's last sampled FIADB visit up to 2022 (the forest-mask year) is entirely non-forest (non-forest
+                                                 land or water) and an earlier visit was forested (r13 G41, refined r14 F3 / A14-3 / G46.3)
                       + fia_gap                  FIA's previous measurement of the plot (PREV_PLT_CN, any status) is NOT the previous table visit (a
                                                  non-forest / non-sampled visit in between, or unknown): the visit's codes do not cover the whole pair (r6 M1)
-Run after every g02b rebuild (pid / vid are row numbers of the current table)."""
+The evidence table is the table's own (meta.json evk, G46.4); every output parquet carries the provenance record G2.PROV_KEY (G46.6: this script's
+and g02b's code hash, the table's evk_hash). Run after every g02b rebuild (pid / vid are row numbers of the current table)."""
 import os, sys, numpy as np, pandas as pd, duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
-import json as _json; from region import region_check; region_check(_json.load(open(f"{G2.ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}/meta.json")))
+import json as _json; from region import region_check
 from features import ROOT, WS
 from common import curated_db, fiadb
 D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; key = ['st', 'u', 'c', 'p']
+META = _json.load(open(f'{D}/meta.json')); region_check(META); EVK = G2.evk_from_meta(META)      # (refuses a table without its evidence table)
+PROV = {'code_hash': {'g02e': G2.code_hash(os.path.abspath(__file__)), 'g02b': G2.code_hash(os.path.abspath(G2.__file__))}, 'evk_hash': META['evk_hash']}
 fc = duckdb.connect(fiadb(), read_only=True)
 P = pd.read_parquet(f'{D}/plots.parquet'); V = pd.read_parquet(f'{D}/visits.parquet')
 FV = G2.fiadb_visits(fc); FE = G2.fiadb_events(fc)
@@ -30,8 +34,12 @@ for r in FE.itertuples():
             if kind: rows.add((pidk[k_], kind, int(yr), r.md))
 FEV = pd.DataFrame(sorted(rows), columns=['pid', 'kind', 'year', 'rmd'])
 assert set(map(tuple, FEV[['pid', 'kind', 'year']].values)) == {(p, k, y) for p, s in evs.items() for k, y in s}   # = the location prior's records
-FEV.to_parquet(f'{D}/fia_events.parquet')
-pd.DataFrame([(p, a, b) for p, l in negs.items() for a, b in l], columns=['pid', 'y_lo', 'y_hi']).to_parquet(f'{D}/fia_negs.parquet')
+if set(FEV.kind) - set(EVK): sys.exit(f'FIA record kinds {sorted(set(FEV.kind) - set(EVK))} have no entry in the table\'s evidence table (meta.json evk)')
+G2.to_parquet_prov(FEV, f'{D}/fia_events.parquet', PROV)
+# negative-evidence periods, clipped by fia_records to the evidence window (y_hi <= meta evid_end; G36 / G46.5)
+NG = pd.DataFrame([(p, a, b) for p, l in negs.items() for a, b in l], columns=['pid', 'y_lo', 'y_hi'])
+assert (NG.y_hi <= META.get('evid_end', G2.EVID_END)).all() and (NG.y_lo <= NG.y_hi).all()
+G2.to_parquet_prov(NG, f'{D}/fia_negs.parquet', PROV)
 if 'md' in V.columns: md = pd.to_datetime(V.md)                                            # the visit date (g02b keeps it since 2026-10-22)
 else:                                                                                       # older tables: invert year = year + day-of-year / 366
     yi = np.floor(V.year).astype(int); doy = np.rint((V.year - yi) * 366).astype(int)
@@ -48,19 +56,19 @@ for _, g_ in V.sort_values(['pid', '_md']).groupby('pid'):
         r_ = V.loc[ix_[j]]; prev = pmd.get((int(r_.st), int(r_.u), int(r_.c), int(r_.p), pd.Timestamp(mds_[j])))
         gap[ix_[j]] = prev is None or prev != pd.Timestamp(mds_[j - 1])
 V['fia_gap'] = gap
-# plots CONVERTED to non-forest before the 2022 forest mask (r13 A-9 / G41): a FIADB visit up to 2022 with no forested condition (and >= 1 non-forest one)
-# after a forested visit — the plot's true footprint is likely outside the 2022 mask, so it has no candidate; g03b leaves these plots out of the MIL loss
-CV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my,
-                            sum(case when c.COND_STATUS_CD = 1 then 1 else 0 end) nf1, sum(case when c.COND_STATUS_CD = 2 then 1 else 0 end) nf2
-                     from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {G2.ST_SQL} and p.MEASYEAR >= 2000 group by all""").df()
-conv = set()
-for k_, g_ in CV.sort_values('my').groupby(['st', 'u', 'c', 'p']):
-    seen_f = False
-    for r in g_.itertuples():
-        if r.nf1 > 0: seen_f = True
-        elif seen_f and r.nf2 > 0 and r.my <= 2022: conv.add(tuple(int(x) for x in k_)); break
+# plots CONVERTED to non-forest before the 2022 forest mask (r13 A-9 / G41, refined r14 F3 / A14-3 / G46.3): the plot's LAST sampled FIADB visit
+# dated <= 2022 has no forested condition and >= 1 non-forest land / water one (COND_STATUS_CD 2-4), after an earlier forested visit — its true
+# footprint is likely outside the 2022 mask, so it has no candidate. A plot forested again by 2022 is not converted, nor is one non-forest only
+# after 2022 (ambiguous against the mask year). Visits with only non-sampled conditions (5) are skipped. g03b keeps these plots out of the AlphaEarth terms
+CV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my, p.MEASMON mm, p.MEASDAY dd,
+                            sum(case when c.COND_STATUS_CD = 1 then 1 else 0 end) nf1, sum(case when c.COND_STATUS_CD in (2, 3, 4) then 1 else 0 end) nnf
+                     from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {G2.ST_SQL} and p.MEASYEAR >= 2000 and p.MEASYEAR <= 2022 group by all""").df()
+CV = CV[(CV.nf1 > 0) | (CV.nnf > 0)]; conv = set()
+for k_, g_ in CV.sort_values(['my', 'mm', 'dd']).groupby(key):
+    f_ = g_.nf1.values > 0
+    if not f_[-1] and f_[:-1].any(): conv.add(tuple(int(x) for x in k_))
 V['plot_converted'] = [(int(a), int(b), int(c), int(d)) in conv for a, b, c, d in zip(V.st, V.u, V.c, V.p)]
-V = V.drop(columns='_md'); V.to_parquet(f'{D}/visits.parquet')
+V = V.drop(columns='_md'); G2.to_parquet_prov(V, f'{D}/visits.parquet', PROV)
 print(f'plots with typed events {len(evs)} ({sum(map(len, evs.values()))} events); negative periods {sum(map(len, negs.values()))}; '
       f'visits with a hiding code {int(V.fia_blocked.sum())} of {len(V)}; visits whose previous FIA measurement is not the previous table visit {int(V.fia_gap.sum())}; '
       f'plots converted to non-forest before 2022 {len(conv & set(map(tuple, P[key].astype(int).values)))}')

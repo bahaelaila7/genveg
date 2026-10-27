@@ -2,6 +2,7 @@
   visits   = every (plot, MEASDATE) of curated_trees (common.curated_db(), read-only) for GA+FL since 2000 with a forested condition (tree records on FIADB COND
              COND_STATUS_CD 1 only: non-forest conditions of mixed plots and wholly non-forest visits are dropped), single-visit plots included; live trees with
              estimated_age, DIA, HT, CR, TPA_UNADJ (the ages / filters of the Pan interval product); species key = top-K species, else _S/_H.
+             A curated visit keeping fewer than half of FIADB's live tallied trees (FIADB >= 3) is INCOMPLETE and left out (r14 A14-1 / G46.1).
              Densities are per FORESTED area: TPA_UNADJ / (forest share of the subplot (DIA >= 5 in) or microplot (saplings) area, FIADB COND
              SUBPPROP_UNADJ / MICRPROP_UNADJ of COND_STATUS_CD 1), so a half-forested plot is not read as a half-stocked stand
   pairs    = consecutive visits of a plot
@@ -16,8 +17,10 @@
 Mapping set: Baker stands as in g02. Output data/proto/gafl/…
 Region switches (docs/GENVEG_V4_R4.md §B): REGION = FIA STATECDs (default 12,13 = GA+FL); AEF90=1 reads the Region 4 rasters of r4_grid.py /
 r4_aef90.py / r4_rasters.py (30 m land / disturbance / Hansen on grid_r4, AlphaEarth footprint means and soils at 90 m on grid_r4_90): plot windows
-start on a multiple of 3 so footprint centres are the 90 m block centres, and the AlphaEarth / soil features are the 90 m pixel of the block."""
-import sys, os, json, numpy as np, pandas as pd, duckdb, rasterio, geopandas as gpd
+start on a multiple of 3 so footprint centres are the 90 m block centres, and the AlphaEarth / soil features are the 90 m pixel of the block.
+The evidence table is per region (EVK_TABLES, G46.4): a region without an entry is refused; meta.json records the table used (evk, evk_hash), the
+evidence end (evid_end), this script's code hash (code_hash, G46.6) and the vetting counts."""
+import sys, os, json, ast, hashlib, numpy as np, pandas as pd, duckdb, rasterio, geopandas as gpd, pyarrow as pa, pyarrow.parquet as pq
 from rasterio.windows import Window
 from pyproj import Transformer
 from multiprocessing import Pool
@@ -35,7 +38,7 @@ def radial_weight(d):
     return np.where(d <= R_IN, RADIAL_P / a_in, (1 - RADIAL_P) / a_out) * a_in / RADIAL_P
 R = 1600.0; NCAND = int(os.environ.get('NCAND', 256)); OUT = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; os.makedirs(OUT, exist_ok=True)
 YEARS = list(range(2000, 2026))
-REGION = tuple(int(x) for x in os.environ.get('REGION', '12,13').split(',')); ST_SQL = f"({', '.join(map(str, REGION))})"
+REGION = tuple(sorted({int(x) for x in os.environ.get('REGION', '12,13').split(',')})); ST_SQL = f"({', '.join(map(str, REGION))})"
 AEF90 = os.environ.get('AEF90', '0') == '1'
 CLS = {'harvest': ['Clearcut', 'Harvest'], 'thin': ['Thinning', 'Mastication', 'Other Mechanical', 'Mechanical Remove', 'Mechanical Add', 'Mechanical Unknown'],
        'fire': ['Wildfire', 'Fire', 'Prescribed Fire', 'Wildland Fire Use', 'Wildland Fire', 'Unknown/Possibly Fire'],
@@ -130,7 +133,7 @@ H_ = NC + 1; IX = {k: i for i, k in enumerate(CLS)}
 # was far stronger than the observed lifts ≈ 2); 2 = weak (never a hard constraint).
 # T10-T40 also accept LANDFIRE 'unknown' (2026-10-22, data: 61 % of Hansen-loss footprint-years carry 'unknown' within ±1 yr vs 0.5 % 'harvest'; the
 # MIICA change-detection class is how most harvests appear; g10: strict_unknown gives the best stand-replacing discrimination)
-EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),                                     # cutting
+EVK_GAFL = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),                                     # cutting
        'T20': ([IX['harvest'], IX['chem'], IX['fire'], IX['unknown'], H_], (-1, 1), 4.0),                          # site preparation
        'T30': ([IX['harvest'], IX['chem'], IX['unknown'], H_], (-2, 1), 4.0),                                      # artificial regeneration (after a harvest)
        'T40': ([IX['harvest'], IX['fire'], IX['unknown'], H_], (-2, 1), 4.0),                                      # natural regeneration
@@ -139,6 +142,41 @@ EVK = {'T10': ([IX['harvest'], IX['thin'], IX['unknown'], H_], (-1, 1), 4.0),   
        # ground fire is weak: prescribed burns recur every 2-3 yr, the fire class passes ~17 % of footprints, lift 1.85 -> never a hard constraint
        'Dins': ([IX['insdis']], (-1, 1), 2.0), 'Dwx': ([IX['weather']], (-1, 1), 2.0),
        'Dhum': ([IX['harvest'], IX['dev']], (-1, 1), 2.0)}                                                       # 'unknown' (70): not matched
+# the evidence table per region (G34 / G46.4), keyed by the SORTED tuple of the region's FIA state codes: the table is derived per region (g09); a
+# region without an entry is refused by g02b (main), and later stages read the table's EVK from its meta.json (evk_from_meta), not from here
+EVK_TABLES = {(12, 13): EVK_GAFL}
+EVK = EVK_TABLES.get(REGION)                       # (None outside the listed regions: g02b refuses, clusters() raises)
+def evk_json(evk):
+    """the JSON form of an evidence table: kind -> [class indices, [dlo, dhi], lr] (meta.json `evk`)"""
+    return {k: [[int(c) for c in cols], [int(w[0]), int(w[1])], float(lr)] for k, (cols, w, lr) in evk.items()}
+def evk_hash(evk_j):
+    """sha256 of the canonical JSON (sorted keys, no spaces) of an evidence table in its JSON form (meta.json `evk_hash`)"""
+    return hashlib.sha256(json.dumps(evk_j, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+def evk_from_meta(meta):
+    """the evidence table a training table was built with (meta.json `evk`, checked against `evk_hash`); refuses a table without one (G46.4)"""
+    if 'evk' not in meta or 'evk_hash' not in meta:
+        sys.exit('meta.json has no evidence table (evk / evk_hash): the table predates G46.4; rebuild it with scripts/g02b_build_gafl.py')
+    if evk_hash(meta['evk']) != meta['evk_hash']: sys.exit('meta.json: evk does not match evk_hash (edited by hand?); rebuild the table')
+    return {k: (list(cols), (int(w[0]), int(w[1])), float(lr)) for k, (cols, w, lr) in meta['evk'].items()}
+def code_hash(path):
+    """provenance hash of a script (G46.6): sha256 of ast.dump of the parsed module with the docstrings of the module and of every def / class removed
+    (an emptied body becomes `pass`), so comments, docstrings and formatting do not count"""
+    tree = ast.parse(open(path).read())
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body and isinstance(n.body[0], ast.Expr) \
+                and isinstance(n.body[0].value, ast.Constant) and isinstance(n.body[0].value.value, str):
+            n.body = n.body[1:] or [ast.Pass()]
+    return hashlib.sha256(ast.dump(tree).encode()).hexdigest()
+PROV_KEY = b'genveg_provenance'
+def to_parquet_prov(df, path, prov):
+    """write df as parquet with the provenance record `prov` (JSON) in the schema metadata under PROV_KEY (G46.6: g02e / g02g / g02j outputs)"""
+    tb = pa.Table.from_pandas(df); md = dict(tb.schema.metadata or {}); md[PROV_KEY] = json.dumps(prov, sort_keys=True).encode()
+    pq.write_table(tb.replace_schema_metadata(md), path)
+def write_json_atomic(obj, path):
+    """write JSON via a temporary file + rename (a crash never leaves a half-written meta.json)"""
+    tmp = f'{path}.tmp{os.getpid()}'
+    with open(tmp, 'w') as f: json.dump(obj, f); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, path)
 NONBLOCK = {11, 21, 31, 40, 42, 43, 44, 45, 46}   # (41 beaver incl. flooding and 60 vegetation BLOCK: their stand-loss rates match the blocking codes, r13 A-2 / G37)
 EVID_END = 2024   # last calendar year with stand-replacing evidence: Hansen GFC-2024 lossyear ends 2024, FY2025 LANDFIRE misses Oct-Dec 2025 (r13 A-1 / G36)
 # NONBLOCK = the DSTRBCD that cannot hide stand-replacing evidence: insect / disease damage to UNDERSTORY vegetation (11 / 21; 12 / 22 are damage to
@@ -152,12 +190,15 @@ def ev_kind(trt, code):
     if 50 <= c <= 54: return 'Dwx'
     if c == 80: return 'Dhum'
     return None                                     # animal (40s), vegetation (60), geologic (90): rarely visible from space
-def clusters(evs):
+def clusters(evs, evk=None):
     """FIA records of ONE physical event (a cut + site preparation + planting, or the same event re-reported a year apart) must not multiply:
-    events whose years chain within 2 years form one cluster -> (evidence columns = union, window = union, likelihood ratio = max, has cutting)."""
+    events whose years chain within 2 years form one cluster -> (evidence columns = union, window = union, likelihood ratio = max, has cutting).
+    evk: the evidence table (stages after g02b pass the table's own, evk_from_meta); None = this region's EVK_TABLES entry."""
+    evk = EVK if evk is None else evk
+    if evk is None: raise SystemExit(f'no evidence table (EVK_TABLES) for region {REGION}: pass the table\'s own (evk_from_meta) or add the entry (G34 / G46.4)')
     out = []
     for kind, yv in sorted(evs, key=lambda e: e[1]):
-        cols, (dlo, dhi), lr = EVK[kind]
+        cols, (dlo, dhi), lr = evk[kind]
         if out and yv - out[-1]['ylast'] <= 2:
             c = out[-1]; c['cols'] |= set(cols); c['lo'] = min(c['lo'], yv + dlo); c['hi'] = max(c['hi'], yv + dhi); c['lr'] = max(c['lr'], lr); c['cut'] |= kind == 'T10'; c['ylast'] = yv
         else: out.append(dict(cols=set(cols), lo=yv + dlo, hi=yv + dhi, lr=lr, cut=kind == 'T10', ylast=yv))
@@ -204,13 +245,16 @@ def decimal_year(md):
 def fiadb_visits(fc):
     """FIADB visits (read-only) with a forested condition: forested shares of the WHOLE plot (fsub / fmic: TPA_UNADJ expands a tree to the whole plot area,
     so trees per forested area = Σ TPA / f1s — audit 2026-10-26 F8; the earlier f1s / (1 − n5s) made densities low by (1 − n5s)) and of the SAMPLED area
-    (fsub_s, non-sampled COND_STATUS_CD 5 excluded: the visit filter), stand origin, previous measurement year (PREV_PLT_CN), live-tree count."""
+    (fsub_s, non-sampled COND_STATUS_CD 5 excluded: the visit filter), stand origin, previous measurement year (PREV_PLT_CN), live-tree count;
+    prev_f1s = the forested share of the whole plot at that previous measurement (NaN when none of its conditions carries SUBPPROP_UNADJ)."""
     FV = fc.execute(f"""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md, p.MEASYEAR my, p.CN cn,
-                               any_value(q.MEASYEAR) prev_my, any_value(q.PLOT_STATUS_CD) prev_ps,
+                               any_value(q.MEASYEAR) prev_my, any_value(q.PLOT_STATUS_CD) prev_ps, any_value(qc.pf1s) prev_f1s,
                                sum(case when c.COND_STATUS_CD = 1 then c.SUBPPROP_UNADJ else 0 end) f1s, sum(case when c.COND_STATUS_CD = 5 then c.SUBPPROP_UNADJ else 0 end) n5s,
                                sum(case when c.COND_STATUS_CD = 1 then c.MICRPROP_UNADJ else 0 end) f1m, sum(case when c.COND_STATUS_CD = 5 then c.MICRPROP_UNADJ else 0 end) n5m,
                                max(case when c.COND_STATUS_CD = 1 then c.STDORGCD end) org
                         from PLOT p join COND c on c.PLT_CN = p.CN left join PLOT q on q.CN = p.PREV_PLT_CN
+                        left join (select PLT_CN, sum(case when COND_STATUS_CD = 1 then SUBPPROP_UNADJ else 0 end) pf1s from COND
+                                   group by 1 having count(SUBPPROP_UNADJ) > 0) qc on qc.PLT_CN = q.CN
                         where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 group by all having f1s > 0""").df()
     # live TALLIED trees on forested conditions (the bare-visit test; r13 A-6 / G40: every live row of the plot was counted, any condition / TPA)
     nlive = fc.execute(f"""select t.PLT_CN cn, count(*) n from TREE t join COND c on c.PLT_CN = t.PLT_CN and c.CONDID = t.CONDID
@@ -225,11 +269,14 @@ def fiadb_events(fc):
                                c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.TRTCD3, c.TRTYR3, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2, c.DSTRBCD3, c.DSTRBYR3
                         from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()
     FE['md'] = pd.to_datetime(FE.md); return FE
-def fia_records(FE, FV, P, key):
+def fia_records(FE, FV, P, key, stats=None):
     """FIA events per plot {pid: {(kind, year)}} from every forested condition; negative evidence {pid: [(y_lo, y_hi)]} = measurement periods whose
     visit carries no code that could hide stand-replacing evidence: (previous measurement + 1 .. visit - 1); for the first visit since 2000 the
     previous measurement (PREV_PLT_CN, periodic inventories) or, for a new plot, FIA's 5-year lookback; blocked = {(plot key, visit date)} with such a code.
-    Shared by g02b (location prior) and g03b (FIA-anchored remeasurement pairs)."""
+    A period is CLIPPED to the evidence window (y_hi <= EVID_END, G36 / G46.5); one lying wholly after it is empty and not listed.
+    Shared by g02b (location prior) and g03b (FIA-anchored remeasurement pairs). stats (a dict, optional): filled with counts of the blocking rules."""
+    st_ = {'share_prev_forested': 0, 'share_prev_measurement': 0} if stats is None else stats
+    st_.setdefault('share_prev_forested', 0); st_.setdefault('share_prev_measurement', 0)
     pidk = dict(zip(map(tuple, P[key].values), P.pid)); evs, negs = {}, {}
     cols = [('TRTCD1', 'TRTYR1', 1), ('TRTCD2', 'TRTYR2', 1), ('TRTCD3', 'TRTYR3', 1), ('DSTRBCD1', 'DSTRBYR1', 0), ('DSTRBCD2', 'DSTRBYR2', 0), ('DSTRBCD3', 'DSTRBYR3', 0)]
     blocked = set()
@@ -244,12 +291,18 @@ def fia_records(FE, FV, P, key):
     for k_, g_ in FV.sort_values('md').groupby(key):
         if k_ not in pidk: continue
         yrs = g_.my.values.astype(int); mds = g_.md.values; pm = g_.prev_my.values; pps = g_.prev_ps.values; nl = []; fs_ = g_.f1s.values
+        pfs = g_.prev_f1s.values
         for j in range(len(yrs)):
+            vk_ = (k_, pd.Timestamp(mds[j])); was = vk_ in blocked
             # a forest -> non-forest (or non-sampled) conversion of >= 1/4 of the plot since the previous forested visit carries no TRT / DSTRB code
             # (codes live on forested conditions only): it can hide a clearing, so it blocks like a hiding code (audit r7 M1)
-            if j > 0 and abs(fs_[j - 1] - fs_[j]) >= 0.25: blocked.add((k_, pd.Timestamp(mds[j])))   # (either direction: a re-delineation changes the
-            # per-forested-area densities too — median BA log change −0.16 vs +0.14 for unchanged shares; audit r8 M2)
-            if (k_, pd.Timestamp(mds[j])) in blocked: continue
+            if j > 0 and abs(fs_[j - 1] - fs_[j]) >= 0.25:     # (either direction: a re-delineation changes the per-forested-area densities too —
+                blocked.add(vk_); st_['share_prev_forested'] += not was; was = True   # median BA log change −0.16 vs +0.14 for unchanged shares; r8 M2)
+            # the same against FIA's PREVIOUS measurement (PREV_PLT_CN; r14 A14-2 / G46.2): a pre-2000 predecessor of the first visit since 2000, and
+            # an entirely non-forest one (PLOT_STATUS_CD 2: forested share 0); a non-sampled one (3) or one without condition shares says nothing
+            q_ = 0.0 if pd.notna(pps[j]) and int(pps[j]) == 2 else (float(pfs[j]) if pd.notna(pps[j]) and int(pps[j]) == 1 and pd.notna(pfs[j]) else None)
+            if q_ is not None and abs(q_ - fs_[j]) >= 0.25: blocked.add(vk_); st_['share_prev_measurement'] += not was
+            if vk_ in blocked: continue
             # the visit's codes cover the period since FIA's PREVIOUS measurement (PREV_PLT_CN, any status): a non-forest / non-sampled visit in between
             # shortens it (audit r6 M1); the later of that and the previous forested visit is used
             # a NON-SAMPLED previous measurement (PLOT_STATUS_CD 3) vouches for nothing: the visit's own lookback applies (r13 A-5 / G39); the FIA lookback
@@ -262,9 +315,12 @@ def fia_records(FE, FV, P, key):
         negs[pidk[k_]] = nl
     return evs, negs, blocked
 if __name__ == '__main__':
-    if REGION != (12, 13) and os.environ.get('EVK_REGION_OK') != '1':
-        sys.exit('the FIA-record -> evidence table (EVK, its classes / windows / likelihood ratios) was derived on GA+FL (g09); outside GA+FL re-derive it for '
-                 'the region first and set table.EVK_REGION_OK: 1 (docs/DECISIONS.md G34: in KY / TN the 2023 "unknown" class barely moves AlphaEarth)')
+    if EVK is None:
+        sys.exit(f'no FIA-record -> evidence table (EVK_TABLES: classes / windows / likelihood ratios) for region {REGION}: the GA+FL table was derived '
+                 'by g09 on GA+FL; re-derive it for the region and add its EVK_TABLES entry first (docs/DECISIONS.md G34 / G46.4: in KY / TN the 2023 '
+                 '"unknown" class barely moves AlphaEarth)')
+    if AEF90 and REGION == (12, 13):
+        sys.exit('AEF90=1 with REGION 12,13: the GA+FL evidence table and table builds are 30 m; the 90 m Region 4 rasters need a Region 4 table (G46.4)')
     con = duckdb.connect(curated_db(), read_only=True)
     t = con.execute(f"""select t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.SUBP sb, t.MEASDATE md, t.DIA, t.HT, t.CR, t.TPA_UNADJ tpa, t.estimated_age age, r.SPECIES_SYMBOL sym, r.SFTWD_HRDWD grp,
                               t.STATUSCD status, t.CONDID cond, t.cond_stdage stdage, t.TRTCD1, t.TRTYR1, t.TRTCD2, t.TRTYR2, t.DSTRBCD1, t.DSTRBYR1, t.DSTRBCD2, t.DSTRBYR2, t.cond_stdorgcd org
@@ -278,12 +334,25 @@ if __name__ == '__main__':
     t = t.merge(CS, on=key + ['md', 'cond'], how='left'); n0_ = len(t)
     print(f"tree records on non-forest / unmatched conditions dropped: {int((t.cs != 1).sum())} of {n0_} (live {int(((t.cs != 1) & (t.status == 1)).sum())})", flush=True)
     t = t[t.cs == 1].reset_index(drop=True)            # the cohort table describes the FORESTED conditions (visits with only non-forest conditions drop out)
-    # top species among LIVE trees
+    FV = fiadb_visits(fc); FE = fiadb_events(fc)
+    kp_ = t[key].drop_duplicates()             # plots of the curated table (the scope of bare visits / all-bare plots: before the vetting below)
+    # INCOMPLETE curated visits (r14 A14-1 / G46.1): n_cur = curated live tallied trees on the forested conditions, n_fia = FIADB's (FV.n); a visit with
+    # n_fia >= 3 and n_cur < n_fia / 2 (curated kept only dead records or a small subset) leaves the table: no tokens, no pair endpoint, no bare
+    # visit. It stays a FIADB visit for the FIA records and negative evidence (fia_records reads FIADB, not the table)
+    nc_ = t[t.live & (t.tpa > 0) & (t.sb <= 4)].groupby(key + ['md']).size().rename('n_cur').reset_index()
+    vv_ = t[key + ['md']].drop_duplicates().merge(nc_, on=key + ['md'], how='left').merge(FV[key + ['md', 'n', 'fsub', 'fsub_s']], on=key + ['md'], how='inner')
+    vv_['n_cur'] = vv_.n_cur.fillna(0); inc_ = vv_[(vv_.n >= 3) & (vv_.n_cur < 0.5 * vv_.n)]
+    inc_tab = inc_[inc_.fsub_s >= 0.1]                           # the ones that would otherwise be table visits (forested share filter below)
+    VET = dict(incomplete_visits=int(len(inc_tab)), incomplete_visits_by_state={str(int(k)): int(v) for k, v in inc_tab.st.value_counts().sort_index().items()},
+               incomplete_curated_visits=int(len(inc_)), vetted_curated_visits=int(len(vv_)), incomplete_no_live=int((inc_tab.n_cur == 0).sum()))
+    print(f"incomplete curated visits (n_fia >= 3, n_cur < n_fia / 2) dropped: {VET['incomplete_visits']} table visits (no curated live tree "
+          f"{VET['incomplete_no_live']}; all curated visits with a forested FIADB condition {len(inc_)} of {len(vv_)}); by state {VET['incomplete_visits_by_state']}", flush=True)
+    t = t.merge(inc_[key + ['md']].assign(_inc=1), on=key + ['md'], how='left'); t = t[t._inc.isna()].drop(columns='_inc').reset_index(drop=True)
+    # top species among LIVE trees (of the vetted visits)
     cnt = t[t.live].sym.value_counts(); top = list(cnt.index[:int(os.environ.get('TOPK', 16))]); KEYS = sorted(top) + ['_H', '_S']; kix = {k: i for i, k in enumerate(KEYS)}
     t['key'] = [kix[s] if s in top else kix['_' + (g if g in ('S', 'H') else 'H')] for s, g in zip(t.sym, t.grp)]
-    FV = fiadb_visits(fc); FE = fiadb_events(fc)
     # visits = forested visits with curated tree records + truly bare forested visits (no live tree in FIADB, absent from the curated table) of the same plots
-    vt = t[key + ['md']].drop_duplicates(); kp_ = vt[key].drop_duplicates()
+    vt = t[key + ['md']].drop_duplicates()
     # + FIADB plots that are bare at EVERY visit, inside the curated table's L3 ecoregion scope (r13 A-7 / G40: recently cleared stands were missing)
     eco_ = fc.execute(f"select statecd st, unitcd u, countycd c, plot p, epa_l3 l3 from data_plot_eco where statecd in {ST_SQL}").df()
     l3s_ = set(kp_.merge(eco_, on=key).l3.dropna()); ab_ = FV.groupby(key).n.max(); ab_ = ab_[ab_ == 0].reset_index()[key].merge(eco_, on=key)
@@ -315,8 +384,10 @@ if __name__ == '__main__':
     print(f"plot coordinates (rows since 2000): keys {len(pl)}, spread of a key's rows > 0.1 km: {int((pl.spread_km > 0.1).sum())}", flush=True)
     P = vis.drop_duplicates('pid')[['pid', *key]].merge(pl, on=key, how='left'); land = rasterio.open(land_path())
     tf = Transformer.from_crs(4326, land.crs, always_xy=True); P['x'], P['y'] = tf.transform(P.lon.values, P.lat.values); P = P[P.lat.notna()]
-    evs, negs, blocked = fia_records(FE, FV, P, key)
-    print(f"plots with typed FIA events {len(evs)} (events {sum(map(len, evs.values()))}); negative-evidence periods {sum(map(len, negs.values()))}", flush=True)
+    RST = {}; evs, negs, blocked = fia_records(FE, FV, P, key, RST)
+    print(f"plots with typed FIA events {len(evs)} (events {sum(map(len, evs.values()))}); negative-evidence periods {sum(map(len, negs.values()))}; visits "
+          f"blocked by a forest-share change >= 0.25 (no hiding code): vs the previous forested visit {RST['share_prev_forested']}, only vs FIA's previous "
+          f"measurement (A14-2) {RST['share_prev_measurement']}", flush=True)
     jobs = [(int(r.pid), r.x, r.y, sorted(evs.get(r.pid, set())), negs.get(r.pid, [])) for r in P.itertuples()]
     rows = []; CF = []; n0 = 0; concs = {}
     with Pool(int(os.environ.get('NPROC', 6)), initializer=init) as pool:
@@ -331,5 +402,10 @@ if __name__ == '__main__':
     vis.to_parquet(f'{OUT}/visits.parquet'); TK.to_parquet(f'{OUT}/tokens.parquet'); pairs.to_parquet(f'{OUT}/pairs.parquet'); P.to_parquet(f'{OUT}/plots.parquet')
     C.to_parquet(f'{OUT}/cands.parquet'); np.save(f'{OUT}/cand_feat.npy', np.concatenate(CF))
     # stand footprints of the mapping set: scripts/g02j_stand_footprints.py (pipeline stage stands_fp; depends on the stand run, not on this table)
-    json.dump(dict(keys=KEYS, years=YEARS, classes=list(CLS), soils=SOILS, nf=NF, radius_m=R, ncand=NCAND, region=list(REGION), aef90=AEF90, radial_p=RADIAL_P, radial_in_m=R_IN), open(f'{OUT}/meta.json', 'w'))
+    # meta.json: the table's switches, its evidence table (G46.4: later stages read EVK from here), the evidence end (G36 / G46.5), g02b's code hash
+    # (G46.6; g02e / g02g / g02j record theirs in their own parquet outputs, PROV_KEY) and the A14-1 vetting counts
+    ej_ = evk_json(EVK)
+    write_json_atomic(dict(keys=KEYS, years=YEARS, classes=list(CLS), soils=SOILS, nf=NF, radius_m=R, ncand=NCAND, region=list(REGION), aef90=AEF90, radial_p=RADIAL_P,
+                           radial_in_m=R_IN, evk=ej_, evk_hash=evk_hash(ej_), evid_end=EVID_END, code_hash={'g02b': code_hash(os.path.abspath(__file__))}, **VET,
+                           share_blocks=RST), f'{OUT}/meta.json')
     print(f'done: candidates {len(C)} plots {C.pid.nunique()}; localisation concentration quantiles {np.quantile([v[0] for v in concs.values()], [.1, .5, .9]).round(3)}')

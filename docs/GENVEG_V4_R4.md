@@ -295,9 +295,33 @@ No blocker. Important findings, all reproduced, by slice:
   max-prior soils.
 * **A (data):** A-1 no stand-replacing evidence after 2024 (G36). A-2 DSTRBCD 41 / 60 now block (G37). A-3 end-to-end forest-share change (G38).
   A-4 / A-5 lookback yr0 − 4, and a non-sampled predecessor ⇒ lookback (G39). A-6 / A-7 bare test and all-bare plots (G40). A-9 converted plots
-  are out of MIL (G41). A-12 deferred (G42). The R4 evidence table must be re-derived before an R4 table build (G34; table.EVK_REGION_OK).
+  are out of MIL (G41). A-12 deferred (G42). The R4 evidence table must be re-derived before an R4 table build (G34; now g02b.EVK_TABLES, G46.4).
 * **D (driver):** see G43 / commit 1c518b9 (stand-pipeline modules hashed by used definitions, region-aware deps, relocatable fingerprints, portable
   own-output exclusion, complete per-stage inputs, refusals, lock, atomic state, a redesigned swallow detector).
 * **E / F (verifier, fix diffs):** the verifier batch is a separate commit (production-config T8h, g04 set hygiene T12, acceptance re-derivation T15,
   vacuous / key-order / circular checks, coverage gaps). F#5 → G35 (span ratios over fs_ok visits).
 While implementing, the redesigned guard caught two new comment-swallows in my own g06 edits (fixed before commit).
+
+## Q. Audit round 14 (2026-10-27; multi-reviewer, HEAD e132568); decisions G45–G47
+### Q.1 Data fixes (g02b / g02e / g02g / g02j; G46.1–6)
+* **Incomplete curated visits (A14-1, G46.1).** g02b vets every curated visit against FIADB: n_cur = curated live tallied trees on the forested
+  conditions, n_fia = FIADB's (`FV.n`). n_fia ≥ 3 and n_cur < n_fia / 2 ⇒ the visit leaves the table (no tokens, no pair endpoint, no bare visit);
+  FIADB still supplies its records and negative evidence. Old curated DB (slim_r4): GA+FL 1,112 of 34,045 curated visits (FL 280, GA 832; 261
+  with no curated live tree). meta.json: `incomplete_visits`, `incomplete_visits_by_state`, `incomplete_curated_visits`, `vetted_curated_visits`,
+  `incomplete_no_live`. Re-check curated_v2 the same way.
+* **Share change vs FIA's previous measurement (A14-2, G46.2).** The |Δ forested share| ≥ 0.25 block also compares each visit with its
+  PREV_PLT_CN measurement (pre-2000 predecessors included; PLOT_STATUS 2 ⇒ share 0; non-sampled or without condition shares: no comparison).
+  GA+FL: 313 additional blocked visits / negative periods (627 from the consecutive rule). meta.json `share_blocks`.
+* **G41 refined (F3 / A14-3, G46.3).** `plot_converted` ⇔ the last sampled FIADB visit dated ≤ 2022 has no forested condition and ≥ 1
+  non-forest land / water one (COND_STATUS 2–4), after an earlier forested visit. GA+FL table plots: 385 (old rule 402; 31 forested again by
+  2022 leave, 14 forest → water enter).
+* **Evidence table per region (A14-5, G46.4).** `g02b.EVK_TABLES` keyed by the sorted state tuple (GA+FL = (12, 13)); a region without an entry
+  is refused, and so is AEF90 with GA+FL; EVK_REGION_OK is gone. meta.json `evk` (kind → [class indices, [dlo, dhi], lr]) and `evk_hash`
+  (sha256 of `json.dumps(evk, sort_keys=True, separators=(',', ':'))`); g02e / g02g (and g03b) read it through `g02b.evk_from_meta` and pass it
+  to `clusters(evs, evk)`.
+* **G36 as a clip (A14-6, G46.5), data side.** fia_negs periods are (y_lo, min(visit year − 1, evid_end)); a period wholly after evid_end is empty
+  and not listed. meta.json `evid_end` (2024) is the single source; g02g clips again with it. The location prior uses the same periods.
+* **Provenance (G46.6).** `code_hash(path)` = sha256 of `ast.dump` of the module with every docstring removed. g02b: meta.json
+  `code_hash: {"g02b": …}`. g02e / g02g / g02j: the parquet schema metadata key `genveg_provenance` of each of their parquet outputs
+  (`{"code_hash": {"<script>": …, "g02b": …}, "evk_hash": …}`; g02j without evk_hash). They do not touch meta.json, so stands_fp stays
+  independent of the table stages.
