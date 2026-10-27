@@ -17,7 +17,7 @@ apply that to the current GA+FL data (30 m), and expand the model to EPA Region 
 Rationale for keeping a linear skip in the heads: the MIL localisation compares predicted with candidate AlphaEarth embeddings; the linear path keeps
 the latent's geometry tied to satellite space, the MLP removes the 16/32→64 linear bottleneck.
 Comparison: v3 vs v4 on the same table and held-out 10-km blocks (g03b direct predictor for every seed; g04 mapping path for model_seed only; null and kNN baselines) — DECIDED on the validation metrics (g03b `validation`, g04 `mapping_path_validation_crossfit`, g06 acceptance); the test block is reported only (r9).
-GA+FL run: data dir `gafl_v4` (the `gafl_pipe` table, stand footprints and stage outputs adopted, model retrained); FE outputs stay in data/proto
+GA+FL run: data dir `gafl_v4` (the table and stand footprints were RUN by the driver — 1,687 s — not adopted; the model is trained there); FE outputs stay in data/proto
 until the comparison is reviewed (the live Forest Explorer layer is not replaced).
 
 ## B. Region 4 at 90 m
@@ -53,7 +53,7 @@ until the comparison is reviewed (the live Forest Explorer layer is not replaced
 for y in 2022 2025; do .venv/bin/python -I scripts/r4_aef90.py $y 4 && .venv/bin/python -I scripts/r4_aef90.py $y assemble; done   # resumable per window
 for s in hansen_dl hansen dist land soils90 soilfill; do .venv/bin/python -I scripts/r4_rasters.py $s 2; done
 .venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_r4.yml          # table … verify (stage hashes; reruns only stale stages)
-.venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_v4.yml          # GA+FL v4 (inputs adopted from gafl_pipe)
+.venv/bin/python -I scripts/genveg_pipeline.py --config config/genveg_v4.yml          # GA+FL v4 (table + footprints built by the driver)
 ```
 Code changes to g02b / g02j / g05 / gv_verify change the stage code hashes of the GA+FL pipelines too (by design); their outputs are byte-identical
 for the defaults, so an existing GA+FL data dir can re-adopt its stages (`--adopt`) instead of rebuilding.
@@ -271,3 +271,15 @@ Dynamics / mapping changes (switches; the new configs enable them, defaults keep
 * Not changed (negligible, recorded): the visit-year rule is class-agnostic (moves all of a visit year's evidence; 0.02 % of visits carry unrelated
   stand-replacing evidence in that year).
 * Verification of r11: gv_verify 50 / 55 (the same 5 stale-table checks; T1b forested-condition spec and new T8g VRA pass); smoke OK; driver gating tested on the stub root (rerun all current; verify.n change re-runs vtab + verify only; a model_seed outside train.seeds is refused).
+
+## O. Audit round 12 (2026-10-27, fresh independent Opus review of 6059b6f); no blocker, findings reproduced before fixing
+* **I-1** one shared input fingerprint (and check_comments.py in every code hash) invalidated stages by files they never read: a re-written stand gpkg
+  rebuilt the table and retrained every seed → per-stage inputs, vector files content-hashed (G25).
+* **M-1** vtab ran T11 / T11b / T11c on stale map files → skipped entirely in vtab.
+* **M-2** end-side visit-year asymmetry (0.28 % of pairs) — documented (G26).
+* **M-3** T8b / T8d / T8e sampled the first items in key order (one state) → random order.
+* **M-4** docs: vtab row, the State section (gate, inputs, file currency, refusals), G21 wording, §A "adopted" (the gafl_v4 table was RUN by the driver,
+  1,687 s).
+* **M-5** T11c trusted g04's `passed` → T11d re-derives the gate decision; R4 vtab / verify hash TIGER and the 30 m AlphaEarth mosaics they read.
+* **S-1** the landscape criterion mixed Monte-Carlo noise → dependence above a same-landscape redraw (G24). **S-2** documented (G26).
+* Verification of r12: gv_verify 50 / 55 (the 5 stale-table checks); smoke OK; the gate records the redraw / shuffled correlations and dependences; the stub root: touched gpkgs invalidate nothing, a check_comments edit re-runs vtab + verify only, a changed stand gpkg re-runs stands_fp onward (not table / train).

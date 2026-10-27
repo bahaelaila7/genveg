@@ -529,16 +529,18 @@ with torch.no_grad():
         a = np.array(loc); ev['localisation'] = {'visits': len(a), 'posterior_mass_on_event_matching_candidates': float(a[:, 0].mean()), 'their_share_of_candidates': float(a[:, 1].mean())}
 _mstem = os.path.splitext(os.environ.get('MODEL', 'model.pt'))[0]                      # per-model outputs (every seed wrote eval.json: audit F5a)
 print(json.dumps(ev, indent=1)); json.dump(ev, open(f'{D}/eval_{_mstem}.json', 'w'), indent=1)
-# ---------------- map Baker stands: K_S samples per footprint → cohort slots → stand summaries (mean of footprints)
-S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
-with torch.no_grad():
-    X = torch.tensor(np.concatenate([SF[:, :128], SF[:, DS], SF[:, SO]], 1)); qm, qls = qn(X)
-    res = []
-    for k_ in range(8):
-        z = qm + torch.exp(qls) * torch.randn_like(qm); lp, val = dec(z); tph, ba, qmd, dk, _ = summaries(lp, val); res.append(torch.stack([tph, ba, qmd, dk.float()], 1))
-    R_ = torch.stack(res)                                                     # [samples, footprints, 4]
-S['tph'] = R_[:, :, 0].mean(0).numpy(); S['ba'] = R_[:, :, 1].mean(0).numpy(); S['qmd'] = R_[:, :, 2].mean(0).numpy()
-S['ba_sd'] = R_[:, :, 1].std(0).numpy(); S['dom'] = torch.mode(R_[:, :, 3].long(), 0).values.numpy()
-out = S.groupby('stand_id').agg(tph=('tph', 'mean'), ba=('ba', 'mean'), qmd=('qmd', 'mean'), ba_sd=('ba_sd', 'mean'), dom=('dom', lambda x: x.mode().iloc[0])).reset_index()
-out['dom_key'] = [M['keys'][int(i)] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_q_{_mstem}.parquet')     # (the direct Q predictor; the stand map is g05)
-print('stands mapped', len(out), out[['tph', 'ba', 'qmd', 'ba_sd']].describe().loc[['mean', '50%']].round(2).to_dict(), out.dom_key.value_counts().head(6).to_dict())
+# ---------------- (diagnostic, STAND_DIAG=1 only) map Baker stands with the direct Q predictor: K_S samples per footprint → summaries. The production
+# stand map is g05; this diagnostic is off by default so training does not depend on the stand footprints (r12, docs/DECISIONS.md G27)
+if os.environ.get('STAND_DIAG') == '1':
+    S = pd.read_parquet(f'{D}/stands.parquet'); SF = np.load(f'{D}/stand_feat.npy').astype(np.float32); SF[:, SO] = (SF[:, SO] - smu) / ssd
+    with torch.no_grad():
+        X = torch.tensor(np.concatenate([SF[:, :128], SF[:, DS], SF[:, SO]], 1)); qm, qls = qn(X)
+        res = []
+        for k_ in range(8):
+            z = qm + torch.exp(qls) * torch.randn_like(qm); lp, val = dec(z); tph, ba, qmd, dk, _ = summaries(lp, val); res.append(torch.stack([tph, ba, qmd, dk.float()], 1))
+        R_ = torch.stack(res)                                                     # [samples, footprints, 4]
+    S['tph'] = R_[:, :, 0].mean(0).numpy(); S['ba'] = R_[:, :, 1].mean(0).numpy(); S['qmd'] = R_[:, :, 2].mean(0).numpy()
+    S['ba_sd'] = R_[:, :, 1].std(0).numpy(); S['dom'] = torch.mode(R_[:, :, 3].long(), 0).values.numpy()
+    out = S.groupby('stand_id').agg(tph=('tph', 'mean'), ba=('ba', 'mean'), qmd=('qmd', 'mean'), ba_sd=('ba_sd', 'mean'), dom=('dom', lambda x: x.mode().iloc[0])).reset_index()
+    out['dom_key'] = [M['keys'][int(i)] for i in out.dom]; out.to_parquet(f'{D}/stand_veg_q_{_mstem}.parquet')     # (the direct Q predictor; the stand map is g05)
+    print('stands mapped', len(out), out[['tph', 'ba', 'qmd', 'ba_sd']].describe().loc[['mean', '50%']].round(2).to_dict(), out.dom_key.value_counts().head(6).to_dict())

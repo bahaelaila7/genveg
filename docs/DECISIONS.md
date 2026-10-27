@@ -125,7 +125,7 @@ recommendations, but document the decision point and the different options"). Th
   - (c) no gating.
 - **Chosen:** (b).
   - train is gated on vup and on the new **vtab**: gv_verify before training, so the table-level checks incl. the pre-registered T1k / T1l fail before any seed is trained.
-  - vup hashes only `verify.n_upstream` plus its own inputs' fingerprints.
+  - Of the verify section, vup hashes only `verify.n_upstream`; it also hashes its own code, its upstream (stands_fp), the stand-run pixels and its inputs' fingerprints.
   - The driver refuses a `model_seed` that is not in `train.seeds` (otherwise no acceptance is enforced and a stale checkpoint is mapped).
 
 ## G22 — Median of the mapping samples (r11 M-1, agent)
@@ -138,3 +138,21 @@ recommendations, but document the decision point and the different options"). Th
 ## G23 — Map checks must run after the map stage (r11 M-5, agent)
 - **Chosen:** GV_REQUIRE_MAP=1 in the verify stage: missing map / FE / bayes outputs FAIL (T11z, U8) instead of being skipped. vtab runs with it off.
 - **Also:** g05 records the calibration factors it applied (`map_cal_tph`, `map_cal_ba`), and T11c compares them with bayes_eval.json.
+
+## G24 — Monte-Carlo noise in the gate's landscape criterion (r12 S-1, agent; amends G19)
+- **Evidence:** the real and shuffled predictions use independent random draws. On an untrained model, a same-landscape redraw correlates only 0.974 / 0.963 (2021 / 2000 path), comparable to the criterion's scale.
+- **Options:** (a) keep (1 − cs) vs (1 − cs_2021); (b) **dependence = corr(redraw) − corr(shuffled), with the requested path keeping ≥ 0.5 × the 2021 path's**; (c) common random numbers.
+- **Chosen:** (b). It removes the noise floor without changing the samplers. gv_verify T11d re-derives the decision from the recorded numbers.
+
+## G25 — Per-stage input fingerprints (r12 I-1, agent)
+- **Options:** (a) one shared fingerprint, as before; (b) **each stage hashes only what it reads, and vector files by content**; (c) declared outputs only.
+- **Chosen:** (b). A re-written but identical stand polygon file or county outline no longer rebuilds the table or retrains. check_comments.py only enters the check stages' code hashes.
+
+## G26 — Known residuals, documented rather than changed (r12 M-2 / S-2, agent)
+- **End-side visit-year rule:** an event recorded at a later visit, dated in a second-half v2's year, is applied before v2. 0.28 % of pairs; 0.05 % keep that evidence.
+- **Validation cross-fit:** mapping_path_validation_crossfit reuses the halves that chose map_y0. Two options only, so the selection bias is small; v3 vs v4 should compare both paths' cross-fit errors.
+
+## G27 — train does not depend on the stand footprints (r12 follow-up, agent)
+- **Context:** g03b read stands.parquet only for an end-of-training diagnostic stand map (stand_veg_q, the direct Q predictor). Nothing downstream reads it.
+- **Options:** (a) keep stands_fp upstream of train, so a stand-map change retrains every seed; (b) **make the diagnostic opt-in (STAND_DIAG=1) and drop the dependency**; (c) move it to its own stage.
+- **Chosen:** (b).

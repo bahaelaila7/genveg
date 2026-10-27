@@ -21,6 +21,7 @@ pipeline (`docs/STANDS_PIPELINE.md`), named by `stands_run`.
 | `history` | `g02g_history_consistency.py` | `cand_hist.parquet`; overwrites `localisation.parquet` with history-consistent sets |
 | `stands_fp` | `g02j_stand_footprints.py` | `stands.parquet`, `stand_feat.npy` — footprints of the stand run's Baker County stands |
 | `vup` | `gv_verify_upstream.py` | check: grid, forest-land rules (from the stand run's resolved config), stands, g05 nodes, FE units |
+| `vtab` | `gv_verify.py` (map checks skipped) | check before any training: the table-level data checks (T0–T10, incl. the pre-registered T1k / T1l) |
 | `train` | `g03b_train_gafl.py` per seed (`train.env`) | `<model_prefix>_s<seed>.pt` |
 | `dynamics` | `g06_dynamics_check.py` per seed × `eval_loc` | `dynamics_check.json` (tagged) |
 | `downscale` | `g04_bayes_downscale.py` (model `model_seed`) | `bayes_models.pt`, `bayes_kmeans.pkl`, `bayes_eval.json` |
@@ -34,12 +35,17 @@ pipeline (`docs/STANDS_PIPELINE.md`), named by `stands_run`.
 - `STANDS_RUN`, `DATA`, `WORKSPACE` and `FE_GEOJSON` are set by the driver.
 
 **State.** `data/proto/<data>/pipeline_state.json` stores, per stage, a hash of:
-- its config sections;
-- the code of its scripts and the shared modules (`common`, `features`, `stand_runs`);
-- the upstream stage hashes;
+- its config sections (or dotted keys, e.g. vup hashes only `verify.n_upstream`);
+- the code of its scripts and the shared modules (`common`, `features`, `stand_runs`, `region`);
+- the upstream stage hashes (`up`) and the fingerprints of the files those runs wrote;
+- the stage's OWN inputs (`STAGE_INPUTS`): the FIA databases it reads (path, size, mtime), its rasters / tables (size, mtime), and the CONTENT of its
+  vector files (stand polygons, county outline);
 - pixel-content fingerprints of the stand-run rasters it reads: `land_clean` for the table, `stands.tif` for stand footprints, map, FE and verify
   (a stand-pipeline re-run with identical outputs does not invalidate genveg).
 
+Besides `up`, a stage may have a `gate`: stages that must be current (so they ran and passed) before it runs, without entering its hash (train is gated
+on `vup` and `vtab`). A stage is current only if its hash matches AND the files its run wrote are unchanged on disk (or were rewritten by a later stage
+that is itself current). The driver refuses a frozen config, a `model_seed` not in `train.seeds`, and code swallowed by a comment (check_comments.py).
 A current stage is skipped; a stage whose upstream is not current is refused. `--adopt` records existing outputs as current without running them. Use it
 only for artifacts known to come from the same code and configuration. The `gafl` table, for example, is NOT reproducible by `table`: it is g02b under
 the old matching rules re-weighted by `g02i_reprior.py`, which is not a pipeline stage.

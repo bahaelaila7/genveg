@@ -23,7 +23,7 @@ import os, sys, json, time, argparse, hashlib, subprocess, shutil, yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stands_stages import apply_overrides
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); SCR = os.path.join(ROOT, 'scripts'); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT))
-LIB = ['common.py', 'features.py', 'stand_runs.py', 'region.py', 'check_comments.py']   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
+LIB = ['common.py', 'features.py', 'stand_runs.py', 'region.py']   # (check_comments.py: only the driver and gv_verify use it, r12 I-1)   # (stands_cfg.py: the stand pipeline's stage context, unused by genveg scripts)
 STAGES = {   # stage: scripts (code hash), config sections, upstream stages, stand-run stages it depends on
     'table':        dict(code=['g02b_build_gafl.py'], cfg=['table', 'data'], up=[], stands=['clean']),
     'localisation': dict(code=['g02d_localisation.py'], cfg=[], up=['table'], stands=[]),
@@ -32,22 +32,22 @@ STAGES = {   # stage: scripts (code hash), config sections, upstream stages, sta
     'stands_fp':    dict(code=['g02j_stand_footprints.py', 'g02b_build_gafl.py'], cfg=[], up=['table'], stands=['finalize']),
     'vup':          dict(code=['gv_verify_upstream.py'], cfg=['verify.n_upstream'], up=['stands_fp'], stands=['land', 'clean', 'finalize']),
     # vtab: gv_verify BEFORE training — the table-level data checks (T1-T10, incl. the pre-registered T1k / T1l) must pass before any seed is trained (r11 M-3)
-    'vtab':         dict(code=['gv_verify.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'g04_bayes_downscale.py'], cfg=['verify.n', 'train'], up=['history', 'stands_fp'], stands=['finalize', 'land', 'clean']),
+    'vtab':         dict(code=['gv_verify.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'g04_bayes_downscale.py', 'check_comments.py'], cfg=['verify.n', 'train'], up=['history', 'stands_fp'], stands=['finalize', 'land', 'clean']),
     # gate: stages that must be current (and so have passed) before this one runs, WITHOUT entering its hash — a verifier setting or a new check does
     # not invalidate trained models (r11 I-2); up: hash dependencies
-    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history', 'stands_fp'], gate=['vup', 'vtab'], stands=[]),   # (vup: the upstream checks gate the modelling chain, r10 M-1)   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
+    'train':        dict(code=['g03b_train_gafl.py'], cfg=['train'], up=['history'], gate=['vup', 'vtab'], stands=[]),   # (no stands_fp: g03b's stand map is an opt-in diagnostic, G27)   # (vup: the upstream checks gate the modelling chain, r10 M-1)   # (g03b reads stands.parquet / stand_feat.npy: r6 M4)
     'dynamics':     dict(code=['g06_dynamics_check.py', 'g03b_train_gafl.py', 'g04_bayes_downscale.py'], cfg=['dynamics', 'train', 'model_seed'], up=['train'], stands=[]),   # (model_seed: whose acceptance is enforced; r8 I1)
     'downscale':    dict(code=['g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['downscale', 'train', 'model_seed'], up=['train', 'dynamics'], stands=[]),   # (dynamics: its acceptance gates mapping, audit r5 I5)
     'map':          dict(code=['g05_map_stands.py', 'g04_bayes_downscale.py', 'g03b_train_gafl.py'], cfg=['map', 'train', 'model_seed'], up=['downscale', 'stands_fp'], stands=['finalize']),
     'fe':           dict(code=['24_export_fe.py', 'g07_fe_attach.py'], cfg=['fe'], up=['map'], stands=['finalize']),
-    'verify':       dict(code=['gv_verify.py', 'gv_verify_upstream.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py'], cfg=['verify', 'train'], up=['fe', 'history'], stands=['finalize', 'land', 'clean']),
+    'verify':       dict(code=['gv_verify.py', 'gv_verify_upstream.py', 'g03b_train_gafl.py', 'g02b_build_gafl.py', 'check_comments.py'], cfg=['verify', 'train'], up=['fe', 'history'], stands=['finalize', 'land', 'clean']),
 }
 ORDER = list(STAGES)
 
 STAND_FILES = dict(clean='clean/land_clean.tif', land='land/land.tif', finalize='finalize/stands.tif')
 # every switch a stage script reads from its environment: never inherited from the shell (an exported AEF90 / REGION / ARCH … would otherwise build or
 # train another region / architecture under this config's hash; audit 2026-10-26 P1) — only the config (top-level env, stage env) sets them
-STAGE_SWITCHES = {'GV_REQUIRE_MAP', 'GV_CURATED_DB', 'GV_FIADB', 'VAL_SPLIT', 'G06_ENFORCE', 'AEF90', 'ARCH', 'RADIAL_P', 'T_PAIR', 'SITE_ATTR', 'PAIR_ALL', 'PAIR_HMAX', 'MAP_Y0', 'AGE_CH', 'W_AGE', 'SMOKE_BATCHES', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
+STAGE_SWITCHES = {'STAND_DIAG', 'GV_REQUIRE_MAP', 'GV_CURATED_DB', 'GV_FIADB', 'VAL_SPLIT', 'G06_ENFORCE', 'AEF90', 'ARCH', 'RADIAL_P', 'T_PAIR', 'SITE_ATTR', 'PAIR_ALL', 'PAIR_HMAX', 'MAP_Y0', 'AGE_CH', 'W_AGE', 'SMOKE_BATCHES', 'BATCH', 'BUF_KM', 'CF16', 'CURRIC', 'DATA', 'DZ', 'EM_ITERS', 'EP8', 'EPB', 'EPOCHS', 'EVAL_LOC', 'FE_GEOJSON', 'G06_SET',
                   'GV_SKIP_U8', 'KC', 'LOAD', 'LOC', 'LR', 'MDN_EP', 'MIN_FSHARE', 'MODEL', 'NCAND', 'NPROC', 'NT', 'PAIR_ANCHOR', 'QD_WIN', 'RAD_M', 'REGION',
                   'SEED', 'SEVERITY_ANCHOR', 'STANDS_RUN', 'TAG', 'TOPK', 'USE_B', 'WRITE_LOC', 'W_COMP', 'W_SUM'}
 # Region 4 (AEF90) inputs the table / stand-footprint stages read instead of the stand run's rasters (audit P2): fingerprinted by size + mtime (the
@@ -64,27 +64,66 @@ def r4_fingerprint():
         for f in fs: st = os.stat(f); h.update(f'{os.path.relpath(f, ROOT)}:{st.st_size}:{st.st_mtime_ns}'.encode())
     for f in R4_CODE: h.update(open(os.path.join(SCR, f), 'rb').read())
     return h.hexdigest()[:16]
-# GA+FL (30 m) inputs of the table / records / stand-footprint / verify stages, and the FIA databases (config `inputs`): fingerprinted by path + size + mtime
-# (audit r5 I4: only the stand run's pixels and the R4 inputs were hashed — a rebuilt curated table or new rasters passed as current)
-COMMON_INPUTS = ['data/proto/baker/plots.parquet', 'data/landfire/dist/dist_codes.csv', 'data/derived/baker_county.gpkg']   # read in both regions (r6 M4)
-GAFL_INPUTS = ['data/aef/aef_2022.tif', 'data/aef/aef_2025.tif', 'data/landfire/dist/dist_*.tif', 'data/landfire/dist/dist_codes.csv', 'data/hansen/lossyear.tif',
-               'data/soils/*.tif']
-INPUT_STAGES = ('table', 'records', 'history', 'stands_fp', 'vtab', 'train', 'verify')
+# Inputs each stage READS (r12 I-1: one shared fingerprint invalidated stages by files they never read — a re-written stand polygon file rebuilt the
+# table and retrained every seed), fingerprinted only into that stage's hash. Rasters / tables: path + size + mtime; the vector files: their CONTENT
+# (features + attributes), so a stand-pipeline re-run with identical outputs does not invalidate genveg.
+GAFL_RASTERS = ['data/aef/aef_2022.tif', 'data/aef/aef_2025.tif', 'data/landfire/dist/dist_*.tif', 'data/hansen/lossyear.tif', 'data/soils/*.tif']
+STAGE_INPUTS = {   # stage: (databases, files under ROOT, vector files (content-hashed), GA+FL-only rasters?)
+    'table':     (('curated_db', 'fiadb'), ['data/landfire/dist/dist_codes.csv'], [], True),
+    'records':   (('fiadb',), [], [], False),
+    'stands_fp': ((), ['data/landfire/dist/dist_codes.csv'], ['STANDS_GPKG', 'data/derived/baker_county.gpkg'], True),
+    'vtab':      (('curated_db', 'fiadb'), ['data/landfire/dist/dist_codes.csv'], [], True),
+    'train':     ((), ['data/proto/baker/plots.parquet'], [], False),
+    'map':       ((), [], ['STANDS_GPKG'], False),
+    'fe':        ((), [], ['STANDS_GPKG', 'data/derived/baker_county.gpkg'], False),
+    'verify':    (('curated_db', 'fiadb'), ['data/landfire/dist/dist_codes.csv'], [], True),
+}
+R4_VERIFY_EXTRA = ['data/aef/aef_2022.tif', 'data/aef/aef_2025.tif']          # gv_verify T3c2 compares the 90 m means with the 30 m mosaics; TIGER under WS
+def vector_hash(path):
+    """content fingerprint of a vector file (geometries as WKB + attributes, row order kept), cached next to it by (size, mtime)"""
+    import geopandas as gpd
+    real = os.path.realpath(path); st = os.stat(real); cf = real + '.vechash.json'
+    if os.path.exists(cf):
+        c = json.load(open(cf))
+        if c.get('size') == st.st_size and c.get('mtime') == st.st_mtime_ns: return c['hash']
+    h = hashlib.sha256()
+    for layer in sorted(__import__('pyogrio').list_layers(real)[:, 0]):
+        g = gpd.read_file(real, layer=layer); h.update(layer.encode()); h.update(str(g.crs).encode())
+        h.update(pd_bytes(g.drop(columns='geometry'))); h.update(b''.join(g.geometry.to_wkb()))
+    out = h.hexdigest()[:16]; json.dump(dict(size=st.st_size, mtime=st.st_mtime_ns, hash=out), open(cf, 'w')); return out
+def pd_bytes(df):
+    import pandas as pd
+    return pd.util.hash_pandas_object(df, index=True).values.tobytes()
 def inputs_fingerprint(cfg, r4, sr):
+    """per-stage input fingerprints {stage: hash} and the database paths"""
     import glob
-    h = hashlib.sha256(); inp = cfg.get('inputs', {})
+    inp = cfg.get('inputs', {})
     dbs = {'curated_db': inp.get('curated_db', 'landis_region4/data_r4/slim_r4.duckdb'), 'fiadb': inp.get('fiadb', 'FIA/FIASQLITE2PGSQL/FIADB.duckdb')}
+    dbfp = {}
     for k, rel in dbs.items():
         f = os.path.join(WS, rel)
         if not os.path.exists(f): sys.exit(f'input database missing: {k} = {f}')
-        st = os.stat(os.path.realpath(f)); h.update(f'{k}:{os.path.realpath(f)}:{st.st_size}:{st.st_mtime_ns}'.encode())
-    for f in (f'{sr}/finalize/stands.gpkg',):                                 # the stand run's polygons (g02j, fe)
-        st = os.stat(f); h.update(f'stand_gpkg:{st.st_size}:{st.st_mtime_ns}'.encode())
-    for pat in COMMON_INPUTS + ([] if r4 else GAFL_INPUTS):
-        fs = sorted(glob.glob(os.path.join(ROOT, pat)))
-        if not fs: sys.exit(f'GA+FL input missing: {pat}')
-        for f in fs: st = os.stat(f); h.update(f'{os.path.relpath(f, ROOT)}:{st.st_size}:{st.st_mtime_ns}'.encode())
-    return h.hexdigest()[:16], dbs
+        st = os.stat(os.path.realpath(f)); dbfp[k] = f'{k}:{os.path.realpath(f)}:{st.st_size}:{st.st_mtime_ns}'
+    def files(pats):
+        out = []
+        for pat in pats:
+            fs = sorted(glob.glob(os.path.join(ROOT, pat)))
+            if not fs: sys.exit(f'input missing: {pat}')
+            out += [f'{os.path.relpath(f, ROOT)}:{os.stat(f).st_size}:{os.stat(f).st_mtime_ns}' for f in fs]
+        return out
+    vh = {}
+    def vec(v):
+        p_ = f'{sr}/finalize/stands.gpkg' if v == 'STANDS_GPKG' else os.path.join(ROOT, v)
+        if p_ not in vh: vh[p_] = vector_hash(p_)
+        return f'{v}:{vh[p_]}'
+    out = {}
+    for st_, (dbk, fl, vecs, gafl) in STAGE_INPUTS.items():
+        parts = [dbfp[k] for k in dbk] + files(fl + (GAFL_RASTERS if gafl and not r4 else []) + (R4_VERIFY_EXTRA if r4 and st_ in ('vtab', 'verify') else []))
+        if r4 and st_ in ('vtab', 'verify'):
+            t_ = os.path.join(WS, 'TIGER/tl_2024_us_county/tl_2024_us_county.shp'); parts.append(f'tiger:{os.stat(t_).st_size}:{os.stat(t_).st_mtime_ns}' if os.path.exists(t_) else 'tiger:missing')
+        parts += [vec(v) for v in vecs]
+        out[st_] = hashlib.sha256('|'.join(parts).encode()).hexdigest()[:16]
+    return out, dbs
 # what gv_verify_upstream reads besides the hashed stand-run rasters (r11 I-2): path + size + mtime
 VUP_INPUTS = ['data/treemap/tm_id.tif', 'data/landfire/evt2022.tif', 'data/landfire/evt_classes.csv', 'data/hansen/treecover2000.tif', 'data/hansen/datamask.tif',
               'data/hansen/lossyear.tif', 'data/grid/aoi_mask.tif', 'config/pilot.yml']
@@ -146,7 +185,7 @@ def main():
             d = STAGES[st]
             H[st] = hashlib.sha256(json.dumps(dict(stage=st, cfg={k: cget(k) for k in d['cfg']}, data=cfg['data'], code=code_hash(d['code']),
                                                    up={u: (H[u], state.get(u, {}).get('out')) for u in d['up']}, stands={s: srh[s] for s in d['stands']},
-                                                   **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {}), **({'inputs': inh} if st in INPUT_STAGES else {}), **({'vup_inputs': vuph} if st == 'vup' else {})),
+                                                   **({'env': cfg['env']} if 'env' in cfg else {}), **({'r4': r4h} if r4h and st in ('table', 'stands_fp') else {}), **({'inputs': inh[st]} if st in inh else {}), **({'vup_inputs': vuph} if st == 'vup' else {})),
                                               sort_keys=True, default=str).encode()).hexdigest()[:12]
     rehash()
     OWN = set()                                                               # the driver's own stdout / stderr when redirected into the data dir (r9 I-2)

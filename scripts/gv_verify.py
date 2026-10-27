@@ -540,7 +540,7 @@ check('T8 FIA-anchored pair histories (g03b.pair_cand) = independent recomputati
 # T8e the record assignment itself: records made AT v2 whose year is v2's own year belong to (v1, v2] (the mid-year rule dropped first-half visits'
 # records: audit r5 I3), and the flow applies their year's evidence before v2 (Flow re) — counted on the sample, non-vacuous
 n8e = 0
-for v1 in list(PC)[:4000]:
+for v1 in np.random.default_rng(84).permutation(list(PC))[:4000]:   # (random, not key order: r12 M-3)
     v2 = ns_['vpair'][v1]; y2 = float(V.year.values[v2])
     if y2 - math.floor(y2) < 0.5 and bool(ns_['VREC'][v2]):
         q = pair_spec(v1, v2, [v2]); n8e += 1
@@ -601,7 +601,8 @@ def strong_set(v1, v2, span):
             if nm_.any(): m_ev = nm_
     return set(allc[w_ & m_ev])
 okr = 0; nrep = 0
-for v1, v2 in list(ns_['vpair'].items()):
+_vp_ = list(ns_['vpair'].items())
+for v1, v2 in [_vp_[i] for i in np.random.default_rng(85).permutation(len(_vp_))]:   # (random order: r12 M-3)
     if v1 not in PCs or BAtk.get(v1, 0) <= 1.0 or BAtk.get(v2, 0) / BAtk.get(v1, 1) >= 0.3: continue
     strong = strong_set(v1, v2, [v2])
     if not strong: continue
@@ -612,7 +613,8 @@ check('T8b severity anchoring: OFF under LOAD=1 (evaluation sets = records-only 
 # T8d multi-horizon severity (audit r4 I2): a span whose BA fell below 0.3 of v1 at ANY visit in between (even if it regrew by the end) is stand-replacing
 PC2s = ns_.get('pair_cand2', {}); okd = 0; nd = 0
 if ns_.get('PAIR_ALL'):
-    for (v1, v2), (cs2, _) in PC2s.items():
+    _pc2_ = list(PC2s.items())
+    for (v1, v2), (cs2, _) in [_pc2_[i] for i in np.random.default_rng(86).permutation(len(_pc2_))]:   # (random order: r12 M-3)
         if ns_['vpair'].get(v1) == v2 or BAtk.get(v1, 0) <= 1.0: continue
         seq = vs_of8[int(V.pid.values[v1])]; span = seq[seq.index(v1) + 1:seq.index(v2) + 1]
         if min(BAtk.get(u, 0.0) for u in span) / BAtk.get(v1) >= 0.3 or BAtk.get(v2, 0.0) / BAtk.get(v1) < 0.3: continue   # only regrown spans: end ratio misleads
@@ -672,7 +674,8 @@ FEJ = os.environ.get('FE_GEOJSON', os.path.join(os.path.dirname(ROOT), 'fe_pan/a
 if os.environ.get('GV_REQUIRE_MAP') == '1':          # after the map / fe stages the map checks must RUN, not skip (r11 M-5)
     _need = [FEJ, f'{D}/stand_veg_v3.parquet', f'{D}/stand_cohorts_v3.parquet', f'{D}/bayes_eval.json']
     check('T11z map-stage outputs present (T11 / T11b / T11c run)', all(os.path.exists(f) for f in _need), f'missing {[os.path.basename(f) for f in _need if not os.path.exists(f)]}')
-if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
+_MAPCHK = os.environ.get('GV_REQUIRE_MAP') != '0'       # vtab (before any map exists) skips the map checks entirely (r12 M-1)
+if _MAPCHK and os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     SV = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id'); fe = json.load(open(FEJ))['features']; e11 = []; n11 = 0
     for f in fe:
         p = f['properties']
@@ -683,15 +686,20 @@ if os.path.exists(FEJ) and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     check('T11 Forest Explorer stand layer: GEN_BA / TPA / QMD / BA_SD / DOM = stand map (g05) x conversions (m2/ha->ft2/ac, /ha->/ac, cm->in)', n11 > 0 and max(e11) < 0.11,
           f'{n11} stands, max abs diff {max(e11) if e11 else float("nan"):.3f} (rounding 0.05 / 0.005)')
 # T11c g05 maps with the start year g04 GATED (bayes_eval.json map_y0), and a non-2021 year only with a passed pre-registered gate
-if os.path.exists(f'{D}/bayes_eval.json'):
+if _MAPCHK and os.path.exists(f'{D}/bayes_eval.json'):
     be = json.load(open(f'{D}/bayes_eval.json')); y0b = be.get('map_y0', 2021.0); gt = be.get('map_y0_gate', {})
     _svp = f'{D}/stand_veg_v3.parquet'; _sy = pd.read_parquet(_svp, columns=['map_y0']).map_y0.unique().tolist() if os.path.exists(_svp) and 'map_y0' in pd.read_parquet(_svp).columns else None
     _sc = pd.read_parquet(_svp)[['map_cal_tph', 'map_cal_ba']].drop_duplicates().values.tolist() if _sy is not None and 'map_cal_tph' in pd.read_parquet(_svp).columns else None
     _bc = be.get('calibration_log_factors_mapping_path'); _cal_ok = _sc is not None and _bc is not None and len(_sc) == 1 and np.allclose(_sc[0], _bc[:2], atol=1e-9)
     check('T11c mapping start year: the production stand map (g05) was mapped from the start year g04 gated; a year other than 2021 only if the gate passed',
           _sy == [y0b] and _cal_ok and (y0b == 2021.0 or gt.get('passed') is True), f'map_y0 {y0b}, stand map {_sy}, gate passed {gt.get("passed")}; calibration factors map {_sc} vs g04 {_bc[:2] if _bc else None}')
+    if 'err_requested' in gt:              # T11d the gate decision re-derived from its recorded numbers by the pre-registered rule (G5 / G19 / G24), not trusted (r12 M-5)
+        _exp = all(gt['err_requested'][k] <= gt['err_2021'][k] and gt['err_requested'][k] <= gt['err_null'][k] for k in ('TPH', 'BA')) and \
+               (gt['redraw_corr_BA'] - gt['shuffled_landscape_corr_BA']) >= 0.5 * (gt['redraw_corr_BA_2021'] - gt['shuffled_landscape_corr_BA_2021'])
+        check('T11d start-year gate decision = the pre-registered rule applied to its recorded errors / correlations', _exp == bool(gt.get('passed')) and y0b == (gt['requested'] if _exp else 2021.0),
+              f'rule says {_exp}, g04 recorded {gt.get("passed")}, map_y0 {y0b}')
 # ======================= T11b stand cohort tables (g05, the TreeMap-independent initial state of the simulation engines) carry the CALIBRATED stand summary
-if os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
+if _MAPCHK and os.path.exists(f'{D}/stand_cohorts_v3.parquet') and os.path.exists(f'{D}/stand_veg_v3.parquet'):
     Cc = pd.read_parquet(f'{D}/stand_cohorts_v3.parquet'); Sv = pd.read_parquet(f'{D}/stand_veg_v3.parquet').set_index('stand_id')
     ct_ = Cc.groupby('stand_id').tph.sum(); cb_ = (Cc.tph * math.pi / 4 * (Cc.qmd_cm / 100) ** 2).groupby(Cc.stand_id).sum(); jj = Sv[['tph', 'ba']].join(pd.DataFrame({'ct': ct_, 'cb': cb_}), how='inner')
     jj = jj[(jj.tph > 0) & (jj.ba > 0)]; rt = (jj.ct / jj.tph - 1).abs().max(); rb = (jj.cb / jj.ba - 1).abs().max()

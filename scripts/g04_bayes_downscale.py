@@ -214,7 +214,7 @@ with torch.no_grad():
         if MAP_Y0 != 2021.0:
             res[MAP_Y0] = evaluate(MAP_Y0)
             hA = [v for v in cal_m if vpid[v] % 2 == 0]; hB = [v for v in cal_m if vpid[v] % 2 == 1]
-            e0, e1, cs_, cs0_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, [], []
+            e0, e1, cs_, cs0_, cr_, cr0_ = {k: 0.0 for k in ('TPH', 'BA')}, {k: 0.0 for k in ('TPH', 'BA')}, [], [], [], []
             nulle = {k: 0.0 for k in ('TPH', 'BA')}
             for ca, cb in ((hA, hB), (hB, hA)):              # each half judged with factors from the other
                 r0, r1 = evaluate(2021.0, ca, cb), evaluate(MAP_Y0, ca, cb); ob_ = obs_summ(torch.tensor(cb)); sk_ = ob_[0] > 0; nmb = null_pred(vyear[cb], excl=set(vpid[cb]))
@@ -223,13 +223,19 @@ with torch.no_grad():
                 cs_.append(float(np.corrcoef(ba_r.numpy(), ba_s.numpy())[0, 1]))
                 ps0 = map_path(cb, 2021.0, X=Xs); b0r = torch.log(torch.stack([r[1] for r in r0[1]]) + 1e-3); b0s = torch.log(torch.stack([r[1] for r in ps0]) + 1e-3)
                 cs0_.append(float(np.corrcoef(b0r.numpy(), b0s.numpy())[0, 1]))   # the same statistic for the 2021 path (the reference: r10)
+                # the Monte-Carlo noise floor: the same landscapes REDRAWN (new candidate / MDN draws) — dependence = corr(redraw) − corr(shuffled) (r12 S-1)
+                pr1 = map_path(cb, MAP_Y0); pr0 = map_path(cb, 2021.0)
+                cr_.append(float(np.corrcoef(ba_r.numpy(), torch.log(torch.stack([r[1] for r in pr1]) + 1e-3).numpy())[0, 1]))
+                cr0_.append(float(np.corrcoef(b0r.numpy(), torch.log(torch.stack([r[1] for r in pr0]) + 1e-3).numpy())[0, 1]))
                 for i, k in ((0, 'TPH'), (1, 'BA')):
                     e0[k] += r0[3][k] / 2; e1[k] += r1[3][k] / 2; nulle[k] += err(nmb[i][sk_], ob_[i][sk_]) / 2
-            cs, cs0 = float(np.mean(cs_)), float(np.mean(cs0_))
+            cs, cs0, cr, cr0 = float(np.mean(cs_)), float(np.mean(cs0_)), float(np.mean(cr_)), float(np.mean(cr0_))
             # landscape dependence 1 − corr(real, shuffled-landscape BA): the requested path must keep at least half of the 2021 path's (an absolute
             # cs < 0.5 can be unpassable for both paths, since the plot's own histories and soils are not shuffled: r10, docs/DECISIONS.md G19)
-            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and (1 - cs) >= 0.5 * (1 - cs0)
-            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'shuffled_landscape_corr_BA_2021': cs0, 'passed': bool(ok),
+            dep, dep0 = cr - cs, cr0 - cs0                    # landscape dependence above the redraw noise floor (G24)
+            ok = all(e1[k] <= e0[k] and e1[k] <= nulle[k] for k in ('TPH', 'BA')) and dep >= 0.5 * dep0
+            gate.update({'err_2021': e0, 'err_requested': e1, 'err_null': nulle, 'shuffled_landscape_corr_BA': cs, 'shuffled_landscape_corr_BA_2021': cs0, 'redraw_corr_BA': cr, 'redraw_corr_BA_2021': cr0,
+                         'landscape_dependence': dep, 'landscape_dependence_2021': dep0, 'passed': bool(ok),
                          'heldout_err_2021': res[2021.0][3], 'heldout_err_requested': res[MAP_Y0][3]})     # (held-out: reported, not used)
         y0u = MAP_Y0 if gate.get('passed') else 2021.0; CALF, pt, Pm, _ = res[y0u]; Cm = torch.stack([r[3] for r in pt])
         ev['map_y0'] = y0u; ev['map_y0_gate'] = gate
