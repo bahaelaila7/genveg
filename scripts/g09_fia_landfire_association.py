@@ -28,7 +28,7 @@ import os, sys, math, json, argparse, numpy as np, pandas as pd, duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 from features import ROOT
-from common import fiadb
+from common import fiadb, fiadb_con
 from region import region_check, region_set
 NY, NC = len(G2.YEARS), G2.NC; Y0 = G2.YEARS[0]; OFF = list(range(-4, 5)); IXc = G2.IX; H_ = G2.H_
 MECH = {'T10': ['harvest', 'thin'], 'T20': ['harvest', 'chem', 'fire'], 'T30': ['harvest', 'chem'], 'T40': ['harvest', 'fire'],
@@ -59,7 +59,7 @@ def load(D, legacy):
     rm = f'{D}/key_remap.parquet'
     if not os.path.exists(rm) and not legacy: sys.exit(f'{rm} missing (table built before G51.2): rebuild the table')
     REMAP = pd.read_parquet(rm) if os.path.exists(rm) else None
-    fc = duckdb.connect(fiadb(), read_only=True); FE = G2.fiadb_events(fc, REMAP)
+    fc = fiadb_con(); FE = G2.fiadb_events(fc, REMAP)
     pidk = dict(zip(map(tuple, P[['st', 'u', 'c', 'p']].astype(int).values), P.pid)); raw = []
     for r in FE.itertuples():
         k_ = (int(r.st), int(r.u), int(r.c), int(r.p))

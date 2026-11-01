@@ -5,8 +5,20 @@ ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))          # the 
 WS=os.environ.get('WORKSPACE', os.path.dirname(ROOT))                      # sibling projects (FIA databases)
 # the FIA databases genveg reads (read-only), relative to WORKSPACE unless absolute; the pipeline sets them from the config `inputs` and fingerprints
 # them into the stage hashes (audit r5 I4: a rebuilt curated table must not pass as current)
-def curated_db(): return os.path.join(WS, os.environ.get('GV_CURATED_DB', 'landis_region4/data_r4/slim_r4.duckdb'))
-def fiadb(): return os.path.join(WS, os.environ.get('GV_FIADB', 'FIA/FIASQLITE2PGSQL/FIADB.duckdb'))
+def curated_db(): return os.path.join(WS, os.environ.get('GV_CURATED_DB', 'FIA/truth/fia_truth_r4.duckdb'))
+def fiadb(): return os.path.join(WS, os.environ.get('GV_FIADB', 'FIA/truth/fia_truth_r4.duckdb'))
+def fiadb_con():
+    """The FIA record, read-only: schema raw of the truth DB (FIA curation D59): every visit, as-recorded keys, PLT_CN / CN = the natural visit id."""
+    import duckdb
+    c = duckdb.connect(fiadb(), read_only=True); c.execute("SET schema = 'raw'"); return c
+def visit_key_remap(cur, st_sql):
+    """FIA visits filed under another (canonical) plot key: the truth DB's plot_key_remap (evidence-checked, D59). -> DataFrame cn = the natural visit id
+    of the as-recorded key (raw schema's CN), st, u, c, p (canonical), ru, rc, rp (recorded)."""
+    m = cur.execute(f"""select STATECD st, UNITCD u, COUNTYCD c, PLOT p, UNITCD_RAW ru, COUNTYCD_RAW rc, PLOT_RAW rp, INVYR y,
+        CAST(CAST(STATECD AS BIGINT) * 100000000000000 + CAST(UNITCD_RAW AS BIGINT) * 1000000000000 + CAST(COUNTYCD_RAW AS BIGINT) * 1000000000
+             + CAST(PLOT_RAW AS BIGINT) * 10000 + CAST(INVYR AS BIGINT) AS VARCHAR) cn
+        from plot_key_remap where STATECD in {st_sql} order by cn""").df()
+    return m[['cn', 'st', 'u', 'c', 'p', 'ru', 'rc', 'rp']].astype({k: 'int64' for k in ('st', 'u', 'c', 'p', 'ru', 'rc', 'rp')}).reset_index(drop=True)
 def grid():
     g=json.load(open(f'{ROOT}/data/grid/grid.json'))
     return Affine(*g['transform']), g['width'], g['height'], g['crs']

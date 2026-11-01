@@ -2,8 +2,8 @@
 name: gafl_v4
 data: gafl_v4                   # data/proto/<data> (v4 architecture; inputs copied from gafl_pipe, upstream stages adopted)
 inputs:                         # FIA databases (read-only; relative to WORKSPACE), fingerprinted into the stage hashes (audit r5 I4)
-  curated_db: landis_region4/data_r4/slim_r4_v2.duckdb   # the curation-fix rebuild (FIA_DATA_PREP branch curation-fix); missing until it is built
-  fiadb: FIA/FIASQLITE2PGSQL/FIADB.duckdb
+  curated_db: FIA/truth/fia_truth_r4.duckdb   # the single curated truth (FIA_DATA_PREP branch fia-truth, D59)
+  fiadb: FIA/truth/fia_truth_r4.duckdb   # schema raw (common.fiadb_con)
 stands_run: gafl_pilot          # stand-delineation run (data/derived/runs/<name>, scripts/stands_pipeline.py): forest mask of the candidates + the mapped stands
 table:                          # g02b_build_gafl: visits, cohort tokens, footprint candidates + location prior (the long stage)
   NCAND: 256                    # candidate footprints kept per plot (stratified, inclusion-weighted)

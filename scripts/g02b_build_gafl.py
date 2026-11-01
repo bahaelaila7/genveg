@@ -32,7 +32,7 @@ from pyproj import Transformer
 from multiprocessing import Pool
 sys.path.insert(0, os.path.dirname(__file__))
 from features import ROOT, WS, SOILS, dequant
-from common import curated_db, fiadb, code_hash, code_files, file_fingerprint
+from common import visit_key_remap, curated_db, fiadb, fiadb_con, code_hash, code_files, file_fingerprint
 from stand_runs import stands_run
 # location prior: FIA public coordinates are perturbed within 1 mile (1.6 km) of the plot, and "the proportion perturbed more than 0.5 mi (0.8 km) is small"
 # (Coulston et al., FIA perturbation studies; audit F7: a uniform disk put 75 % of the mass beyond 0.8 km): RADIAL_P of the prior mass inside 0.5 mile,
@@ -291,10 +291,7 @@ def key_remap(cur, fc):
     """the FIADB visits (PLOT CN) whose curated plot key differs from FIADB's (G51.2): the curation chain (D29) files the later segments of a plot
     under its canonical key, and the curated PLOT table keeps every CN with that key. -> DataFrame cn, st, u, c, p (canonical), ru, rc, rp (FIADB's
     raw key). Empty for a curated DB without remapped plots (the old slim_r4)."""
-    q = f"select CN::varchar cn, STATECD st, UNITCD u, COUNTYCD c, PLOT p from PLOT where STATECD in {ST_SQL}"
-    a, b = cur.execute(q).df(), fc.execute(q).df().rename(columns={'u': 'ru', 'c': 'rc', 'p': 'rp'})
-    m = a.merge(b, on=['cn', 'st'], how='inner'); m = m[(m.u != m.ru) | (m.c != m.rc) | (m.p != m.rp)]
-    return m[['cn', 'st', 'u', 'c', 'p', 'ru', 'rc', 'rp']].astype({k: 'int64' for k in ('st', 'u', 'c', 'p', 'ru', 'rc', 'rp')}).reset_index(drop=True)
+    return visit_key_remap(cur, ST_SQL)
 def canon(df, remap):
     """FIADB rows (with their PLOT CN `cn`) under the curated canonical plot key: the remapped CNs take the canonical key, every other row keeps
     FIADB's (G51.2: events, negative evidence, visits of every chain segment belong to the canonical plot)"""
@@ -405,7 +402,7 @@ if __name__ == '__main__':
                        where t.STATECD in {ST_SQL} and t.MEASDATE >= '2000-01-01' order by t.STATECD, t.UNITCD, t.COUNTYCD, t.PLOT, t.MEASDATE, t.SUBP, t.TREE""").df()
     t['live'] = t.status == 1          # every visit is kept (bare / just-harvested visits = no live tree = empty cohort table); cohorts from live trees only
     t['md'] = pd.to_datetime(t.md); key = ['st', 'u', 'c', 'p']
-    fc = duckdb.connect(fiadb(), read_only=True)
+    fc = fiadb_con()
     REMAP = key_remap(con, fc); remapped_ = (t.u != t.ru) | (t.c != t.rc) | (t.p != t.rp)
     KEYS_INFO = dict(curated_raw_keys=bool(RAWK), remapped_cns=int(len(REMAP)), remapped_plots=int(len(REMAP[key].drop_duplicates())),
                      remapped_records=int(remapped_.sum()), remapped_live_records=int((remapped_ & t.live).sum()),

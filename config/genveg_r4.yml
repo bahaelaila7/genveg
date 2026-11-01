@@ -2,8 +2,8 @@
 name: r4_v4
 data: r4_v4                     # data/proto/<data>: EPA Region 4 (AL FL GA KY MS NC SC TN) at 90 m, v4 architecture (docs/GENVEG_V4_R4.md §B)
 inputs:                         # FIA databases (read-only; relative to WORKSPACE), fingerprinted into the stage hashes (audit r5 I4)
-  curated_db: landis_region4/data_r4/slim_r4_v2.duckdb   # the curation-fix rebuild (FIA_DATA_PREP branch curation-fix); missing until it is built
-  fiadb: FIA/FIASQLITE2PGSQL/FIADB.duckdb
+  curated_db: FIA/truth/fia_truth_r4.duckdb   # the single curated truth (FIA_DATA_PREP branch fia-truth, D59)
+  fiadb: FIA/truth/fia_truth_r4.duckdb   # schema raw (common.fiadb_con)
 stands_run: gafl_pilot          # stand-delineation run: the MAPPED stands (Baker County); the candidates' forest mask is data/r4/land.tif (AEF90)
 env:                            # region switches (only here), passed to every stage
   REGION: '1,12,13,21,28,37,45,47'

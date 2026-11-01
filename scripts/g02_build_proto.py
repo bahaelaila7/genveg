@@ -22,7 +22,7 @@ BUF = float(os.environ.get('BUF_KM', 50)); R = float(os.environ.get('RAD_M', 160
 P4 = _WS + '/landis_hbad3/results/hbad2_r4'
 iv = ip.open_file(f'{P4}/intervals.arrow').read_all().to_pandas(); tr = ip.open_file(f'{P4}/interval_trees.arrow').read_all().to_pandas()
 ig = ip.open_file(f'{P4}/interval_ingrowth.arrow').read_all().to_pandas()
-con = duckdb.connect(_WS + '/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+con = __import__("common").fiadb_con()
 pl = con.execute("""select STATECD st, UNITCD u, COUNTYCD c, PLOT p, avg(LAT) lat, avg(LON) lon from PLOT where STATECD in (12, 13) group by all""").df()
 cond = con.execute("""select p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR y, c.STDAGE, c.TRTCD1, c.TRTYR1, c.TRTCD2, c.TRTYR2, c.DSTRBCD1, c.DSTRBYR1, c.DSTRBCD2, c.DSTRBYR2
                       from COND c join PLOT p on c.PLT_CN = p.CN where p.STATECD in (12, 13) and c.COND_STATUS_CD = 1""").df()

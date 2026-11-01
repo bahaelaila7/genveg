@@ -178,7 +178,7 @@ def _under(p, base):
 def inputs_fingerprint(cfg, r4, sr, D, stages):
     """per-stage input fingerprints {stage: hash} of the given stages (only those being run or checked: G45.10) and the configured database paths"""
     inp = cfg.get('inputs', {})
-    dbs = {'curated_db': inp.get('curated_db', 'landis_region4/data_r4/slim_r4.duckdb'), 'fiadb': inp.get('fiadb', 'FIA/FIASQLITE2PGSQL/FIADB.duckdb')}
+    dbs = {'curated_db': inp.get('curated_db', 'FIA/truth/fia_truth_r4.duckdb'), 'fiadb': inp.get('fiadb', 'FIA/truth/fia_truth_r4.duckdb')}
     def db(k):                                       # the CONFIGURED path (relative to WORKSPACE) + size / mtime: a moved checkout keeps its hashes (r13 I-3)
         f = os.path.join(WS, dbs[k])
         if not os.path.exists(f): sys.exit(f'input database missing: {k} = {f}')

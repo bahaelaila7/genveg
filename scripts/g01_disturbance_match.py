@@ -10,7 +10,7 @@ from rasterio.windows import Window
 from pyproj import Transformer
 from scipy import ndimage
 ROOT = _SM; rng = np.random.default_rng(1)
-c = duckdb.connect(_WS + '/FIA/FIASQLITE2PGSQL/FIADB.duckdb', read_only=True)
+c = __import__("common").fiadb_con()
 q = """select p.CN, p.STATECD, p.LAT, p.LON, p.MEASYEAR, c.STDAGE, c.STDORGCD, c.TRTCD1, c.TRTYR1, c.DSTRBCD1, c.TRTCD2, c.DSTRBCD2, c.CONDPROP_UNADJ
        from COND c join PLOT p on c.PLT_CN = p.CN
        where p.STATECD in (12, 13) and c.COND_STATUS_CD = 1 and c.CONDPROP_UNADJ >= 0.9 and p.MEASYEAR >= 2005 order by p.CN"""

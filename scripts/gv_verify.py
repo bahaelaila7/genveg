@@ -115,7 +115,7 @@ written before their first runs (2026-10-27 scratch runs), each first-run value 
 import sys, os, json, math, ast, hashlib, numpy as np, pandas as pd, duckdb, rasterio
 from rasterio.windows import Window
 from pyproj import Transformer
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run; from common import curated_db, fiadb
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); from stand_runs import stands_run; from common import curated_db, fiadb, fiadb_con, visit_key_remap
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); WS = os.environ.get('WORKSPACE', os.path.dirname(ROOT)); D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"
 AEF90 = os.environ.get('AEF90', '0') == '1'
 def _verify_inputs():
@@ -872,9 +872,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # (G51.2) the curated CANONICAL plot keys: a FIADB visit (PLOT CN) whose curated PLOT row carries another plot key than FIADB's (the curation chain files
     # a plot's later segments under one canonical key) is read under the curated key — every FIADB read keyed by plot below goes through canon() (events,
     # negative evidence and visits of every chain segment belong to the canonical plot); none in a curated DB without remapped plots
-    _qk = f"select CN::varchar cn, STATECD st, UNITCD u, COUNTYCD c, PLOT p from PLOT where STATECD in {ST_SQL}"
-    _rk = con.execute(_qk).df().merge(duckdb.connect(fiadb(), read_only=True).execute(_qk).df(), on=['cn', 'st'], suffixes=('', '_f'))
-    _rk = _rk[(_rk.u != _rk.u_f) | (_rk.c != _rk.c_f) | (_rk.p != _rk.p_f)]
+    _rk = visit_key_remap(con, ST_SQL)
     CANON = {str(cn_): (int(u_), int(c_), int(p_)) for cn_, u_, c_, p_ in zip(_rk.cn, _rk.u, _rk.c, _rk.p)}
     def canon(df_, cn_='cn'):
         """FIADB rows with their PLOT CN under the canonical plot key (the CN column is kept)"""
@@ -887,7 +885,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     print(f'   (G51.2 canonical keys: {len(CANON)} FIADB visits of {len(set(map(tuple, _rk[["st", "u", "c", "p"]].values)))} curated plots read under the curated key)')
     _lt = con.execute(f"""select r.SPECIES_SYMBOL sym, t.STATECD st, t.UNITCD u, t.COUNTYCD c, t.PLOT p, t.MEASDATE md, t.CONDID cond from curated_trees t join REF_SPECIES r on r.SPCD=t.SPCD
                            where t.STATECD in {ST_SQL} and t.MEASDATE>='2000-01-01' and t.STATUSCD=1""").df()
-    _cs = canon(duckdb.connect(fiadb(), read_only=True).execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p,
+    _cs = canon(fiadb_con().execute(f"""select p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p,
                 (case when p.MEASMON between 1 and 12 and p.MEASDAY between 1 and 31 then make_date(p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) end) md, c.CONDID cond, c.COND_STATUS_CD cs
                 from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df()).drop(columns='cn')
     _lt['md'] = pd.to_datetime(_lt.md); _cs['md'] = pd.to_datetime(_cs.md); _lt = _lt.merge(_cs, on=['st', 'u', 'c', 'p', 'md', 'cond'], how='left')
@@ -902,7 +900,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     # ---- the visit set, rebuilt independently from FIADB (pandas aggregation of per-condition rows; string dates):
     #      visits with curated trees on a forested condition  ∪  forested FIADB visits of the same plots with no live tree in FIADB TREE;
     #      forested share of the SAMPLED area (non-sampled status 5 excluded) >= 0.1
-    _fx = duckdb.connect(fiadb(), read_only=True)
+    _fx = fiadb_con()
     _cc = _fx.execute(f"""select p.CN pcn, p.MEASYEAR my, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, printf('%04d-%02d-%02d', p.MEASYEAR::int, p.MEASMON::int, p.MEASDAY::int) ds,
             c.CONDID cond, c.COND_STATUS_CD cs, c.SUBPPROP_UNADJ sp, c.MICRPROP_UNADJ mp, c.STDORGCD org from PLOT p join COND c on c.PLT_CN = p.CN
             where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000""").df(); _cc = canon(_cc, 'pcn')
@@ -1040,7 +1038,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     check('T1h pairs = consecutive visits of each plot', set(zip(PR.v1, PR.v2)) == exp_pairs, f'{len(PR)} pairs')
     pl_ind = EX.set_index('vid').org.fillna(0) == 1
     check('T1i planted flag = COND STDORGCD 1 (forested conditions) of the visit', (V.set_index('vid').planted.reindex(pl_ind.index) == pl_ind).all(), f'planted share {pl_ind.mean():.3f}')
-    fv = canon(duckdb.connect(fiadb(), read_only=True).execute(f"""select distinct p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
+    fv = canon(fiadb_con().execute(f"""select distinct p.CN::varchar cn, p.STATECD st, p.UNITCD u, p.COUNTYCD c, p.PLOT p, p.MEASYEAR my
           from PLOT p join COND c on c.PLT_CN = p.CN where p.STATECD in {ST_SQL} and p.MEASYEAR >= 2000 and c.COND_STATUS_CD = 1""").df()).drop(columns='cn').drop_duplicates()
     ours = V[key].assign(my=V.year.astype(int)).drop_duplicates(); inplots = fv.merge(V[key].drop_duplicates(), on=key)
     # (G52.3) the incomplete curated visits (G46.1 / G51.1: INC, all shares) are left out by decision before the rebuild: neither missing nor counted
@@ -1051,7 +1049,7 @@ def main(argv=None, force_pairs=(), stop_after=None):
     check('T1j FIADB forested visits of our plots that are absent from the table (bare visits with no tree record?) < 2 %; incomplete curated visits (G46.1 / G51.1) excluded', len(inplots) > 0 and nm / len(inplots) < 0.02,
           f'missing {nm} of {len(inplots)} ({_ni - len(inplots)} incomplete curated visits excluded); forested FIADB plots {nplots_f}, in table {nplots_o} (curated product subset)')
     # ======================= T2 plot coordinates
-    fc = duckdb.connect(fiadb(), read_only=True)
+    fc = fiadb_con()
     pl = fc.execute(f"select STATECD st, UNITCD u, COUNTYCD c, PLOT p, MEASYEAR my, LAT lat, LON lon from PLOT where STATECD in {ST_SQL} and MEASYEAR >= 2000").df()
     _sp = pl.groupby(key).agg(la0=('lat', 'min'), la1=('lat', 'max'), lo0=('lon', 'min'), lo1=('lon', 'max')).reset_index()
     check('T2a0 a plot key\'s annual-inventory rows (MEASYEAR >= 2000) agree on the coordinates (< 0.2 km)', ((_sp.la1 - _sp.la0) * 111 < 0.2).mean() > 0.999 and ((_sp.lo1 - _sp.lo0) * 92 < 0.2).mean() > 0.999,

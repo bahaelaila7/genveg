@@ -17,14 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import g02b_build_gafl as G2
 import json as _json; from region import region_check
 from features import ROOT, WS
-from common import curated_db, fiadb
+from common import curated_db, fiadb, fiadb_con
 D = f"{ROOT}/data/proto/{os.environ.get('DATA', 'gafl')}"; key = ['st', 'u', 'c', 'p']
 PROV = {'code_hash': {'g02e': G2.code_hash(os.path.abspath(__file__)), 'g02b': G2.code_hash(os.path.abspath(G2.__file__))}}   # (at the start: A15-6f)
 META = _json.load(open(f'{D}/meta.json')); region_check(META); EVK = G2.evk_from_meta(META)      # (refuses a table without its evidence table)
 if 'evid_end' not in META: sys.exit('meta.json has no evid_end (table built before G46.5): rebuild it with scripts/g02b_build_gafl.py')
 EVID_END = int(META['evid_end']); PROV.update(build_id=G2.meta_build_id(META), evk_hash=META['evk_hash'])
 REMAP = pd.read_parquet(f'{D}/key_remap.parquet')       # (the build's CN -> canonical plot key map, G51.2)
-fc = duckdb.connect(fiadb(), read_only=True)
+fc = fiadb_con()
 P = pd.read_parquet(f'{D}/plots.parquet'); V = pd.read_parquet(f'{D}/visits.parquet')
 FV = G2.fiadb_visits(fc, REMAP); FE = G2.fiadb_events(fc, REMAP)
 evs, negs, blocked = G2.fia_records(FE, FV, P, key, evid_end=EVID_END)          # (G51.4: the table's evidence end, not the module constant)
